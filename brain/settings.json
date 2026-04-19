@@ -8,5 +8,6 @@
   "todos_datum_regel": "Todos immer mit Datum anlegen (mindestens heute), sonst erscheinen sie nicht im Dashboard.",
   "morning_checkin": true,
   "evening_checkout": false,
-  "daily_football_fact": false
+  "daily_football_fact": false,
+  "checkin_privat_reminder": "Wohnung aufräumen/putzen und Einkaufen stehen diese Woche an – täglich im Check-in daran erinnern bis erledigt."
 }
