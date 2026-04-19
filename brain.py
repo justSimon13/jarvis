@@ -1,5 +1,6 @@
 import json
 import subprocess
+from datetime import date
 from pathlib import Path
 
 _BRAIN_DIR = Path(__file__).parent / "brain"
@@ -38,13 +39,26 @@ def _git_push(message: str):
         pass  # nichts zu committen oder kein remote – kein Fehler
 
 
+def _check_expirations():
+    """Keys mit Suffix '_pausiert_bis' prüfen und abgelaufene entfernen."""
+    settings = _read("settings")
+    today = date.today().isoformat()
+    expired = [k for k in settings if k.endswith("_pausiert_bis") and settings[k] <= today]
+    if expired:
+        for k in expired:
+            del settings[k]
+        _write("settings", settings)
+        _git_push("JARVIS: abgelaufene Pausen entfernt")
+
+
 def sync():
-    """Aktuellen Stand vom Remote holen (beim App-Start)."""
+    """Aktuellen Stand vom Remote holen und abgelaufene Pausen prüfen."""
     cwd = Path(__file__).parent
     try:
         subprocess.run(["git", "pull", "--ff-only"], cwd=cwd, capture_output=True)
     except Exception:
         pass
+    _check_expirations()
 
 
 def load() -> dict:
@@ -82,6 +96,9 @@ def build_prompt_section() -> str:
             active.append(f"- {k}: aktiv")
         elif v is False or v is None or v == "":
             continue
+        elif k.endswith("_pausiert_bis"):
+            feature = k.replace("_pausiert_bis", "")
+            active.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
         else:
             active.append(f"- {k}: {v}")
     if active:
