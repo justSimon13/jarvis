@@ -9,5 +9,8 @@
   "morning_checkin": true,
   "evening_checkout": false,
   "daily_football_fact": false,
-  "checkin_privat_reminder": "Wohnung aufräumen/putzen und Einkaufen stehen diese Woche an – täglich im Check-in daran erinnern bis erledigt."
+  "checkin_privat_reminder": "Wohnung aufräumen/putzen und Einkaufen stehen diese Woche an – täglich im Check-in daran erinnern bis erledigt.",
+  "email_vip": [
+    "michael@halbautomaten.com"
+  ]
 }
