@@ -1,0 +1,9 @@
+anthropic>=0.40.0
+pvporcupine
+elevenlabs>=1.0.0
+openai-whisper
+sounddevice
+scipy
+numpy
+python-dotenv
+notion-client==2.2.1
