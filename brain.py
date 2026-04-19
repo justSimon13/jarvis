@@ -76,12 +76,16 @@ def build_prompt_section() -> str:
         parts.append("\n".join(lines))
 
     settings = data.get("settings", {})
-    active = [
-        f"- {k}: {v}" for k, v in settings.items()
-        if v is not False and v is not None and v != ""
-    ]
+    active = []
+    for k, v in settings.items():
+        if v is True:
+            active.append(f"- {k}: aktiv")
+        elif v is False or v is None or v == "":
+            continue
+        else:
+            active.append(f"- {k}: {v}")
     if active:
-        parts.append("## Aktive Einstellungen\n" + "\n".join(active))
+        parts.append("## Einstellungen & Verhaltensregeln\n" + "\n".join(active))
 
     memory = data.get("memory", {})
     if isinstance(memory, list):

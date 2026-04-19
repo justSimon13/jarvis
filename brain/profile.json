@@ -1,14 +1,21 @@
 {
-  "name": "Simon Fischer, 26 (geb. 13.06.1999), Stuttgart",
+  "name": "Simon Fischer",
+  "standort": "Stuttgart, Deutschland",
+  "alter": "26 Jahre (geb. 13.06.1999)",
   "lebenssituation": "Single, allein lebend, zur Miete",
   "anstellung": "Vollzeit bei Digital35, ~5000€ brutto/Monat – hat immer oberste Priorität",
   "selbständig": "Fischer Consulting – Freelance Fullstack Developer, nebenberuflich ~10-15h/Woche",
-  "stack": "Angular, Supabase, C#/.NET, TypeScript, REST APIs, PostgreSQL, Docker",
-  "freelancing_zielkunden": "Agenturen ohne Web-Fokus, KMUs, Produktteams",
-  "freelancing_rate": "~75€/h, Ziel 80€+, auch projektbasiert",
-  "freelancing_kanäle": "freelancermap (primär), Malt, Direktansprache",
-  "freelancing_engpass": "zu wenig Bewerbungen rausgeschickt (Execution-Problem, kein Strategie-Problem)",
+  "rhythmus_daily": "Daily Meeting täglich 8:45 Uhr (Arbeit) → danach Check-in mit JARVIS",
+  "rhythmus_konzentration": "abends/nachts am stärksten – morgens kaum fokussiert",
+  "freelancing_positionierung": "Fullstack Developer mit Fokus auf Web-Systeme, MVPs, technische Architektur, interne Tools und Prozess-Digitalisierung – KEIN klassischer Website-Entwickler, Body Leasing oder WordPress-Umsetzer",
+  "freelancing_stack": "Angular, Supabase, C#/.NET, TypeScript, REST APIs, PostgreSQL, Docker – Technologie ist zweitrangig, Fokus liegt auf der Lösung des Problems",
+  "freelancing_zielkunden": "Agenturen ohne Web-Fokus, KMUs, Produktteams die ein MVP oder System bauen wollen",
+  "freelancing_rate": "~75€/h, Ziel mittelfristig 80€+, auch projektbasiert möglich",
+  "freelancing_kanäle": "freelancermap (primär), Malt, Direktansprache (im Aufbau)",
+  "freelancing_engpass": "fehlender Output – zu wenig Bewerbungen rausgeschickt (kein Strategie-, sondern Execution-Problem)",
   "freelancing_ziel_kurzfristig": "erstes Projekt gewinnen, 3-5 Bewerbungen/Woche",
   "langfristige_ziele": "wirtschaftliche Unabhängigkeit, ortsflexibles Leben, nicht mehr auf Anstellung angewiesen (5-Jahres-Ziel), eigenes Produkt das Umsatz bringt",
-  "btc": "0.10958142 BTC, investiert 8505.72€, Langfristinvestor seit 2021, konservative Strategie"
+  "btc_bestand": "0.10958142 BTC",
+  "btc_investiert": "8505.72€",
+  "btc_strategie": "Langfristiger Investor seit 2021, konservative Strategie"
 }
