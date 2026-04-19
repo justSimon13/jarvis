@@ -1,6 +1,6 @@
 {
   "checkin_todos": "Datum diese Woche → normal anzeigen. Datum vergangene Woche oder älter + nicht erledigt → als 'offen geblieben' markieren und aktiv ansprechen. Todos ohne Datum → ignorieren.",
-  "checkin_projekte": "Aktive Freelancing-Projekte vorhanden → kein Akquise-Reminder. Pipeline leer → aktiv nachfragen wie viele Bewerbungen diese Woche rausgingen.",
+  "checkin_projekte": "Aktive Freelancing-Projekte vorhanden → kein Akquise-Reminder. Pipeline leer → beim Check-in aktiv fragen wie viele Bewerbungen diese Woche rausgingen. Kein Todo dafür anlegen – das ist eine laufende Verhaltensregel, kein einmaliger Task.",
   "checkin_btc": "Aktuellen Kurs erwähnen (€ + $), Kurzeinschätzung zur Marktlage.",
   "checkin_konzepte": "Offene Einträge (Status = Offen) kurz erwähnen falls vorhanden.",
   "checkin_abschluss": "Am Ende anbieten: 'Wollen wir kurz über Growth sprechen?' – nicht aufdrängen.",
