@@ -11,6 +11,10 @@ NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_BRAIN_REPO = os.getenv("GITHUB_BRAIN_REPO", "")
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "")
+EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 
 JARVIS_DIR = Path.home() / ".jarvis"

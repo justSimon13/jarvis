@@ -7,3 +7,5 @@ scipy
 numpy
 python-dotenv
 notion-client==2.2.1
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0

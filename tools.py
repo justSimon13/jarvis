@@ -1,6 +1,9 @@
 import json
 import notion_service
 import brain
+import calendar_service
+import email_service
+import btc
 
 DEFINITIONS = [
     {
@@ -136,6 +139,74 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "calendar_query",
+        "description": "Zeigt Kalendereinträge für die nächsten N Tage aus Google Calendar.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_ahead": {
+                    "type": "integer",
+                    "description": "Wie viele Tage voraus (Standard: 1 = heute)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "calendar_write",
+        "description": "Erstellt einen neuen Termin in Google Calendar.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titel des Termins"},
+                "start_iso": {"type": "string", "description": "Startzeit ISO 8601, z.B. 2026-04-20T14:00:00+02:00"},
+                "end_iso": {"type": "string", "description": "Endzeit ISO 8601"},
+                "description": {"type": "string", "description": "Optionale Beschreibung"},
+            },
+            "required": ["title", "start_iso", "end_iso"],
+        },
+    },
+    {
+        "name": "email_query",
+        "description": "Liest E-Mails aus dem Postfach (GMX/IONOS). Gibt Betreff, Absender und Vorschau zurück.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "description": "IMAP-Filter, z.B. 'UNSEEN' (Standard) oder 'ALL'",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximale Anzahl E-Mails (Standard: 5)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "email_send",
+        "description": "Sendet eine E-Mail.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Empfänger-Adresse"},
+                "subject": {"type": "string", "description": "Betreff"},
+                "body": {"type": "string", "description": "Nachrichtentext"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+    {
+        "name": "btc_price",
+        "description": "Aktuellen Bitcoin-Kurs abrufen (€ und $, 24h-Veränderung).",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
         "name": "notion_delete",
         "description": (
             "Archiviert (löscht) einen Notion-Eintrag per page_id. "
@@ -199,6 +270,35 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 key=tool_input["key"],
                 value=tool_input["value"],
             )
+
+        if tool_name == "calendar_query":
+            results = calendar_service.query(days_ahead=tool_input.get("days_ahead", 1))
+            return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "calendar_write":
+            return calendar_service.write(
+                title=tool_input["title"],
+                start_iso=tool_input["start_iso"],
+                end_iso=tool_input["end_iso"],
+                description=tool_input.get("description", ""),
+            )
+
+        if tool_name == "email_query":
+            results = email_service.query(
+                filter=tool_input.get("filter", "UNSEEN"),
+                limit=tool_input.get("limit", 5),
+            )
+            return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "email_send":
+            return email_service.send(
+                to=tool_input["to"],
+                subject=tool_input["subject"],
+                body=tool_input["body"],
+            )
+
+        if tool_name == "btc_price":
+            return json.dumps(btc.get_price(), ensure_ascii=False)
 
         if tool_name == "notion_delete":
             notion_service.delete(

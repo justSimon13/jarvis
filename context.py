@@ -5,6 +5,8 @@ from datetime import date, timedelta
 from notion_client import Client as NotionClient
 import config
 import brain
+import btc
+import calendar_service
 
 
 def _get_db() -> sqlite3.Connection:
@@ -208,5 +210,13 @@ def build_system_prompt() -> str:
                 line += f": {k['notiz']}"
             lines.append(line)
         parts.append("\n".join(lines))
+
+    cal = calendar_service.format_for_prompt()
+    if cal:
+        parts.append(cal)
+
+    btc_str = btc.format_for_prompt()
+    if btc_str:
+        parts.append(btc_str)
 
     return "\n\n".join(parts)
