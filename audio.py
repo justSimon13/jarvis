@@ -5,6 +5,11 @@ import threading
 import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wav
+import config
+
+def _input_device():
+    v = config.AUDIO_INPUT_DEVICE
+    return int(v) if v is not None else None
 
 SAMPLE_RATE = 16000
 VAD_BLOCKSIZE = 1024
@@ -36,6 +41,7 @@ def listen_for_wake_word(access_key: str):
         dtype="float32",
         blocksize=porcupine.frame_length,
         callback=callback,
+        device=_input_device(),
     ):
         detected.wait()
 
@@ -71,6 +77,7 @@ def record_with_vad() -> str:
         dtype="float32",
         blocksize=VAD_BLOCKSIZE,
         callback=callback,
+        device=_input_device(),
     ):
         stop_event.wait(timeout=VAD_MAX_SECONDS)
 
@@ -92,7 +99,8 @@ def record_until_enter() -> str:
         frames.append(indata.copy())
 
     stream = sd.InputStream(
-        samplerate=SAMPLE_RATE, channels=1, dtype="float32", callback=callback
+        samplerate=SAMPLE_RATE, channels=1, dtype="float32", callback=callback,
+        device=_input_device(),
     )
     stream.start()
     input("")
