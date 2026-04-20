@@ -156,8 +156,15 @@ def refresh_if_stale():
     conn.close()
 
 
+_WOCHENTAGE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+_MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
+           "Juli", "August", "September", "Oktober", "November", "Dezember"]
+
+
 def build_system_prompt() -> str:
-    parts = [config.SYSTEM_PROMPT_BASE]
+    today = date.today()
+    today_str = f"{_WOCHENTAGE[today.weekday()]}, {today.day}. {_MONATE[today.month - 1]} {today.year}"
+    parts = [config.SYSTEM_PROMPT_BASE + f"\n\nHeute ist {today_str}."]
 
     brain_section = brain.build_prompt_section()
     if brain_section:
