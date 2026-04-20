@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import json
 import queue
 import threading
 from enum import Enum
@@ -24,7 +25,8 @@ class State(Enum):
 
 _state = State.IDLE
 
-SENTENCE_END = re.compile(r'([^.!?\n]{20,}[.!?\n])')
+SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
+TTS_BUFFER_MIN = 120  # Mindestzeichen bevor ein Chunk abgeschickt wird
 
 
 def set_state(s: State):
@@ -32,33 +34,42 @@ def set_state(s: State):
     _state = s
 
 
-def _start_tts_worker(tts_queue: queue.Queue) -> threading.Thread:
-    def worker():
-        while True:
-            text = tts_queue.get()
-            if text is None:
-                break
-            set_state(State.SPEAKING)
-            tts.speak_stream(text)
-            tts_queue.task_done()
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    return t
+def _compress_tool_result(tool_name: str, result: str) -> str:
+    try:
+        data = json.loads(result)
+        if isinstance(data, list):
+            return f"[{tool_name}: {len(data)} Einträge]"
+        if isinstance(data, dict) and len(result) > 300:
+            return f"[{tool_name}: OK]"
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return result if len(result) <= 300 else result[:300] + "…"
 
 
 def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
-    """Führt LLM aus mit Satz-Streaming zu TTS. Behandelt Tool Use korrekt."""
+    """LLM streamen, Sätze buffern und gebündelt an ElevenLabs senden."""
     client_messages = messages.copy()
     full_response = ""
 
     while True:
         tts_queue = queue.Queue()
-        worker = _start_tts_worker(tts_queue)
-        buffer = ""
         turn_text = ""
+        buffer = ""
+
+        tts_done = threading.Event()
+        tts_thread = threading.Thread(
+            target=tts.speak_response, args=(tts_queue, tts_done), daemon=True
+        )
+        tts_thread.start()
+
+        thinking_stop = threading.Event()
+        thinking_thread = threading.Thread(
+            target=audio.play_thinking_sound, args=(thinking_stop,), daemon=True
+        )
+        thinking_thread.start()
 
         print("J.A.R.V.I.S.: ", end="", flush=True)
+        first_chunk_sent = False
 
         with llm.stream(system_prompt, client_messages, tools.DEFINITIONS) as s:
             for chunk in s.text_stream:
@@ -66,24 +77,26 @@ def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
                 buffer += chunk
                 turn_text += chunk
                 set_state(State.THINKING)
-
                 while True:
-                    match = SENTENCE_END.match(buffer)
-                    if match:
-                        sentence = match.group(1).strip()
+                    match = SENTENCE_END.search(buffer)
+                    if match and match.end() >= TTS_BUFFER_MIN:
+                        send = buffer[:match.end()].strip()
                         buffer = buffer[match.end():].lstrip()
-                        if sentence:
-                            tts_queue.put(sentence)
+                        if send:
+                            if not first_chunk_sent:
+                                thinking_stop.set()
+                                first_chunk_sent = True
+                            set_state(State.SPEAKING)
+                            tts_queue.put(send)
                     else:
                         break
-
             final = s.get_final_message()
 
-        # Restpuffer sprechen
+        thinking_stop.set()
         if buffer.strip():
             tts_queue.put(buffer.strip())
         tts_queue.put(None)
-        worker.join()
+        tts_done.wait()
         print()
 
         if final.stop_reason == "end_turn":
@@ -98,7 +111,7 @@ def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
                     set_state(State.TOOL_RUNNING)
                     print(f"[tool] {block.name}({block.input})")
                     result = tools.execute(block.name, block.input)
-                    print(f"[tool] → {result}")
+                    print(f"[tool] → {_compress_tool_result(block.name, result)}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

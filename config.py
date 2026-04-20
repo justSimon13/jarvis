@@ -15,6 +15,7 @@ EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "")
 EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "")
+EMAIL_SEND_ENABLED = os.getenv("EMAIL_SEND_ENABLED", "false").lower() == "true"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 
 JARVIS_DIR = Path.home() / ".jarvis"
@@ -25,6 +26,7 @@ NOTION_CACHE_DB = JARVIS_DIR / "notion_cache.db"
 NOTION_TODOS_DB_ID = "10ab63fa-fc26-80f5-9865-cf57555d8002"
 NOTION_PROJEKTE_DB_ID = "194b63fa-fc26-80d1-9832-dceb4301afd3"
 NOTION_KONZEPTE_DB_ID = "19fb63fa-fc26-80d3-807c-ffba582e38c0"
+NOTION_KONTAKTE_DB_ID = "1a4b63fa-fc26-808c-ad83-e4973e38f570"
 NOTION_CACHE_TTL = 15 * 60  # seconds
 
 SYSTEM_PROMPT_BASE = """Du bist J.A.R.V.I.S., der persönliche KI-Assistent von Simon Fischer.
@@ -40,4 +42,10 @@ Antworte immer auf Deutsch. Präzise, direkt, kein Bullshit. Proaktiver Assisten
 - Simons Profil, Einstellungen, Erinnerungen und Notion-Daten sind weiter unten bereits geladen.
 - Notion-Tools NICHT aufrufen für Daten die bereits im Kontext stehen.
 - Tools nur für explizite Schreib-/Änderungsoperationen.
-- Wenn Simon sagt "merk dir X" oder "von jetzt an Y" → brain_write aufrufen."""
+- Wenn Simon sagt "merk dir X" oder "von jetzt an Y" → brain_write aufrufen.
+
+## E-Mail Auswertung (WICHTIG)
+- VIP-Mails (Kunden) IMMER vollständig nennen, keine Ausnahme.
+- Alle anderen Mails: nur nennen wenn Handlungsbedarf besteht (z.B. fehlgeschlagene Zahlung, unbekannter Absender, dringende Anfrage).
+- Routinemäßige Rechnungen, Quittungen, Newsletter, Social-Media-Benachrichtigungen stillschweigend ignorieren.
+- Im Zweifel: lieber nennen als verschweigen – aber kurz."""

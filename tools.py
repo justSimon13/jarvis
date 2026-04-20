@@ -4,6 +4,7 @@ import brain
 import calendar_service
 import email_service
 import btc
+import reminders_service
 
 DEFINITIONS = [
     {
@@ -117,7 +118,10 @@ DEFINITIONS = [
         "description": (
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
-            "Sections: 'profile', 'settings', 'memory'."
+            "Sections: 'profile', 'settings', 'memory'. "
+            "Email-Blacklist: bei 'füge X zur Blacklist hinzu' → section='settings', key='email_blacklist', value=[...bestehende Liste + X]. "
+            "Email-VIP manuell: bei 'füge X zur VIP-Liste hinzu' → section='settings', key='email_vip', value=[...bestehende Liste + X]. "
+            "Vor dem Schreiben erst brain_read aufrufen um bestehende Liste nicht zu überschreiben."
         ),
         "input_schema": {
             "type": "object",
@@ -167,6 +171,17 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "calendar_delete",
+        "description": "Löscht einen Termin aus Google Calendar per event_id. event_id aus einem vorherigen calendar_query entnehmen.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "ID des Events"},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
         "name": "email_query",
         "description": "Liest E-Mails aus dem Postfach (GMX/IONOS). Gibt Betreff, Absender und Vorschau zurück.",
         "input_schema": {
@@ -186,7 +201,12 @@ DEFINITIONS = [
     },
     {
         "name": "email_send",
-        "description": "Sendet eine E-Mail.",
+        "description": (
+            "Sendet eine E-Mail. "
+            "WICHTIG: Vor dem Aufruf IMMER explizit bei Simon bestätigen lassen: "
+            "'Soll ich die Mail an [to] mit Betreff [subject] wirklich senden?' "
+            "Nur ausführen wenn Simon explizit 'ja' oder 'senden' sagt."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -198,12 +218,62 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "sync_email_vip",
+        "description": (
+            "Synchronisiert die Email-VIP-Liste aus Notion Kontakte (Mehrfachauswahl=Kunde) "
+            "in die JARVIS Settings. Aufrufen wenn Simon sagt 'sync VIP-Liste' oder 'aktualisiere Email-Filter'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "btc_price",
         "description": "Aktuellen Bitcoin-Kurs abrufen (€ und $, 24h-Veränderung).",
         "input_schema": {
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    {
+        "name": "shopping_add",
+        "description": "Fügt einen oder mehrere Artikel zur Einkaufsliste in Apple Reminders hinzu. Synct via iCloud aufs iPhone.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Liste der Artikel",
+                },
+                "list_name": {
+                    "type": "string",
+                    "description": "Name der Reminders-Liste (Standard: Einkaufsliste)",
+                },
+            },
+            "required": ["items"],
+        },
+    },
+    {
+        "name": "shopping_get",
+        "description": "Liest die aktuelle Einkaufsliste aus Apple Reminders.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "list_name": {"type": "string", "description": "Name der Liste (Standard: Einkaufsliste)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "shopping_remove",
+        "description": "Markiert einen Artikel auf der Einkaufsliste als erledigt (entfernt ihn).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item": {"type": "string", "description": "Name des Artikels"},
+                "list_name": {"type": "string", "description": "Name der Liste (Standard: Einkaufsliste)"},
+            },
+            "required": ["item"],
         },
     },
     {
@@ -283,6 +353,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 description=tool_input.get("description", ""),
             )
 
+        if tool_name == "calendar_delete":
+            return calendar_service.delete(event_id=tool_input["event_id"])
+
         if tool_name == "email_query":
             results = email_service.query(
                 filter=tool_input.get("filter", "UNSEEN"),
@@ -297,8 +370,27 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 body=tool_input["body"],
             )
 
+        if tool_name == "sync_email_vip":
+            emails = notion_service.sync_vip_emails()
+            brain.write(section="settings", key="email_vip", value=emails)
+            return f"{len(emails)} VIP-Emails synchronisiert: {', '.join(emails) if emails else '–'}"
+
         if tool_name == "btc_price":
             return json.dumps(btc.get_price(), ensure_ascii=False)
+
+        if tool_name == "shopping_add":
+            list_name = tool_input.get("list_name", "Einkaufsliste")
+            results = [reminders_service.add_item(i, list_name) for i in tool_input["items"]]
+            return " ".join(results)
+
+        if tool_name == "shopping_get":
+            list_name = tool_input.get("list_name", "Einkaufsliste")
+            items = reminders_service.get_items(list_name)
+            return json.dumps(items, ensure_ascii=False)
+
+        if tool_name == "shopping_remove":
+            list_name = tool_input.get("list_name", "Einkaufsliste")
+            return reminders_service.remove_item(tool_input["item"], list_name)
 
         if tool_name == "notion_delete":
             notion_service.delete(

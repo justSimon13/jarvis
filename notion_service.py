@@ -40,6 +40,17 @@ REGISTRY = {
             "Typ":    "select",
         },
     },
+    "kontakte": {
+        "db_id": config.NOTION_KONTAKTE_DB_ID,
+        "cache_key": "kontakte",
+        "title_field": "Name",
+        "properties": {
+            "Name":              "title",
+            "Email":             "text",
+            "Tel. Nummer":       "text",
+            "Mehrfachauswahl":   "multi_select",
+        },
+    },
 }
 
 _client = None
@@ -92,6 +103,11 @@ def _from_notion_page(page: dict, database: str) -> dict:
             elif prop_type == "rich_text":
                 items = raw.get("rich_text", [])
                 result[key] = items[0]["plain_text"] if items else None
+            elif prop_type == "text":
+                items = raw.get("rich_text", [])
+                result[key] = items[0]["plain_text"] if items else None
+            elif prop_type == "multi_select":
+                result[key] = [o["name"] for o in raw.get("multi_select", [])]
         except (KeyError, IndexError, TypeError):
             result[key] = None
     return result
@@ -140,6 +156,29 @@ def update(page_id: str, database: str, properties: dict) -> None:
     notion_props = _to_notion_props(database, properties)
     _get_client().pages.update(page_id=page_id, properties=notion_props)
     context.invalidate(REGISTRY[database]["cache_key"])
+
+
+def sync_vip_emails() -> list[str]:
+    """Zieht alle Kontakte mit Mehrfachauswahl=Kunde und gibt ihre Email-Adressen zurück."""
+    response = _get_client().databases.query(
+        database_id=config.NOTION_KONTAKTE_DB_ID,
+        filter={"property": "Mehrfachauswahl", "multi_select": {"contains": "Kunde"}},
+    )
+    _GENERIC_DOMAINS = {
+        "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+        "yahoo.com", "yahoo.de", "gmx.de", "gmx.net", "gmx.at", "web.de",
+        "icloud.com", "me.com", "mac.com", "protonmail.com", "proton.me",
+    }
+    vip_patterns = []
+    for page in response.get("results", []):
+        props = page.get("properties", {})
+        email_items = props.get("Email", {}).get("rich_text", [])
+        if email_items:
+            addr = email_items[0]["plain_text"].strip().lower()
+            if addr:
+                domain = addr.split("@")[-1] if "@" in addr else addr
+                vip_patterns.append(addr if domain in _GENERIC_DOMAINS else domain)
+    return vip_patterns
 
 
 def delete(page_id: str, database: str = None) -> None:

@@ -94,6 +94,17 @@ def write(title: str, start_iso: str, end_iso: str, description: str = "") -> st
         return f"Fehler beim Erstellen: {e}"
 
 
+def delete(event_id: str) -> str:
+    if not google_auth.is_configured():
+        return "Google Calendar nicht konfiguriert."
+    try:
+        _get_service().events().delete(calendarId="primary", eventId=event_id).execute()
+        _CACHE_PATH.unlink(missing_ok=True)
+        return "Event gelöscht."
+    except Exception as e:
+        return f"Fehler beim Löschen: {e}"
+
+
 def format_for_prompt() -> str:
     events = query_cached()
     if not events:

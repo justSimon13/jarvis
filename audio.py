@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tempfile
 import threading
 import numpy as np
@@ -109,9 +110,27 @@ def record_until_enter() -> str:
 
 
 def play_mp3(path: str):
-    subprocess.run(["afplay", path], check=True)
+    if sys.platform == "darwin":
+        subprocess.run(["afplay", path], check=True)
+    else:
+        subprocess.run(["aplay", path], stderr=subprocess.DEVNULL)
+
+
+def play_thinking_sound(stop_event: threading.Event):
+    """Sanfter pulsierender Ton der loopt bis stop_event gesetzt wird."""
+    sample_rate = 24000
+    duration = 1.5
+    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+    # Sinus bei 220 Hz, Lautstärke pulsiert langsam
+    envelope = 0.3 + 0.2 * np.sin(2 * np.pi * 0.8 * t)
+    tone = (envelope * np.sin(2 * np.pi * 220 * t) * 0.15).astype(np.float32)
+
+    with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32") as stream:
+        while not stop_event.is_set():
+            stream.write(tone)
 
 
 def _beep():
-    """Kurzer Ton als Bestätigung dass Wake Word erkannt wurde."""
-    subprocess.Popen(["afplay", "/System/Library/Sounds/Ping.aiff"])
+    if sys.platform == "darwin":
+        subprocess.Popen(["afplay", "/System/Library/Sounds/Ping.aiff"])
+    # kein Beep auf Linux — kein Blocker

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tempfile
 import numpy as np
 import sounddevice as sd
@@ -24,25 +25,61 @@ def speak(text: str):
         _speak_native(text)
 
 
-def speak_stream(text: str):
-    """Text zu ElevenLabs streamen und PCM direkt über Sounddevice abspielen."""
+def speak_response(text_queue, done_event):
+    """
+    Liest Text-Chunks aus text_queue, ruft ElevenLabs auf und spielt
+    alles über EINEN persistenten OutputStream ab — kein Knacken zwischen Chunks.
+    Beendet wenn None in text_queue kommt.
+    """
+    import queue as _queue
+
     if not config.ELEVENLABS_API_KEY:
-        _speak_native(text)
+        chunks = []
+        while True:
+            t = text_queue.get()
+            if t is None:
+                break
+            chunks.append(t)
+        _speak_native(" ".join(chunks))
+        done_event.set()
         return
 
     client = _get_elevenlabs()
-    audio_stream = client.text_to_speech.convert(
-        voice_id=config.ELEVENLABS_VOICE_ID,
-        text=text,
-        model_id="eleven_turbo_v2_5",
-        output_format="pcm_24000",
-    )
+    audio_queue = _queue.Queue()
+    _SENTINEL = object()
+
+    def fetch_worker():
+        while True:
+            text = text_queue.get()
+            if text is None:
+                audio_queue.put(_SENTINEL)
+                return
+            try:
+                audio_stream = client.text_to_speech.convert(
+                    voice_id=config.ELEVENLABS_VOICE_ID,
+                    text=text,
+                    model_id="eleven_turbo_v2_5",
+                    output_format="pcm_24000",
+                )
+                for chunk in audio_stream:
+                    if chunk:
+                        audio_queue.put(chunk)
+            except Exception as e:
+                print(f"[tts] Fehler: {e}")
+
+    import threading
+    fetcher = threading.Thread(target=fetch_worker, daemon=True)
+    fetcher.start()
 
     with sd.OutputStream(samplerate=PCM_SAMPLERATE, channels=1, dtype="int16") as stream:
-        for chunk in audio_stream:
-            if chunk:
-                pcm = np.frombuffer(chunk, dtype=np.int16)
-                stream.write(pcm)
+        while True:
+            chunk = audio_queue.get()
+            if chunk is _SENTINEL:
+                break
+            stream.write(np.frombuffer(chunk, dtype=np.int16))
+
+    fetcher.join()
+    done_event.set()
 
 
 def _speak_elevenlabs(text: str):
@@ -57,8 +94,14 @@ def _speak_elevenlabs(text: str):
     for chunk in audio_stream:
         tmp.write(chunk)
     tmp.flush()
-    subprocess.run(["afplay", tmp.name], check=True)
+    if sys.platform == "darwin":
+        subprocess.run(["afplay", tmp.name], check=True)
+    else:
+        subprocess.run(["aplay", tmp.name], stderr=subprocess.DEVNULL)
 
 
 def _speak_native(text: str):
-    subprocess.run(["say", "-v", "Anna", text], check=True)
+    if sys.platform == "darwin":
+        subprocess.run(["say", "-v", "Anna", text], check=True)
+    else:
+        subprocess.run(["espeak", "-v", "de", text], stderr=subprocess.DEVNULL)
