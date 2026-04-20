@@ -17,6 +17,16 @@ def _get_elevenlabs():
     return _elevenlabs_client
 
 
+def _voice_settings():
+    from elevenlabs.types import VoiceSettings
+    return VoiceSettings(
+        stability=0.35,
+        similarity_boost=0.75,
+        style=0.45,
+        use_speaker_boost=True,
+    )
+
+
 def speak(text: str):
     """Vollständigen Text sprechen (Fallback / kurze Texte)."""
     if config.ELEVENLABS_API_KEY:
@@ -60,6 +70,7 @@ def speak_response(text_queue, done_event):
                     text=text,
                     model_id="eleven_turbo_v2_5",
                     output_format="pcm_24000",
+                    voice_settings=_voice_settings(),
                 )
                 for chunk in audio_stream:
                     if chunk:
@@ -89,6 +100,7 @@ def _speak_elevenlabs(text: str):
         text=text,
         model_id="eleven_turbo_v2_5",
         output_format="mp3_44100_128",
+        voice_settings=_voice_settings(),
     )
     tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
     for chunk in audio_stream:
