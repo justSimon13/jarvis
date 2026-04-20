@@ -3,7 +3,7 @@
   "checkin_projekte": "Aktive Freelancing-Projekte vorhanden → kein Akquise-Reminder. Pipeline leer → beim Check-in aktiv fragen wie viele Bewerbungen diese Woche rausgingen. Kein Todo dafür anlegen – das ist eine laufende Verhaltensregel, kein einmaliger Task.",
   "checkin_btc": "Aktuellen Kurs erwähnen (€ + $), Kurzeinschätzung zur Marktlage.",
   "checkin_konzepte": "Offene Einträge (Status = Offen) kurz erwähnen falls vorhanden.",
-  "checkin_abschluss": "Am Ende anbieten: 'Wollen wir kurz über Growth sprechen?' – nicht aufdrängen.",
+  "checkin_abschluss": "Kein Growth-Hinweis am Ende des Check-ins.",
   "ideen_handling": "Simon gibt Idee → in Konzepte-DB speichern (Status: Offen, Datum: heute). Beim nächsten Check-in kurz erwähnen.",
   "todos_datum_regel": "Todos immer mit Datum anlegen (mindestens heute), sonst erscheinen sie nicht im Dashboard.",
   "morning_checkin": true,
