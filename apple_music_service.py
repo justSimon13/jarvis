@@ -68,19 +68,63 @@ def set_volume(level: int) -> str:
     return f"Lautstärke auf {level}%."
 
 
+def search_tracks(query: str, limit: int = 8) -> list[dict]:
+    """Gibt mehrere Treffer mit Details zurück, ohne direkt abzuspielen."""
+    if sys.platform != "darwin":
+        return []
+    script = f"""
+    tell application "Music"
+        set results to search library playlist 1 for "{query}"
+        if results is {{}} then
+            return ""
+        end if
+        set output to ""
+        set n to count of results
+        if n > {limit} then set n to {limit}
+        repeat with i from 1 to n
+            set t to item i of results
+            set output to output & (i as string) & "|" & name of t & "|" & artist of t & "|" & album of t & "\\n"
+        end repeat
+        return output
+    end tell
+    """
+    out = _run(script)
+    tracks = []
+    for line in out.strip().splitlines():
+        parts = line.split("|")
+        if len(parts) == 4:
+            tracks.append({"index": int(parts[0]), "title": parts[1], "artist": parts[2], "album": parts[3]})
+    return tracks
+
+
 def play_search(query: str) -> str:
+    """Sucht Tracks und gibt Treffer zurück damit JARVIS die richtige Version wählen kann."""
+    if sys.platform != "darwin":
+        return _not_supported()
+    tracks = search_tracks(query)
+    if not tracks:
+        return "Nichts gefunden."
+    if len(tracks) == 1:
+        return play_track_index(query, tracks[0]["index"])
+    # Mehrere Treffer: als JSON zurückgeben damit Claude die richtige Version wählt
+    import json
+    return json.dumps({"results": tracks, "hint": "Bitte play_track aufrufen mit query und index des gewünschten Tracks."}, ensure_ascii=False)
+
+
+def play_track_index(query: str, index: int) -> str:
+    """Spielt einen bestimmten Treffer aus einer vorherigen Suche ab."""
     if sys.platform != "darwin":
         return _not_supported()
     script = f"""
     tell application "Music"
         set results to search library playlist 1 for "{query}"
-        if results is {{}} then
-            return "Nichts gefunden."
+        if (count of results) >= {index} then
+            play item {index} of results
+            return name of current track & " von " & artist of current track & " (" & album of current track & ")"
         else
-            play first item of results
-            return name of current track & " von " & artist of current track
+            return "Index nicht gefunden."
         end if
     end tell
     """
     out = _run(script)
-    return out if out else "Nichts gefunden."
+    return out if out else "Fehler beim Abspielen."

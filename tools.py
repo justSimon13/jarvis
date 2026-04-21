@@ -337,13 +337,29 @@ DEFINITIONS = [
     },
     {
         "name": "music_search",
-        "description": "Song oder Artist in der Apple Music Bibliothek suchen und abspielen.",
+        "description": (
+            "Song oder Artist in der Apple Music Bibliothek suchen. "
+            "Gibt bei mehreren Treffern eine Liste mit Titel, Artist und Album zurück. "
+            "Dann music_play_track mit dem passenden index aufrufen — z.B. Album-Version bevorzugen wenn Album-Name kein 'Live' oder 'Concert' enthält."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Suche nach Song, Artist oder Album"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "music_play_track",
+        "description": "Spielt einen bestimmten Track aus einer vorherigen music_search ab. query und index aus dem Suchergebnis übernehmen.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Dieselbe Suchanfrage wie bei music_search"},
+                "index": {"type": "integer", "description": "Index des gewünschten Tracks (aus Suchergebnis)"},
+            },
+            "required": ["query", "index"],
         },
     },
     {
@@ -490,6 +506,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "music_search":
             return apple_music_service.play_search(tool_input["query"])
+
+        if tool_name == "music_play_track":
+            return apple_music_service.play_track_index(tool_input["query"], tool_input["index"])
 
         if tool_name == "notion_delete":
             notion_service.delete(
