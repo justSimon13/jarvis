@@ -82,33 +82,92 @@ def build_prompt_section() -> str:
     data = load()
     parts = []
 
-    profile = data.get("profile", {})
-    if profile:
-        lines = ["## Simons Profil"]
-        for k, v in profile.items():
-            lines.append(f"- {k}: {v}")
+    # 1. Profil als Fließtext
+    p = data.get("profile", {})
+    if p:
+        known_keys = {
+            "name", "standort", "alter", "lebenssituation", "anstellung", "selbständig",
+            "rhythmus_konzentration", "freelancing_positionierung", "freelancing_stack",
+            "freelancing_zielkunden", "freelancing_rate", "freelancing_kanaele",
+            "langfristige_ziele", "btc_bestand", "btc_investiert", "btc_strategie",
+        }
+        lines = ["## Wer Simon ist"]
+        if p.get("name") and p.get("standort"):
+            intro = f"{p['name']}"
+            if p.get("alter"):
+                intro += f" ({p['alter']})"
+            intro += f" lebt in {p['standort']}."
+            if p.get("lebenssituation"):
+                ls = p["lebenssituation"]
+                intro += " " + ls[0].upper() + ls[1:] + "."
+            lines.append(intro)
+        if p.get("anstellung"):
+            lines.append(p["anstellung"] + ".")
+        if p.get("selbständig"):
+            lines.append(p["selbständig"] + ".")
+        if p.get("rhythmus_konzentration"):
+            lines.append(p["rhythmus_konzentration"].capitalize() + ".")
+        if p.get("freelancing_positionierung"):
+            lines.append("Freelancing: " + p["freelancing_positionierung"])
+        if p.get("freelancing_stack"):
+            lines.append("Stack: " + p["freelancing_stack"])
+        if p.get("freelancing_zielkunden"):
+            lines.append("Zielkunden: " + p["freelancing_zielkunden"])
+        if p.get("freelancing_rate"):
+            lines.append("Rate: " + p["freelancing_rate"])
+        if p.get("freelancing_kanaele"):
+            lines.append("Kanäle: " + p["freelancing_kanaele"])
+        if p.get("langfristige_ziele"):
+            lines.append("Langfristig: " + p["langfristige_ziele"])
+        if p.get("btc_bestand"):
+            lines.append(
+                f"Bitcoin: {p['btc_bestand']}, investiert {p.get('btc_investiert', '')}. "
+                f"{p.get('btc_strategie', '')}"
+            )
+        for k, v in p.items():
+            if k not in known_keys:
+                lines.append(f"- {k}: {v}")
         parts.append("\n".join(lines))
 
-    settings = data.get("settings", {})
-    active = []
-    for k, v in settings.items():
-        if v is True:
-            active.append(f"- {k}: aktiv")
+    # 2. Settings kategorisieren
+    s = data.get("settings", {})
+    features, rules, checkin_rules, reminders, paused = [], [], [], [], []
+
+    for k, v in s.items():
+        if k == "email_vip":
+            continue
+        if k.endswith("_pausiert_bis"):
+            feature = k.replace("_pausiert_bis", "")
+            paused.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
+        elif v is True:
+            features.append(f"- {k}: aktiv")
         elif v is False or v is None or v == "":
             continue
-        elif k.endswith("_pausiert_bis"):
-            feature = k.replace("_pausiert_bis", "")
-            active.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
+        elif k.startswith("checkin_"):
+            label = k.replace("checkin_", "")
+            checkin_rules.append(f"- {label}: {v}")
+        elif k.endswith("_reminder"):
+            reminders.append(f"- {v}")
+        elif k.startswith("rule_"):
+            rules.append(f"- {v}")
         else:
-            active.append(f"- {k}: {v}")
-    if active:
-        parts.append("## Einstellungen & Verhaltensregeln\n" + "\n".join(active))
+            rules.append(f"- {k}: {v}")
 
+    if features or rules:
+        parts.append("## Verhaltensregeln\n" + "\n".join(features + rules))
+
+    if checkin_rules:
+        parts.append("## Check-in Regeln\n" + "\n".join(checkin_rules))
+
+    if reminders or paused:
+        parts.append("## Aktive Reminder\n" + "\n".join(reminders + paused))
+
+    # 3. Erinnerungen
     memory = data.get("memory", {})
     if isinstance(memory, list):
-        entries = memory
+        entries = [str(e) for e in memory]
     elif isinstance(memory, dict):
-        entries = [f"{k}: {v}" for k, v in memory.items()]
+        entries = list(memory.values())
     else:
         entries = []
     if entries:
