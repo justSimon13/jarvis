@@ -69,6 +69,8 @@ mkdir -p "$APP_PATH/Contents/Resources"
 
 cat > "$APP_PATH/Contents/MacOS/$APP_NAME" << LAUNCHER
 #!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
+export DYLD_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:\$DYLD_LIBRARY_PATH"
 cd "$INSTALL_DIR"
 exec "$INSTALL_DIR/.venv/bin/python3" "$INSTALL_DIR/app.py" "\$@"
 LAUNCHER
