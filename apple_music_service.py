@@ -60,6 +60,13 @@ def previous_track() -> str:
     return get_current_track().get("title", "Vorheriger Track.")
 
 
+def stop() -> str:
+    if sys.platform != "darwin":
+        return _not_supported()
+    _run('tell application "Music" to stop')
+    return "Gestoppt."
+
+
 def set_volume(level: int) -> str:
     if sys.platform != "darwin":
         return _not_supported()

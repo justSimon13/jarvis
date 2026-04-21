@@ -315,6 +315,11 @@ DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "music_stop",
+        "description": "Stoppt Apple Music komplett.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "music_next",
         "description": "Nächster Track in Apple Music.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -494,6 +499,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "music_play_pause":
             return apple_music_service.play_pause()
+
+        if tool_name == "music_stop":
+            return apple_music_service.stop()
 
         if tool_name == "music_next":
             return apple_music_service.next_track()
