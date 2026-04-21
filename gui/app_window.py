@@ -106,6 +106,8 @@ class AppWindow(ctk.CTk):
             self._status.set_state(data)
         elif event_type == "status_text":
             self._status.set_custom_text(data)
+        elif event_type == "user_thinking":
+            self._chat.set_user_thinking(data)
         elif event_type == "user_text":
             self._chat.add_user_message(data)
         elif event_type == "response_start":

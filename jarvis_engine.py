@@ -124,7 +124,8 @@ class JarvisEngine(threading.Thread):
                         elapsed = time.time() - start_time
                         if elapsed >= VOICE_MAX_SECONDS:
                             break
-                        self._emit("status_text", "Noch am Zuhören…")
+                        self._emit("status_text", "Nutzer ist am Denken…")
+                        self._emit("user_thinking", accumulated)
                     else:
                         break
 
