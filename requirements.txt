@@ -1,6 +1,5 @@
 anthropic>=0.40.0
 ddgs>=0.1.0
-requests>=2.31.0
 pvporcupine
 elevenlabs>=1.0.0
 openai-whisper
