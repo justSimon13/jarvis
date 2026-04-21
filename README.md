@@ -1,126 +1,135 @@
 # J.A.R.V.I.S.
 
-Persönlicher KI-Sprachassistent für macOS. Hört auf dein Wake Word, versteht Deutsch, antwortet per Sprache und hat Zugriff auf Kalender, E-Mail, Notion, Bitcoin-Kurs und Einkaufsliste.
+Persönlicher KI-Sprachassistent für macOS. Wake Word, Sprache, Chat-Fenster, Kalender, E-Mail, Notion, Timer, Wecker und mehr.
 
 ---
 
-## Voraussetzungen
+## Installation
 
-- Python 3.11+
-- macOS (Linux/Raspberry Pi experimentell unterstützt)
-- API Keys: Anthropic, ElevenLabs, Notion, Picovoice (optional), GitHub
+### 1. Installer herunterladen
 
----
-
-## Setup
+Aus dem [aktuellen Release](https://github.com/justSimon13/j.a.r.v.i.s./releases/latest) die Datei `JARVIS-installer.zip` herunterladen.
 
 ```bash
-git clone https://github.com/justSimon13/j.a.r.v.i.s..git
-cd j.a.r.v.i.s.
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+unzip JARVIS-installer.zip -d JARVIS
+cd JARVIS
+./install.sh
 ```
 
-`.env` anlegen:
+Das Skript kopiert alles nach `~/.jarvis/`, erstellt eine Python-Umgebung und legt `/Applications/JARVIS.app` an.
 
-```env
-ANTHROPIC_API_KEY=...
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=...
-NOTION_API_KEY=...
-PICOVOICE_ACCESS_KEY=...       # optional, für Wake Word
-GITHUB_TOKEN=...
-GITHUB_BRAIN_REPO=justSimon13/j.a.r.v.i.s.
-EMAIL_ADDRESS=...
-EMAIL_PASSWORD=...
-EMAIL_IMAP_HOST=imap.ionos.de
-EMAIL_SMTP_HOST=smtp.ionos.de
-EMAIL_SEND_ENABLED=false       # auf true setzen um Mails zu versenden
-WHISPER_MODEL=base
+---
+
+### 2. API Keys eintragen
+
+```bash
+nano ~/.jarvis/.env
 ```
 
-**Google Calendar einrichten** (einmalig):
-1. Google Cloud Console → Projekt erstellen → Google Calendar API aktivieren
-2. OAuth 2.0 Client ID erstellen (Desktop App) → JSON herunterladen → `~/.jarvis/google_credentials.json`
-3. `python3 setup_google.py`
+| Variable | Woher | Pflicht |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | Ja |
+| `ELEVENLABS_API_KEY` | [elevenlabs.io](https://elevenlabs.io) | Ja |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs → Voices → Voice ID kopieren | Ja |
+| `NOTION_API_KEY` | [notion.so/my-integrations](https://www.notion.so/my-integrations) → New Integration | Ja |
+| `GITHUB_TOKEN` | GitHub → Settings → Developer Settings → Personal Access Tokens | Ja (für Brain-Sync) |
+| `EMAIL_ADDRESS` | Deine E-Mail-Adresse | Nein |
+| `WEATHER_CITY` | Stadtname für Wetter, z.B. `München` | Nein |
+| `WHISPER_MODEL` | `tiny` / `base` / `small` / `medium` — schneller vs. genauer | Nein (Standard: `base`) |
 
-**Apple Reminders freischalten** (einmalig):
-Systemeinstellungen → Datenschutz & Sicherheit → Automatisierung → Terminal → Reminders aktivieren
+---
+
+### 3. Google Calendar einrichten (einmalig)
+
+1. [Google Cloud Console](https://console.cloud.google.com) → Neues Projekt
+2. APIs & Services → **Google Calendar API** aktivieren
+3. APIs & Services → Anmeldedaten → **OAuth 2.0-Client-ID** erstellen (Typ: Desktop-App)
+4. JSON herunterladen → speichern als `~/.jarvis/google_credentials.json`
+5. Einmalig authentifizieren:
+
+```bash
+cd ~/.jarvis && .venv/bin/python3 setup_google.py
+```
+
+---
+
+### 4. Apple Reminders freischalten (einmalig)
+
+Systemeinstellungen → Datenschutz & Sicherheit → Automatisierung → Terminal (oder JARVIS.app) → **Erinnerungen** aktivieren
+
+---
+
+### 5. Notion-Integration verbinden
+
+In jeder genutzten Notion-Datenbank (Todos, Projekte, Konzepte):  
+Datenbank öffnen → `...` → **Verbindungen** → deine JARVIS-Integration hinzufügen
 
 ---
 
 ## Starten
 
-```bash
-python3 main.py
+```
+/Applications/JARVIS.app
 ```
 
-- **Wake Word Modus**: sag "Hey JARVIS" (erfordert `PICOVOICE_ACCESS_KEY`)
-- **Manueller Modus**: Enter drücken zum Sprechen
+Oder per Spotlight: `cmd + space` → "JARVIS"
+
+---
+
+## Bedienung
+
+| Modus | Aktivierung | Eingabe | Ausgabe |
+|---|---|---|---|
+| **Voice** | "Hey JARVIS" sagen | Sprache | Sprache + Chat |
+| **Text** | Button oben rechts → "Text" | Tippen + Enter | Chat |
+
+Mitten im Satz pausieren ist okay — JARVIS wartet bis du fertig bist (bis zu 10 Sekunden).
+
+---
+
+## Was JARVIS kann
+
+| Funktion | Beispiel |
+|---|---|
+| Todos & Projekte | "Erstell ein Todo: Zahnarzt anrufen, Priorität hoch" |
+| Google Calendar | "Was steht diese Woche an?" / "Trag Montag 10 Uhr Meeting ein" |
+| E-Mail | "Habe ich neue wichtige Mails?" / "Schreib eine Mail an Max" |
+| Timer | "Stell einen Timer auf 10 Minuten, Nudeln" |
+| Wecker | "Wecker um 7:30 Uhr, Aufstehen" (synct via iCloud aufs iPhone) |
+| Einkaufsliste | "Füge Milch und Brot zur Einkaufsliste hinzu" |
+| Gedächtnis | "Merk dir dass ich Laktoseintolerant bin" |
+| Wetter | "Wie wird das Wetter heute?" |
+| Bitcoin | "Was ist der aktuelle BTC-Kurs?" |
+| Websuche | "Suche nach den neuesten Nachrichten zu..." |
+| Musik | "Spiel Lo-Fi" / "Nächster Song" / "Lauter" |
+| Notion-Seiten | "Erstell eine Seite mit Checkliste für den Umzug" |
+
+---
+
+## Einstellungen
+
+In der App oben rechts auf **⚙** klicken:
+- Whisper-Modell wechseln
+- Mikrofon auswählen
+- Wake Word an/aus
+- ElevenLabs Voice ID ändern
+- API Keys aktualisieren
+- Autostart beim Login aktivieren
 
 ---
 
 ## Architektur
 
 ```
-Mikrofon → Whisper (lokal) → Claude API → ElevenLabs TTS → Lautsprecher
+Mikrofon → Silero VAD → Whisper (lokal) → Claude API → ElevenLabs TTS → Lautsprecher
+                                                    ↕
+                              Notion / Google Calendar / E-Mail / Brain
 ```
 
-| Datei | Funktion |
-|---|---|
-| `main.py` | Hauptloop, State Machine, TTS-Streaming |
-| `audio.py` | Mikrofon-Aufnahme, Wake Word, Thinking-Sound |
-| `stt.py` | Whisper Speech-to-Text |
-| `llm.py` | Claude API Streaming |
-| `tts.py` | ElevenLabs TTS mit PCM-Streaming |
-| `tools.py` | Tool-Definitionen und Executor |
-| `context.py` | Dynamischer System Prompt (Notion, Kalender, BTC) |
-| `brain.py` | Lokales Gedächtnis (brain/ JSON + git sync) |
-| `notion_service.py` | Notion CRUD mit SQLite Cache |
-| `calendar_service.py` | Google Calendar read/write |
-| `email_service.py` | IMAP/SMTP mit VIP-Filter und Blacklist |
-| `btc.py` | Bitcoin Live-Preis (CoinGecko) |
-| `reminders_service.py` | Apple Reminders (Einkaufsliste, macOS only) |
+Brain (`~/.jarvis/brain/`) speichert dein Profil, Gedächtnis und Einstellungen — versioniert per Git und automatisch synchronisiert.
 
 ---
 
-## Gedächtnis (Brain)
+## Aktualisieren
 
-JARVIS speichert Wissen in `brain/` — versioniert per Git, sync über alle Geräte.
-
-| Datei | Inhalt |
-|---|---|
-| `brain/profile.json` | Simons Profil, Freelancing-Details |
-| `brain/settings.json` | Aktive Routinen, Präferenzen, Email-VIP/Blacklist |
-| `brain/memory.json` | Was JARVIS über Simon gelernt hat |
-
-Per Sprache: *"Merk dir dass..."*, *"Von jetzt an..."*, *"Füge X zur Blacklist hinzu"*
-
----
-
-## Tools
-
-| Tool | Funktion |
-|---|---|
-| `notion_query/write/update/delete` | Notion Todos, Projekte, Konzepte |
-| `calendar_query/write/delete` | Google Calendar |
-| `email_query/send` | E-Mail lesen und senden |
-| `brain_read/write` | Gedächtnis lesen/schreiben |
-| `btc_price` | Bitcoin Live-Kurs |
-| `shopping_add/get/remove` | Apple Reminders Einkaufsliste |
-| `sync_email_vip` | VIP-Liste aus Notion Kontakte synchronisieren |
-
----
-
-## Auf neuem Gerät
-
-```bash
-git clone https://github.com/justSimon13/j.a.r.v.i.s..git
-# .env anlegen
-pip install -r requirements.txt
-python3 setup_google.py
-python3 main.py
-```
-
-Brain ist automatisch aktuell via `git pull` beim Start.
+Neues Release herunterladen → `install.sh` erneut ausführen. Deine `.env` und Brain-Daten bleiben erhalten.
