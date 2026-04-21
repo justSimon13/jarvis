@@ -11,6 +11,7 @@
     "checkin_density": "Im Check-in kompakt bleiben. Nicht zu viele Themen auf einmal aufblasen."
   },
   "checkin_rules": {
+    "uhrzeit": "Aktuelle Uhrzeit kurz erwähnen, um Kontext zu geben.",
     "todos": "Todos mit Datum in dieser Woche normal anzeigen. Nicht erledigte Todos aus der Vorwoche oder älter als offen geblieben markieren und aktiv ansprechen. Todos ohne Datum ignorieren.",
     "projekte": "Wenn aktive Freelancing-Projekte vorhanden sind, keinen Akquise-Reminder geben. Wenn die Pipeline leer ist, im Check-in aktiv fragen, wie viele Bewerbungen diese Woche rausgingen. Dafür kein Todo anlegen.",
     "btc": "Aktuellen BTC-Kurs in Euro und Dollar erwähnen und eine kurze Markteinordnung geben.",
@@ -26,8 +27,6 @@
     "freelancing": "Execution-Problem, kein Strategie-Problem. Ziel: 3–5 Bewerbungen pro Woche rausschicken."
   },
   "contacts": {
-    "email_vip": [
-      "michael@halbautomaten.com"
-    ]
+    "email_vip": ["michael@halbautomaten.com"]
   }
 }

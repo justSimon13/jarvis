@@ -140,6 +140,8 @@ def main():
         print("Modus: Manuell – ENTER zum Sprechen")
     print("─" * 50)
 
+    tts.speak("Alle Systeme bereit, Sir.")
+
     history: list[dict] = []
 
     try:

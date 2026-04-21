@@ -43,6 +43,8 @@ def listen_for_wake_word():
         detected.wait()
 
     _beep()
+    import time
+    time.sleep(0.3)  # Beep abklingen lassen bevor Aufnahme startet
 
 
 def record_with_vad() -> str:
