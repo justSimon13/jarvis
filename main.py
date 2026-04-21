@@ -143,25 +143,33 @@ def main():
     tts.speak("Alle Systeme bereit, Sir.")
 
     history: list[dict] = []
+    in_conversation = False
+    silent_turns = 0
+    MAX_SILENT_TURNS = 2  # nach 2 leeren Aufnahmen → zurück zum Wake Word
 
     try:
         while True:
             set_state(State.IDLE)
 
-            if wake_word_mode:
+            if wake_word_mode and not in_conversation:
                 print("\nHöre auf Wake Word...")
                 audio.listen_for_wake_word()
+
+            if wake_word_mode:
                 print("Ich höre... (Stille beendet Aufnahme)")
-                set_state(State.LISTENING)
-                wav_path = audio.record_with_vad()
             else:
                 input("\nENTER zum Sprechen...")
                 print("Aufnahme läuft... ENTER zum Stoppen.")
-                set_state(State.LISTENING)
-                wav_path = audio.record_until_enter()
+
+            set_state(State.LISTENING)
+            wav_path = audio.record_with_vad() if wake_word_mode else audio.record_until_enter()
 
             if not wav_path:
                 print("[!] Keine Aufnahme erkannt.")
+                silent_turns += 1
+                if silent_turns >= MAX_SILENT_TURNS:
+                    in_conversation = False
+                    silent_turns = 0
                 continue
 
             print("Transkribiere...")
@@ -173,7 +181,14 @@ def main():
 
             if not user_text:
                 print("[!] Kein Text erkannt.")
+                silent_turns += 1
+                if silent_turns >= MAX_SILENT_TURNS:
+                    in_conversation = False
+                    silent_turns = 0
                 continue
+
+            silent_turns = 0
+            in_conversation = True
 
             print(f"\nDu: {user_text}")
             history.append({"role": "user", "content": user_text})
