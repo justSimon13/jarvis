@@ -48,7 +48,8 @@ DEFINITIONS = [
             "Verfügbare Datenbanken: 'todos', 'projekte', 'konzepte'. "
             "todos: Name (Pflicht), Status, Datum (YYYY-MM-DD), Priorität (Niedrig/Mittel/Hoch), Bereich, Aufwand. "
             "projekte: Projekt (Pflicht), Status, Beschreibung, Typ. "
-            "konzepte: Name (Pflicht), Status, Notiz, Typ."
+            "konzepte: Name (Pflicht), Status, Notiz, Typ. "
+            "Optional: content = Liste von Blöcken die als Seiteninhalt angelegt werden (Checkliste etc.)."
         ),
         "input_schema": {
             "type": "object",
@@ -61,6 +62,11 @@ DEFINITIONS = [
                 "properties": {
                     "type": "object",
                     "description": "Felder des neuen Eintrags als Key-Value-Paare",
+                },
+                "content": {
+                    "type": "array",
+                    "description": "Optionale Blöcke als Seiteninhalt. Jedes Item: {type: 'to_do'|'paragraph'|'bullet'|'heading', text: '...'}",
+                    "items": {"type": "object"},
                 },
             },
             "required": ["database", "properties"],
@@ -97,7 +103,7 @@ DEFINITIONS = [
         "description": (
             "Liest einen Wert aus JARVIS's eigenem Gedächtnis (GitHub Brain). "
             "Sections: 'profile' (Simons Profil), 'settings' (aktive Routinen & Präferenzen), "
-            "'memory' (was JARVIS über Simon gelernt hat). "
+            "'memory' (was JARVIS über Simon gelernt hat), 'followups' (offene Follow-up Punkte). "
             "key optional – ohne key wird die ganze Section zurückgegeben."
         ),
         "input_schema": {
@@ -105,7 +111,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory"],
+                    "enum": ["profile", "settings", "memory", "followups"],
                     "description": "Welche Section lesen",
                 },
                 "key": {
@@ -121,7 +127,8 @@ DEFINITIONS = [
         "description": (
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
-            "Sections: 'profile', 'settings', 'memory'. "
+            "Sections: 'profile', 'settings', 'memory', 'followups'. "
+            "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung oder null zum Löschen. "
             "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
             "Für Pausen flache Keys nutzen: key='checkin_pausiert_bis', value='2026-05-01'. "
             "Email-VIP manuell: section='settings', key='contacts.email_vip', value=[...bestehende Liste + X]. "
@@ -133,7 +140,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory"],
+                    "enum": ["profile", "settings", "memory", "followups"],
                     "description": "Welche Section updaten",
                 },
                 "key": {
@@ -370,8 +377,9 @@ DEFINITIONS = [
     {
         "name": "notion_delete",
         "description": (
-            "Archiviert (löscht) einen Notion-Eintrag per page_id. "
-            "page_id aus einem vorherigen notion_query entnehmen."
+            "Archiviert (löscht) eine beliebige Notion-Seite per page_id – "
+            "funktioniert für Datenbank-Einträge und normale Seiten. "
+            "page_id aus notion_query oder notion_search_pages entnehmen."
         ),
         "input_schema": {
             "type": "object",
@@ -383,10 +391,54 @@ DEFINITIONS = [
                 "database": {
                     "type": "string",
                     "enum": ["todos", "projekte", "konzepte"],
-                    "description": "Name der Datenbank (für Cache-Invalidierung)",
+                    "description": "Name der Datenbank (optional, nur für Cache-Invalidierung)",
                 },
             },
             "required": ["page_id"],
+        },
+    },
+    {
+        "name": "notion_append_blocks",
+        "description": (
+            "Fügt Blöcke (Checkboxen, Text, Aufzählungen) als Inhalt an eine bestehende Notion-Seite an. "
+            "Nützlich um z.B. einer Todo-Seite eine Checkliste hinzuzufügen. "
+            "page_id aus notion_query oder notion_write (gibt page_id zurück) entnehmen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "ID der Notion-Seite",
+                },
+                "blocks": {
+                    "type": "array",
+                    "description": "Liste von Blöcken. Jedes Item: {type: 'to_do'|'paragraph'|'bullet'|'heading', text: '...'}. Bei to_do optional: checked: true/false",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["page_id", "blocks"],
+        },
+    },
+    {
+        "name": "notion_search_pages",
+        "description": (
+            "Sucht beliebige Notion-Seiten nach Titel – nicht nur Datenbank-Einträge. "
+            "Gibt page_id, Titel und URL zurück. Danach notion_delete oder notion_append_blocks aufrufen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Suche im Seitentitel",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximale Ergebnisse (Standard: 5)",
+                },
+            },
+            "required": ["query"],
         },
     },
 ]
@@ -407,6 +459,7 @@ def execute(tool_name: str, tool_input: dict) -> str:
             page_id = notion_service.write(
                 database=tool_input["database"],
                 properties=tool_input["properties"],
+                content=tool_input.get("content"),
             )
             return f"Erstellt (page_id: {page_id})"
 
@@ -524,6 +577,20 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 database=tool_input.get("database"),
             )
             return "Archiviert."
+
+        if tool_name == "notion_append_blocks":
+            notion_service.append_blocks(
+                page_id=tool_input["page_id"],
+                blocks=tool_input["blocks"],
+            )
+            return "Blöcke hinzugefügt."
+
+        if tool_name == "notion_search_pages":
+            results = notion_service.search_pages(
+                query=tool_input["query"],
+                limit=tool_input.get("limit", 5),
+            )
+            return json.dumps(results, ensure_ascii=False)
 
         return f"Unbekanntes Tool: {tool_name}"
     except Exception as e:

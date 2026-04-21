@@ -138,14 +138,17 @@ def query(database: str, search: str = None, status: str = None, limit: int = 10
     return [_from_notion_page(p, database) for p in response.get("results", [])]
 
 
-def write(database: str, properties: dict) -> str:
+def write(database: str, properties: dict, content: list[dict] | None = None) -> str:
     if database not in REGISTRY:
         raise ValueError(f"Unbekannte Datenbank: {database}")
     notion_props = _to_notion_props(database, properties)
-    page = _get_client().pages.create(
-        parent={"database_id": REGISTRY[database]["db_id"]},
-        properties=notion_props,
-    )
+    kwargs = {
+        "parent": {"database_id": REGISTRY[database]["db_id"]},
+        "properties": notion_props,
+    }
+    if content:
+        kwargs["children"] = _to_blocks(content)
+    page = _get_client().pages.create(**kwargs)
     context.invalidate(REGISTRY[database]["cache_key"])
     return page["id"]
 
@@ -156,6 +159,56 @@ def update(page_id: str, database: str, properties: dict) -> None:
     notion_props = _to_notion_props(database, properties)
     _get_client().pages.update(page_id=page_id, properties=notion_props)
     context.invalidate(REGISTRY[database]["cache_key"])
+
+
+def _to_blocks(items: list[dict]) -> list[dict]:
+    """Konvertiert einfache Block-Beschreibungen in Notion API Format."""
+    result = []
+    for item in items:
+        t = item.get("type", "paragraph")
+        text = item.get("text", "")
+        rich = [{"type": "text", "text": {"content": text}}]
+        if t == "to_do":
+            result.append({"object": "block", "type": "to_do",
+                           "to_do": {"rich_text": rich, "checked": item.get("checked", False)}})
+        elif t == "bullet":
+            result.append({"object": "block", "type": "bulleted_list_item",
+                           "bulleted_list_item": {"rich_text": rich}})
+        elif t == "heading":
+            result.append({"object": "block", "type": "heading_2",
+                           "heading_2": {"rich_text": rich}})
+        else:
+            result.append({"object": "block", "type": "paragraph",
+                           "paragraph": {"rich_text": rich}})
+    return result
+
+
+def append_blocks(page_id: str, blocks: list[dict]) -> None:
+    """Fügt Blöcke (Checkboxen, Text etc.) an eine bestehende Notion-Seite an."""
+    _get_client().blocks.children.append(block_id=page_id, children=_to_blocks(blocks))
+
+
+def search_pages(query: str, limit: int = 5) -> list[dict]:
+    """Sucht beliebige Notion-Seiten nach Titel (nicht nur Datenbank-Einträge)."""
+    response = _get_client().search(
+        query=query,
+        filter={"value": "page", "property": "object"},
+        page_size=limit,
+    )
+    results = []
+    for page in response.get("results", []):
+        props = page.get("properties", {})
+        title = ""
+        for prop in props.values():
+            if prop.get("type") == "title":
+                items = prop.get("title", [])
+                title = items[0]["plain_text"] if items else ""
+                break
+        if not title:
+            title_list = page.get("properties", {}).get("title", {}).get("title", [])
+            title = title_list[0]["plain_text"] if title_list else "(kein Titel)"
+        results.append({"page_id": page["id"], "title": title, "url": page.get("url", "")})
+    return results
 
 
 def sync_vip_emails() -> list[str]:
