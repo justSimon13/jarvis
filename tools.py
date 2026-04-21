@@ -7,6 +7,7 @@ import btc
 import reminders_service
 import search
 import weather
+import apple_music_service
 
 DEFINITIONS = [
     {
@@ -304,6 +305,48 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "music_current",
+        "description": "Zeigt den aktuell spielenden Song in Apple Music.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "music_play_pause",
+        "description": "Startet oder pausiert Apple Music.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "music_next",
+        "description": "Nächster Track in Apple Music.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "music_previous",
+        "description": "Vorheriger Track in Apple Music.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "music_volume",
+        "description": "Lautstärke von Apple Music setzen (0–100).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "integer", "description": "Lautstärke 0–100"},
+            },
+            "required": ["level"],
+        },
+    },
+    {
+        "name": "music_search",
+        "description": "Song oder Artist in der Apple Music Bibliothek suchen und abspielen.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Suche nach Song, Artist oder Album"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "notion_delete",
         "description": (
             "Archiviert (löscht) einen Notion-Eintrag per page_id. "
@@ -429,6 +472,24 @@ def execute(tool_name: str, tool_input: dict) -> str:
         if tool_name == "get_weather":
             result = weather.get_weather(city=tool_input.get("city"))
             return json.dumps(result, ensure_ascii=False)
+
+        if tool_name == "music_current":
+            return json.dumps(apple_music_service.get_current_track(), ensure_ascii=False)
+
+        if tool_name == "music_play_pause":
+            return apple_music_service.play_pause()
+
+        if tool_name == "music_next":
+            return apple_music_service.next_track()
+
+        if tool_name == "music_previous":
+            return apple_music_service.previous_track()
+
+        if tool_name == "music_volume":
+            return apple_music_service.set_volume(tool_input["level"])
+
+        if tool_name == "music_search":
+            return apple_music_service.play_search(tool_input["query"])
 
         if tool_name == "notion_delete":
             notion_service.delete(
