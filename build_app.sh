@@ -17,7 +17,7 @@ mkdir -p "$APP_PATH/Contents/Resources"
 # Launcher-Skript
 cat > "$APP_PATH/Contents/MacOS/$APP_NAME" << EOF
 #!/bin/bash
-APP_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/../../.." && pwd)"
+APP_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "\$APP_DIR"
 exec "\$APP_DIR/.venv/bin/python3" "\$APP_DIR/app.py" "\$@"
 EOF
