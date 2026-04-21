@@ -14,8 +14,8 @@ def _input_device():
 SAMPLE_RATE = 16000
 VAD_BLOCKSIZE = 1024
 VAD_SILENCE_THRESHOLD = 0.02  # RMS unter diesem Wert gilt als Stille
-VAD_SILENCE_SECONDS = 1.5     # Stille-Dauer bis Stop
-VAD_MAX_SECONDS = 15          # Maximale Aufnahmedauer
+VAD_SILENCE_SECONDS = 2.5     # Stille-Dauer bis Stop
+VAD_MAX_SECONDS = 30          # Maximale Aufnahmedauer
 
 
 def listen_for_wake_word():
