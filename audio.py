@@ -12,10 +12,24 @@ def _input_device():
     return int(v) if v is not None else None
 
 SAMPLE_RATE = 16000
-VAD_BLOCKSIZE = 1024
-VAD_SILENCE_THRESHOLD = 0.02  # RMS unter diesem Wert gilt als Stille
-VAD_SILENCE_SECONDS = 2.5     # Stille-Dauer bis Stop
+VAD_BLOCKSIZE = 512           # Silero VAD benötigt 512 samples @ 16kHz
 VAD_MAX_SECONDS = 30          # Maximale Aufnahmedauer
+
+# Silero VAD: Schwelle + Stille-Dauer (viel kürzer möglich da neural)
+_SILERO_THRESHOLD = 0.4       # Sprach-Wahrscheinlichkeit ab der als Sprache gilt
+_SILENCE_MS = 800             # ms Stille bis Stop (vs 2500ms bei RMS)
+
+_silero_model = None
+_silero_lock = threading.Lock()
+
+
+def _get_silero():
+    global _silero_model
+    with _silero_lock:
+        if _silero_model is None:
+            from silero_vad import load_silero_vad, VADIterator  # noqa
+            _silero_model = load_silero_vad()
+    return _silero_model
 
 
 def listen_for_wake_word():
@@ -48,25 +62,34 @@ def listen_for_wake_word():
 
 
 def record_with_vad() -> str:
-    """Nimmt auf und stoppt automatisch nach Stille."""
+    """Nimmt auf und stoppt via Silero VAD bei echtem Redepausen-Ende."""
+    import torch
+    from silero_vad import VADIterator
+
+    model = _get_silero()
+    vad = VADIterator(
+        model,
+        sampling_rate=SAMPLE_RATE,
+        threshold=_SILERO_THRESHOLD,
+        min_silence_duration_ms=_SILENCE_MS,
+    )
+
     frames = []
-    silent_blocks = 0
     speaking_started = False
     stop_event = threading.Event()
 
-    silence_block_limit = int(VAD_SILENCE_SECONDS * SAMPLE_RATE / VAD_BLOCKSIZE)
-
     def callback(indata, frame_count, time_info, status):
-        nonlocal silent_blocks, speaking_started
-        frames.append(indata.copy())
-        rms = float(np.sqrt(np.mean(indata ** 2)))
+        nonlocal speaking_started
+        chunk = indata[:, 0].copy()
+        frames.append(chunk)
 
-        if rms > VAD_SILENCE_THRESHOLD:
-            speaking_started = True
-            silent_blocks = 0
-        elif speaking_started:
-            silent_blocks += 1
-            if silent_blocks >= silence_block_limit:
+        tensor = torch.from_numpy(chunk)
+        result = vad(tensor)
+
+        if result is not None:
+            if "start" in result:
+                speaking_started = True
+            elif "end" in result and speaking_started:
                 stop_event.set()
 
     with sd.InputStream(
@@ -78,6 +101,8 @@ def record_with_vad() -> str:
         device=_input_device(),
     ):
         stop_event.wait(timeout=VAD_MAX_SECONDS)
+
+    vad.reset_states()
 
     if not frames:
         return ""
