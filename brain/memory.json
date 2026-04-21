@@ -1,3 +1,10 @@
-{
-  "david_geburtstag": "David (Kursieng-Familie) hat am 23. April Geburtstag. Jährlich daran erinnern."
-}
+[
+  {
+    "type": "birthday",
+    "name": "David",
+    "context": "Kursieng-Familie",
+    "date": "04-23",
+    "repeat": "yearly",
+    "note": "Jährlich daran erinnern."
+  }
+]

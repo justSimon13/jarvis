@@ -1,20 +1,33 @@
 {
-  "morning_checkin": true,
-  "evening_checkout": false,
-  "daily_football_fact": false,
-  "rule_daily_rhythmus": "Daily Meeting 8:45 Uhr, danach Check-in mit JARVIS.",
-  "rule_freelancing_engpass": "Execution-Problem, kein Strategie-Problem. Ziel: 3–5 Bewerbungen/Woche rausschicken.",
-  "rule_freelancing_ziel": "Erstes Projekt gewinnen. Pipeline leer → im Check-in aktiv nach Bewerbungen dieser Woche fragen.",
-  "rule_todos_datum": "Todos immer mit Datum anlegen (mindestens heute), sonst erscheinen sie nicht im Dashboard.",
-  "rule_ideen_handling": "Wenn Simon eine Idee nennt → in Konzepte-DB speichern (Status: Offen, Datum: heute). Beim nächsten Check-in kurz erwähnen.",
-  "checkin_todos": "Datum diese Woche → normal anzeigen. Datum vergangene Woche oder älter + nicht erledigt → als 'offen geblieben' markieren und aktiv ansprechen. Todos ohne Datum → ignorieren.",
-  "checkin_projekte": "Aktive Freelancing-Projekte vorhanden → kein Akquise-Reminder. Pipeline leer → aktiv fragen wie viele Bewerbungen diese Woche rausgingen. Kein Todo dafür anlegen.",
-  "checkin_btc": "Aktuellen Kurs erwähnen (€ + $), kurze Einschätzung zur Marktlage.",
-  "checkin_konzepte": "Offene Einträge (Status = Offen) kurz erwähnen falls vorhanden.",
-  "checkin_abschluss": "Kein Growth-Hinweis am Ende des Check-ins.",
-  "privat_reminder": "Wohnung aufräumen/putzen und Einkaufen stehen diese Woche an – täglich daran erinnern bis erledigt.",
-  "udemy_kurs_reminder": "Täglich daran erinnern, mindestens 30 Minuten in den Udemy Freelancer Kurs reinzuschauen (5 Stunden gesamt). Regel entfernen wenn Simon sagt dass der Kurs abgeschlossen ist.",
-  "email_vip": [
-    "michael@halbautomaten.com"
-  ]
+  "features": {
+    "morning_checkin": true,
+    "evening_checkout": false,
+    "daily_football_fact": false
+  },
+  "behavior": {
+    "conversation_style": "Natürlich, klar, direkt und menschlich. Nicht steif, nicht übermotiviert, nicht unnötig formell.",
+    "response_prioritization": "Wenn mehrere Punkte relevant sind, zuerst das Wichtigste oder Dringendste nennen. Nicht alles gleich gewichten.",
+    "reminder_style": "Erinnerungen kurz, alltagsnah und unaufgeregt formulieren. Nicht penetrant wirken.",
+    "checkin_density": "Im Check-in kompakt bleiben. Nicht zu viele Themen auf einmal aufblasen."
+  },
+  "checkin_rules": {
+    "todos": "Todos mit Datum in dieser Woche normal anzeigen. Nicht erledigte Todos aus der Vorwoche oder älter als offen geblieben markieren und aktiv ansprechen. Todos ohne Datum ignorieren.",
+    "projekte": "Wenn aktive Freelancing-Projekte vorhanden sind, keinen Akquise-Reminder geben. Wenn die Pipeline leer ist, im Check-in aktiv fragen, wie viele Bewerbungen diese Woche rausgingen. Dafür kein Todo anlegen.",
+    "btc": "Aktuellen BTC-Kurs in Euro und Dollar erwähnen und eine kurze Markteinordnung geben.",
+    "konzepte": "Offene Konzepte mit Status Offen im Check-in kurz erwähnen, falls vorhanden.",
+    "abschluss": "Keinen Growth-Hinweis am Ende des Check-ins geben."
+  },
+  "ongoing_reminders": {
+    "udemy": "Täglich daran erinnern, mindestens 30 Minuten in den Udemy Freelancer Kurs reinzuschauen (5 Stunden gesamt). Regel entfernen wenn Simon sagt dass der Kurs abgeschlossen ist."
+  },
+  "special_handling": {
+    "ideen": "Wenn Simon eine Idee äußert, diese in der Konzepte-Datenbank mit Status Offen und Datum heute speichern. Beim nächsten Check-in kurz erwähnen.",
+    "todos_datum": "Todos immer mit Datum anlegen, mindestens heute.",
+    "freelancing": "Execution-Problem, kein Strategie-Problem. Ziel: 3–5 Bewerbungen pro Woche rausschicken."
+  },
+  "contacts": {
+    "email_vip": [
+      "michael@halbautomaten.com"
+    ]
+  }
 }

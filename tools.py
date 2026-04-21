@@ -119,9 +119,11 @@ DEFINITIONS = [
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
             "Sections: 'profile', 'settings', 'memory'. "
-            "Email-Blacklist: bei 'füge X zur Blacklist hinzu' → section='settings', key='email_blacklist', value=[...bestehende Liste + X]. "
-            "Email-VIP manuell: bei 'füge X zur VIP-Liste hinzu' → section='settings', key='email_vip', value=[...bestehende Liste + X]. "
-            "Vor dem Schreiben erst brain_read aufrufen um bestehende Liste nicht zu überschreiben."
+            "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
+            "Für Pausen flache Keys nutzen: key='checkin_pausiert_bis', value='2026-05-01'. "
+            "Email-VIP manuell: section='settings', key='contacts.email_vip', value=[...bestehende Liste + X]. "
+            "Memory (section='memory'): value kann String oder Dict sein, wird als neuer Eintrag angehängt. "
+            "Vor dem Schreiben von Listen erst brain_read aufrufen um bestehende Einträge nicht zu überschreiben."
         ),
         "input_schema": {
             "type": "object",
@@ -372,7 +374,7 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "sync_email_vip":
             emails = notion_service.sync_vip_emails()
-            brain.write(section="settings", key="email_vip", value=emails)
+            brain.write(section="settings", key="contacts.email_vip", value=emails)
             return f"{len(emails)} VIP-Emails synchronisiert: {', '.join(emails) if emails else '–'}"
 
         if tool_name == "btc_price":

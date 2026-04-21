@@ -67,110 +67,179 @@ def load() -> dict:
 
 def read(section: str, key: str | None = None):
     data = _read(section)
-    return data.get(key) if key else data
+    if key is None:
+        return data
+    # Dot-Notation: "contacts.email_vip" → data["contacts"]["email_vip"]
+    parts = key.split(".", 1)
+    if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
+        return data[parts[0]].get(parts[1])
+    return data.get(key)
 
 
 def write(section: str, key: str, value) -> str:
     data = _read(section)
-    data[key] = value
+
+    if section == "memory":
+        # Memory ist eine Liste — neuen Eintrag anhängen
+        if not isinstance(data, list):
+            data = []
+        if isinstance(value, dict):
+            data.append(value)
+        else:
+            data.append({"type": "note", "key": key, "text": str(value)})
+        _write(section, data)
+        _git_push(f"JARVIS: memory Eintrag hinzugefügt")
+        return f"Gespeichert: memory → {value}"
+
+    # Dot-Notation für nested Settings: "contacts.email_vip"
+    parts = key.split(".", 1)
+    if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
+        data[parts[0]][parts[1]] = value
+    else:
+        data[key] = value
+
     _write(section, data)
     _git_push(f"JARVIS: {section}.{key} aktualisiert")
     return f"Gespeichert: {section} → {key} = {value}"
+
+
+def _format_month_day(value: str) -> str:
+    try:
+        month, day = value.split("-")
+        return f"{day}.{month}."
+    except Exception:
+        return value
 
 
 def build_prompt_section() -> str:
     data = load()
     parts = []
 
-    # 1. Profil als Fließtext
-    p = data.get("profile", {})
-    if p:
-        known_keys = {
+    # 1. Profil
+    profile = data.get("profile", {})
+    if profile:
+        ordered_keys = [
             "name", "standort", "alter", "lebenssituation", "anstellung", "selbständig",
-            "rhythmus_konzentration", "freelancing_positionierung", "freelancing_stack",
-            "freelancing_zielkunden", "freelancing_rate", "freelancing_kanaele",
-            "langfristige_ziele", "btc_bestand", "btc_investiert", "btc_strategie",
+            "arbeitsrhythmus", "daily_rhythmus", "freelancing_positionierung",
+            "freelancing_stack", "freelancing_zielkunden", "freelancing_rate",
+            "freelancing_kanaele", "langfristige_ziele", "btc_kontext",
+            "btc_bestand", "btc_investiert",
+        ]
+        label_map = {
+            "name": "Name", "standort": "Standort", "alter": "Alter",
+            "lebenssituation": "Lebenssituation", "anstellung": "Anstellung",
+            "selbständig": "Selbständigkeit", "arbeitsrhythmus": "Arbeitsrhythmus",
+            "daily_rhythmus": "Tagesrhythmus", "freelancing_positionierung": "Freelancing-Positionierung",
+            "freelancing_stack": "Freelancing-Stack", "freelancing_zielkunden": "Zielkunden",
+            "freelancing_rate": "Stundensatz", "freelancing_kanaele": "Akquise-Kanäle",
+            "langfristige_ziele": "Langfristige Ziele", "btc_kontext": "BTC-Kontext",
+            "btc_bestand": "BTC-Bestand", "btc_investiert": "In BTC investiert",
         }
         lines = ["## Wer Simon ist"]
-        if p.get("name") and p.get("standort"):
-            intro = f"{p['name']}"
-            if p.get("alter"):
-                intro += f" ({p['alter']})"
-            intro += f" lebt in {p['standort']}."
-            if p.get("lebenssituation"):
-                ls = p["lebenssituation"]
-                intro += " " + ls[0].upper() + ls[1:] + "."
-            lines.append(intro)
-        if p.get("anstellung"):
-            lines.append(p["anstellung"] + ".")
-        if p.get("selbständig"):
-            lines.append(p["selbständig"] + ".")
-        if p.get("rhythmus_konzentration"):
-            lines.append(p["rhythmus_konzentration"].capitalize() + ".")
-        if p.get("freelancing_positionierung"):
-            lines.append("Freelancing: " + p["freelancing_positionierung"])
-        if p.get("freelancing_stack"):
-            lines.append("Stack: " + p["freelancing_stack"])
-        if p.get("freelancing_zielkunden"):
-            lines.append("Zielkunden: " + p["freelancing_zielkunden"])
-        if p.get("freelancing_rate"):
-            lines.append("Rate: " + p["freelancing_rate"])
-        if p.get("freelancing_kanaele"):
-            lines.append("Kanäle: " + p["freelancing_kanaele"])
-        if p.get("langfristige_ziele"):
-            lines.append("Langfristig: " + p["langfristige_ziele"])
-        if p.get("btc_bestand"):
-            lines.append(
-                f"Bitcoin: {p['btc_bestand']}, investiert {p.get('btc_investiert', '')}. "
-                f"{p.get('btc_strategie', '')}"
-            )
-        for k, v in p.items():
-            if k not in known_keys:
-                lines.append(f"- {k}: {v}")
+        for key in ordered_keys:
+            value = profile.get(key)
+            if value:
+                lines.append(f"- {label_map.get(key, key)}: {value}")
+        for key, value in profile.items():
+            if key not in ordered_keys and value:
+                lines.append(f"- {key}: {value}")
         parts.append("\n".join(lines))
 
-    # 2. Settings kategorisieren
-    s = data.get("settings", {})
-    features, rules, checkin_rules, reminders, paused = [], [], [], [], []
+    # 2. Settings
+    settings = data.get("settings", {})
 
-    for k, v in s.items():
-        if k == "email_vip":
+    behavior = settings.get("behavior", {})
+    if behavior:
+        lines = ["## Wie du dich verhalten sollst"]
+        label_map_b = {
+            "conversation_style": "Sprachstil",
+            "response_prioritization": "Priorisierung",
+            "reminder_style": "Erinnerungen",
+            "checkin_density": "Check-in-Stil",
+        }
+        for k, v in behavior.items():
+            if v:
+                lines.append(f"- {label_map_b.get(k, k)}: {v}")
+        parts.append("\n".join(lines))
+
+    features = settings.get("features", {})
+    checkin_rules = settings.get("checkin_rules", {})
+    ongoing_reminders = settings.get("ongoing_reminders", {})
+    special_handling = settings.get("special_handling", {})
+    contacts = settings.get("contacts", {})
+
+    active_rules = []
+    if features.get("morning_checkin"):
+        active_rules.append("- Morning Check-in ist aktiv.")
+    if features.get("evening_checkout"):
+        active_rules.append("- Evening Checkout ist aktiv.")
+    if features.get("daily_football_fact"):
+        active_rules.append("- Daily Football Fact ist aktiv.")
+
+    if checkin_rules.get("todos"):
+        active_rules.append(f"- Todo-Regel: {checkin_rules['todos']}")
+    if checkin_rules.get("projekte"):
+        active_rules.append(f"- Projekt-Regel: {checkin_rules['projekte']}")
+    if checkin_rules.get("btc"):
+        active_rules.append(f"- BTC-Regel: {checkin_rules['btc']}")
+    if checkin_rules.get("konzepte"):
+        active_rules.append(f"- Konzepte-Regel: {checkin_rules['konzepte']}")
+    if checkin_rules.get("abschluss"):
+        active_rules.append(f"- Abschluss-Regel: {checkin_rules['abschluss']}")
+
+    for k, v in ongoing_reminders.items():
+        if v:
+            active_rules.append(f"- Laufende Erinnerung: {v}")
+    for k, v in special_handling.items():
+        if v:
+            active_rules.append(f"- Regel ({k}): {v}")
+    if contacts.get("email_vip"):
+        vip_list = ", ".join(contacts["email_vip"])
+        active_rules.append(f"- VIP-E-Mail-Kontakte: {vip_list}")
+
+    # Flache Top-Level-Keys (z.B. _pausiert_bis) als Fallback
+    known_sections = {"features", "behavior", "checkin_rules", "ongoing_reminders", "special_handling", "contacts"}
+    for k, v in settings.items():
+        if k in known_sections:
             continue
-        if k.endswith("_pausiert_bis"):
+        if k.endswith("_pausiert_bis") and v:
             feature = k.replace("_pausiert_bis", "")
-            paused.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
-        elif v is True:
-            features.append(f"- {k}: aktiv")
-        elif v is False or v is None or v == "":
-            continue
-        elif k.startswith("checkin_"):
-            label = k.replace("checkin_", "")
-            checkin_rules.append(f"- {label}: {v}")
-        elif k.endswith("_reminder"):
-            reminders.append(f"- {v}")
-        elif k.startswith("rule_"):
-            rules.append(f"- {v}")
-        else:
-            rules.append(f"- {k}: {v}")
+            active_rules.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
+        elif v and v is not False:
+            active_rules.append(f"- {k}: {v}")
 
-    if features or rules:
-        parts.append("## Verhaltensregeln\n" + "\n".join(features + rules))
-
-    if checkin_rules:
-        parts.append("## Check-in Regeln\n" + "\n".join(checkin_rules))
-
-    if reminders or paused:
-        parts.append("## Aktive Reminder\n" + "\n".join(reminders + paused))
+    if active_rules:
+        parts.append("## Aktive Verhaltensregeln\n" + "\n".join(active_rules))
 
     # 3. Erinnerungen
-    memory = data.get("memory", {})
+    memory = data.get("memory", [])
+    memory_lines = []
     if isinstance(memory, list):
-        entries = [str(e) for e in memory]
+        for entry in memory:
+            if not isinstance(entry, dict):
+                memory_lines.append(f"- {entry}")
+                continue
+            if entry.get("type") == "birthday":
+                name = entry.get("name", "Unbekannt")
+                context = entry.get("context")
+                date_val = entry.get("date")
+                repeat = entry.get("repeat")
+                line = f"- {name}"
+                if context:
+                    line += f" ({context})"
+                if date_val:
+                    line += f" hat am {_format_month_day(date_val)} Geburtstag"
+                if repeat == "yearly":
+                    line += ", jährlich erinnern"
+                line += "."
+                memory_lines.append(line)
+            else:
+                text = entry.get("text") or entry.get("note") or str(entry)
+                memory_lines.append(f"- {text}")
     elif isinstance(memory, dict):
-        entries = list(memory.values())
-    else:
-        entries = []
-    if entries:
-        parts.append("## Erinnerungen\n" + "\n".join(f"- {e}" for e in entries))
+        for v in memory.values():
+            memory_lines.append(f"- {v}")
+    if memory_lines:
+        parts.append("## Wichtige Erinnerungen\n" + "\n".join(memory_lines))
 
     return "\n\n".join(parts)
