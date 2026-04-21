@@ -32,8 +32,8 @@ def _get_silero():
     return _silero_model
 
 
-def listen_for_wake_word():
-    """Blockiert bis 'Hey JARVIS' erkannt wird (openwakeword, kein API-Key)."""
+def listen_for_wake_word(interrupt: threading.Event | None = None):
+    """Blockiert bis 'Hey JARVIS' erkannt wird oder interrupt gesetzt wird."""
     from openwakeword.model import Model
 
     oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
@@ -54,7 +54,10 @@ def listen_for_wake_word():
         callback=callback,
         device=_input_device(),
     ):
-        detected.wait()
+        while not detected.is_set():
+            if interrupt and interrupt.is_set():
+                return
+            detected.wait(timeout=0.2)
 
     _beep()
     import time

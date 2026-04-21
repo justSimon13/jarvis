@@ -46,6 +46,7 @@ class JarvisEngine(threading.Thread):
         self.commands_in = commands_in
         self.mode = "voice"
         self._stop = threading.Event()
+        self._wake_interrupt = threading.Event()
 
     def run(self):
         try:
@@ -69,8 +70,9 @@ class JarvisEngine(threading.Thread):
             if self.mode == "voice":
                 if not in_conversation:
                     self._emit("status_text", "Warte auf Wake Word…")
+                    self._wake_interrupt.clear()
                     try:
-                        audio.listen_for_wake_word()
+                        audio.listen_for_wake_word(interrupt=self._wake_interrupt)
                     except Exception:
                         if self._stop.is_set():
                             break
@@ -137,6 +139,7 @@ class JarvisEngine(threading.Thread):
     def _run_llm(self, system_prompt: str, messages: list[dict]) -> str:
         client_messages = messages.copy()
         full_response = ""
+        text_only = (self.mode == "text")
 
         while True:
             tts_queue = queue.Queue()
@@ -144,16 +147,20 @@ class JarvisEngine(threading.Thread):
             buffer = ""
 
             tts_done = threading.Event()
-            tts_thread = threading.Thread(
-                target=tts.speak_response, args=(tts_queue, tts_done), daemon=True
-            )
-            tts_thread.start()
+            if not text_only:
+                tts_thread = threading.Thread(
+                    target=tts.speak_response, args=(tts_queue, tts_done), daemon=True
+                )
+                tts_thread.start()
 
-            thinking_stop = threading.Event()
-            thinking_thread = threading.Thread(
-                target=audio.play_thinking_sound, args=(thinking_stop,), daemon=True
-            )
-            thinking_thread.start()
+                thinking_stop = threading.Event()
+                threading.Thread(
+                    target=audio.play_thinking_sound, args=(thinking_stop,), daemon=True
+                ).start()
+            else:
+                tts_done.set()
+                thinking_stop = threading.Event()
+                thinking_stop.set()
 
             first_chunk_sent = False
             self._emit("response_start", None)
@@ -165,19 +172,20 @@ class JarvisEngine(threading.Thread):
                         turn_text += chunk
                         self._emit("response_chunk", chunk)
 
-                        while True:
-                            match = SENTENCE_END.search(buffer)
-                            if match and match.end() >= TTS_BUFFER_MIN:
-                                send = buffer[:match.end()].strip()
-                                buffer = buffer[match.end():].lstrip()
-                                if send:
-                                    if not first_chunk_sent:
-                                        thinking_stop.set()
-                                        first_chunk_sent = True
-                                    self._emit("state", State.SPEAKING)
-                                    tts_queue.put(send)
-                            else:
-                                break
+                        if not text_only:
+                            while True:
+                                match = SENTENCE_END.search(buffer)
+                                if match and match.end() >= TTS_BUFFER_MIN:
+                                    send = buffer[:match.end()].strip()
+                                    buffer = buffer[match.end():].lstrip()
+                                    if send:
+                                        if not first_chunk_sent:
+                                            thinking_stop.set()
+                                            first_chunk_sent = True
+                                        self._emit("state", State.SPEAKING)
+                                        tts_queue.put(send)
+                                else:
+                                    break
                     final = s.get_final_message()
 
             except anthropic.APIStatusError as e:
@@ -186,7 +194,8 @@ class JarvisEngine(threading.Thread):
                 if "overloaded" in str(e).lower():
                     self._emit("error", "Anthropic überlastet, bitte erneut versuchen.")
                     time.sleep(5)
-                    tts.speak("Entschuldigung Sir, die Server sind kurz überlastet.")
+                    if not text_only:
+                        tts.speak("Entschuldigung Sir, die Server sind kurz überlastet.")
                 else:
                     self._emit("error", f"API-Fehler: {e}")
                 return ""
@@ -198,9 +207,10 @@ class JarvisEngine(threading.Thread):
                 return ""
 
             thinking_stop.set()
-            if buffer.strip():
-                tts_queue.put(buffer.strip())
-            tts_queue.put(None)
+            if not text_only:
+                if buffer.strip():
+                    tts_queue.put(buffer.strip())
+                tts_queue.put(None)
             tts_done.wait()
 
             self._emit("response_done", turn_text)
@@ -236,5 +246,6 @@ class JarvisEngine(threading.Thread):
 
     def set_mode(self, mode: str):
         self.mode = mode
+        self._wake_interrupt.set()
         self.commands_in.put(("set_mode", mode))
         self._emit("mode_changed", mode)
