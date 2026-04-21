@@ -77,6 +77,8 @@ class JarvisEngine(threading.Thread):
                         if self._stop.is_set():
                             break
                         continue
+                    if self.mode != "voice":
+                        continue
 
                 self._emit("state", State.LISTENING)
                 self._emit("status_text", "Ich höre…")
