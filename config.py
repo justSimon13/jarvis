@@ -8,7 +8,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
-PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
+MANUAL_MODE = os.getenv("MANUAL_MODE", "false").lower() == "true"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_BRAIN_REPO = os.getenv("GITHUB_BRAIN_REPO", "")
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")

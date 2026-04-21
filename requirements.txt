@@ -1,6 +1,6 @@
 anthropic>=0.40.0
 ddgs>=0.1.0
-pvporcupine
+openwakeword>=0.6.0
 elevenlabs>=1.0.0
 openai-whisper
 sounddevice

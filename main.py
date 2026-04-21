@@ -131,7 +131,7 @@ def main():
     system_prompt = context.build_system_prompt()
     stt.load_model()
 
-    wake_word_mode = bool(config.PICOVOICE_ACCESS_KEY)
+    wake_word_mode = not config.MANUAL_MODE
 
     print("\nJ.A.R.V.I.S. bereit.")
     if wake_word_mode:
@@ -148,7 +148,7 @@ def main():
 
             if wake_word_mode:
                 print("\nHöre auf Wake Word...")
-                audio.listen_for_wake_word(config.PICOVOICE_ACCESS_KEY)
+                audio.listen_for_wake_word()
                 print("Ich höre... (Stille beendet Aufnahme)")
                 set_state(State.LISTENING)
                 wav_path = audio.record_with_vad()

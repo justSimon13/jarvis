@@ -18,34 +18,30 @@ VAD_SILENCE_SECONDS = 1.5     # Stille-Dauer bis Stop
 VAD_MAX_SECONDS = 15          # Maximale Aufnahmedauer
 
 
-def listen_for_wake_word(access_key: str):
-    """Blockiert bis 'Hey JARVIS' erkannt wird."""
-    import pvporcupine
-    porcupine = pvporcupine.create(access_key=access_key, keywords=["jarvis"])
+def listen_for_wake_word():
+    """Blockiert bis 'Hey JARVIS' erkannt wird (openwakeword, kein API-Key)."""
+    from openwakeword.model import Model
 
+    oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
     detected = threading.Event()
-    frame_buffer = []
+    chunk_size = 1280  # 80ms @ 16kHz
 
     def callback(indata, frames, time_info, status):
-        pcm = (indata[:, 0] * 32767).astype(np.int16).tolist()
-        frame_buffer.extend(pcm)
-        while len(frame_buffer) >= porcupine.frame_length:
-            frame = frame_buffer[:porcupine.frame_length]
-            del frame_buffer[:porcupine.frame_length]
-            if porcupine.process(frame) >= 0:
-                detected.set()
+        pcm = (indata[:, 0] * 32767).astype(np.int16)
+        scores = oww.predict(pcm)
+        if scores.get("hey_jarvis", 0) >= 0.5:
+            detected.set()
 
     with sd.InputStream(
-        samplerate=porcupine.sample_rate,
+        samplerate=SAMPLE_RATE,
         channels=1,
         dtype="float32",
-        blocksize=porcupine.frame_length,
+        blocksize=chunk_size,
         callback=callback,
         device=_input_device(),
     ):
         detected.wait()
 
-    porcupine.delete()
     _beep()
 
 
