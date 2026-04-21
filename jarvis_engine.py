@@ -14,6 +14,7 @@ import tools
 import context
 import brain
 import config
+import timer_service
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
 TTS_BUFFER_MIN = 120
@@ -63,6 +64,7 @@ class JarvisEngine(threading.Thread):
     def run(self):
         try:
             self._emit("state", State.IDLE)
+            timer_service.set_speak_callback(tts.speak)
             brain.sync()
             context.refresh_if_stale()
             stt.load_model()

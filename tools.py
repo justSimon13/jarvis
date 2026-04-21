@@ -8,6 +8,7 @@ import reminders_service
 import search
 import weather
 import apple_music_service
+import timer_service
 
 DEFINITIONS = [
     {
@@ -441,6 +442,48 @@ DEFINITIONS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "timer_set",
+        "description": "Startet einen Timer der nach X Minuten/Sekunden abläuft. JARVIS spricht eine Erinnerung.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "Beschreibung des Timers, z.B. 'Nudelwasser kocht'"},
+                "minutes": {"type": "integer", "description": "Minuten (optional)"},
+                "seconds": {"type": "integer", "description": "Sekunden (optional, zusätzlich zu Minuten)"},
+            },
+            "required": ["label"],
+        },
+    },
+    {
+        "name": "alarm_set",
+        "description": "Stellt einen Wecker für eine bestimmte Uhrzeit. JARVIS spricht eine Erinnerung.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "Beschreibung des Weckers, z.B. 'Aufstehen'"},
+                "hour": {"type": "integer", "description": "Stunde (0-23)"},
+                "minute": {"type": "integer", "description": "Minute (0-59)"},
+            },
+            "required": ["label", "hour", "minute"],
+        },
+    },
+    {
+        "name": "timer_list",
+        "description": "Listet alle aktiven Timer und Wecker mit verbleibender Zeit.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "timer_cancel",
+        "description": "Bricht einen Timer oder Wecker ab.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "Label des Timers (sucht nach Übereinstimmung)"},
+                "id": {"type": "string", "description": "Exakte Timer-ID (optional, falls bekannt)"},
+            },
+        },
+    },
 ]
 
 
@@ -591,6 +634,34 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 limit=tool_input.get("limit", 5),
             )
             return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "timer_set":
+            total_seconds = (tool_input.get("minutes", 0) * 60) + tool_input.get("seconds", 0)
+            if total_seconds <= 0:
+                return "Fehler: Dauer muss > 0 sein."
+            timer_id = timer_service.set_timer(tool_input["label"], total_seconds)
+            mins, secs = divmod(total_seconds, 60)
+            duration = f"{mins}m {secs}s" if mins else f"{secs}s"
+            return f"Timer gesetzt: '{tool_input['label']}' läuft in {duration} ab. (ID: {timer_id})"
+
+        if tool_name == "alarm_set":
+            timer_id, fires_at = timer_service.set_alarm(
+                tool_input["label"], tool_input["hour"], tool_input["minute"]
+            )
+            return f"Wecker gesetzt: '{tool_input['label']}' um {fires_at.strftime('%H:%M')} Uhr. (ID: {timer_id})"
+
+        if tool_name == "timer_list":
+            active = timer_service.list_active()
+            if not active:
+                return "Keine aktiven Timer oder Wecker."
+            return json.dumps(active, ensure_ascii=False)
+
+        if tool_name == "timer_cancel":
+            if tool_input.get("id"):
+                ok = timer_service.cancel(tool_input["id"])
+            else:
+                ok = timer_service.cancel_by_label(tool_input.get("label", ""))
+            return "Timer abgebrochen." if ok else "Kein passender Timer gefunden."
 
         return f"Unbekanntes Tool: {tool_name}"
     except Exception as e:
