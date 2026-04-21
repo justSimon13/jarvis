@@ -17,7 +17,7 @@ VAD_MAX_SECONDS = 30          # Maximale Aufnahmedauer
 
 # Silero VAD: Schwelle + Stille-Dauer (viel kürzer möglich da neural)
 _SILERO_THRESHOLD = 0.4       # Sprach-Wahrscheinlichkeit ab der als Sprache gilt
-_SILENCE_MS = 3500            # ms echte Stille bis Stop (Silero erkennt Sprache zuverlässig)
+_SILENCE_MS = 1500            # ms Stille bis VAD "end" feuert — Engine akkumuliert danach weiter
 
 _silero_model = None
 _silero_lock = threading.Lock()
@@ -64,8 +64,8 @@ def listen_for_wake_word(interrupt: threading.Event | None = None):
     time.sleep(0.3)  # Beep abklingen lassen bevor Aufnahme startet
 
 
-def record_with_vad() -> str:
-    """Nimmt auf und stoppt via Silero VAD bei echtem Redepausen-Ende."""
+def record_with_vad(interrupt: threading.Event | None = None) -> str:
+    """Nimmt auf und stoppt via Silero VAD bei Redepause. interrupt bricht sofort ab."""
     import torch
     from silero_vad import VADIterator
 
@@ -103,7 +103,10 @@ def record_with_vad() -> str:
         callback=callback,
         device=_input_device(),
     ):
-        stop_event.wait(timeout=VAD_MAX_SECONDS)
+        while not stop_event.is_set():
+            if interrupt and interrupt.is_set():
+                break
+            stop_event.wait(timeout=0.2)
 
     vad.reset_states()
 

@@ -17,6 +17,18 @@ import config
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
 TTS_BUFFER_MIN = 120
+VOICE_MAX_SECONDS = 10.0
+
+
+def _seems_complete(text: str) -> bool:
+    """Whisper fügt Satzzeichen bei vollständigen Sätzen hinzu — das nutzen wir."""
+    text = text.strip()
+    if not text:
+        return False
+    if text[-1] in ".!?…":
+        return True
+    # Lange Äußerung ohne Punkt → trotzdem verarbeiten
+    return len(text.split()) >= 12
 
 
 class State(Enum):
@@ -82,25 +94,48 @@ class JarvisEngine(threading.Thread):
 
                 self._emit("state", State.LISTENING)
                 self._emit("status_text", "Ich höre…")
-                try:
-                    wav_path = audio.record_with_vad()
-                except Exception as e:
-                    self._emit("error", f"Aufnahme-Fehler: {e}")
-                    continue
 
-                if not wav_path:
+                accumulated = ""
+                start_time = time.time()
+                got_speech = False
+
+                while not self._stop.is_set() and self.mode == "voice":
+                    try:
+                        wav_path = audio.record_with_vad(interrupt=self._wake_interrupt)
+                    except Exception as e:
+                        self._emit("error", f"Aufnahme-Fehler: {e}")
+                        wav_path = ""
+
+                    if not wav_path:
+                        break
+
+                    got_speech = True
+                    self._emit("status_text", "Transkribiere…")
+                    chunk = stt.transcribe(wav_path)
+                    try:
+                        os.unlink(wav_path)
+                    except OSError:
+                        pass
+
+                    if chunk:
+                        accumulated = (accumulated + " " + chunk).strip() if accumulated else chunk
+                        if _seems_complete(accumulated):
+                            break
+                        elapsed = time.time() - start_time
+                        if elapsed >= VOICE_MAX_SECONDS:
+                            break
+                        self._emit("status_text", "Noch am Zuhören…")
+                    else:
+                        break
+
+                if not got_speech:
                     silent_turns += 1
                     if silent_turns >= MAX_SILENT_TURNS:
                         in_conversation = False
                         silent_turns = 0
                     continue
 
-                self._emit("status_text", "Transkribiere…")
-                user_text = stt.transcribe(wav_path)
-                try:
-                    os.unlink(wav_path)
-                except OSError:
-                    pass
+                user_text = accumulated
 
             else:  # text mode
                 self._emit("status_text", "Warte auf Eingabe…")
