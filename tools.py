@@ -5,6 +5,8 @@ import calendar_service
 import email_service
 import btc
 import reminders_service
+import search
+import weather
 
 DEFINITIONS = [
     {
@@ -279,6 +281,29 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "web_search",
+        "description": "Sucht im Internet nach aktuellen Informationen. Verwenden für Fragen über aktuelle Ereignisse, Fakten, Preise oder alles was nicht im Kontext steht.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Suchanfrage"},
+                "max_results": {"type": "integer", "description": "Anzahl Ergebnisse (Standard: 5)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_weather",
+        "description": "Aktuelles Wetter abrufen. Standardmäßig für Simons Standort (Stuttgart), optional für andere Städte.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "Stadt (optional, Standard: Stuttgart)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "notion_delete",
         "description": (
             "Archiviert (löscht) einen Notion-Eintrag per page_id. "
@@ -393,6 +418,17 @@ def execute(tool_name: str, tool_input: dict) -> str:
         if tool_name == "shopping_remove":
             list_name = tool_input.get("list_name", "Einkaufsliste")
             return reminders_service.remove_item(tool_input["item"], list_name)
+
+        if tool_name == "web_search":
+            results = search.web_search(
+                query=tool_input["query"],
+                max_results=tool_input.get("max_results", 5),
+            )
+            return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "get_weather":
+            result = weather.get_weather(city=tool_input.get("city"))
+            return json.dumps(result, ensure_ascii=False)
 
         if tool_name == "notion_delete":
             notion_service.delete(

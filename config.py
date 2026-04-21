@@ -18,6 +18,8 @@ EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "")
 EMAIL_SEND_ENABLED = os.getenv("EMAIL_SEND_ENABLED", "false").lower() == "true"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 AUDIO_INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE")  # None = System-Default
+OPENWEATHERMAP_API_KEY = os.getenv("OPENWEATHERMAP_API_KEY", "")
+WEATHER_CITY = os.getenv("WEATHER_CITY", "Stuttgart")
 
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)
