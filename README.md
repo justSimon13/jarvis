@@ -33,6 +33,7 @@ nano ~/.jarvis/.env
 | `ELEVENLABS_VOICE_ID` | ElevenLabs → Voices → Voice ID kopieren | Ja |
 | `NOTION_API_KEY` | [notion.so/my-integrations](https://www.notion.so/my-integrations) → New Integration | Ja |
 | `GITHUB_TOKEN` | GitHub → Settings → Developer Settings → Personal Access Tokens | Ja (für Brain-Sync) |
+| `GITHUB_BRAIN_REPO` | `deinusername/jarvis-brain` — privates Repo für Gedächtnis-Sync | Ja (für Brain-Sync) |
 | `EMAIL_ADDRESS` | Deine E-Mail-Adresse | Nein |
 | `WEATHER_CITY` | Stadtname für Wetter, z.B. `München` | Nein |
 | `WHISPER_MODEL` | `tiny` / `base` / `small` / `medium` — schneller vs. genauer | Nein (Standard: `base`) |

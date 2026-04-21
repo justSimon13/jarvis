@@ -2,9 +2,11 @@ import json
 import subprocess
 from datetime import date
 from pathlib import Path
+import config
 
-_BRAIN_DIR = Path(__file__).parent / "brain"
-_BRAIN_DIR.mkdir(exist_ok=True)
+# Brain liegt in ~/.jarvis/brain/ als eigenständiges Git-Repo
+_BRAIN_DIR = Path.home() / ".jarvis" / "brain"
+_BRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
 _SECTIONS = ["profile", "settings", "memory", "followups"]
 
@@ -30,11 +32,10 @@ def _write(section: str, data: dict):
 
 
 def _git_push(message: str):
-    cwd = Path(__file__).parent
     try:
-        subprocess.run(["git", "add", "brain/"], cwd=cwd, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-m", message], cwd=cwd, check=True, capture_output=True)
-        subprocess.run(["git", "push"], cwd=cwd, capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=_BRAIN_DIR, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", message], cwd=_BRAIN_DIR, check=True, capture_output=True)
+        subprocess.run(["git", "push"], cwd=_BRAIN_DIR, capture_output=True)
     except subprocess.CalledProcessError:
         pass  # nichts zu committen oder kein remote – kein Fehler
 
@@ -52,13 +53,45 @@ def _check_expirations():
 
 
 def sync():
-    """Aktuellen Stand vom Remote holen und abgelaufene Pausen prüfen."""
-    cwd = Path(__file__).parent
+    """Brain-Repo initialisieren (falls nötig), pullen und Pausen prüfen."""
+    _ensure_git_repo()
     try:
-        subprocess.run(["git", "pull", "--ff-only"], cwd=cwd, capture_output=True)
+        subprocess.run(["git", "pull", "--ff-only"], cwd=_BRAIN_DIR, capture_output=True)
     except Exception:
         pass
     _check_expirations()
+
+
+def _ensure_git_repo():
+    """Brain-Verzeichnis als Git-Repo einrichten falls noch nicht vorhanden."""
+    if (_BRAIN_DIR / ".git").exists():
+        return
+    repo = config.GITHUB_BRAIN_REPO
+    if not repo:
+        return
+    remote = f"https://github.com/{repo}.git"
+    try:
+        # Versuche zu klonen (falls Remote schon Inhalt hat)
+        result = subprocess.run(
+            ["git", "clone", remote, str(_BRAIN_DIR)],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return
+        # Remote leer oder nicht erreichbar → lokal initialisieren und pushen
+        subprocess.run(["git", "init", "-b", "main"], cwd=_BRAIN_DIR, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", remote], cwd=_BRAIN_DIR, capture_output=True)
+        # Initiale brain-Dateien anlegen falls nicht vorhanden
+        for section in ["profile", "settings", "memory", "followups"]:
+            p = _BRAIN_DIR / f"{section}.json"
+            if not p.exists():
+                default = [] if section == "memory" else {}
+                p.write_text(json.dumps(default, indent=2), encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=_BRAIN_DIR, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "JARVIS: brain initialisiert"], cwd=_BRAIN_DIR, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=_BRAIN_DIR, capture_output=True)
+    except Exception:
+        pass
 
 
 def load() -> dict:
