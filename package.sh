@@ -14,9 +14,14 @@ zip -r "$OUT" . \
     --exclude "*.git*" \
     --exclude ".venv/*" \
     --exclude "dist/*" \
+    --exclude "build/*" \
     --exclude "__pycache__/*" \
     --exclude "*.pyc" \
     --exclude ".env" \
+    --exclude ".claude/*" \
+    --exclude "brain/memory.json" \
+    --exclude "brain/profile.json" \
+    --exclude "brain/followups.json" \
     --exclude "JARVIS-installer.zip"
 
 echo "✓ $OUT erstellt ($(du -sh "$OUT" | cut -f1))"
