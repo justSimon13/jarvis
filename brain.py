@@ -6,7 +6,7 @@ from pathlib import Path
 _BRAIN_DIR = Path(__file__).parent / "brain"
 _BRAIN_DIR.mkdir(exist_ok=True)
 
-_SECTIONS = ["profile", "settings", "memory"]
+_SECTIONS = ["profile", "settings", "memory", "followups"]
 
 
 def _path(section: str) -> Path:
@@ -94,12 +94,20 @@ def write(section: str, key: str, value) -> str:
     # Dot-Notation für nested Settings: "contacts.email_vip"
     parts = key.split(".", 1)
     if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
-        data[parts[0]][parts[1]] = value
+        if value is None:
+            data[parts[0]].pop(parts[1], None)
+        else:
+            data[parts[0]][parts[1]] = value
     else:
-        data[key] = value
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
 
     _write(section, data)
     _git_push(f"JARVIS: {section}.{key} aktualisiert")
+    if value is None:
+        return f"Gelöscht: {section} → {key}"
     return f"Gespeichert: {section} → {key} = {value}"
 
 
@@ -145,7 +153,16 @@ def build_prompt_section() -> str:
                 lines.append(f"- {key}: {value}")
         parts.append("\n".join(lines))
 
-    # 2. Settings
+    # 2. Offene Follow-ups
+    followups = data.get("followups", {})
+    if isinstance(followups, dict) and followups:
+        lines = ["## Offene Follow-ups — heute aktiv ansprechen"]
+        for k, v in followups.items():
+            if v:
+                lines.append(f"- {v}")
+        parts.append("\n".join(lines))
+
+    # 3. Settings
     settings = data.get("settings", {})
 
     behavior = settings.get("behavior", {})
