@@ -52,8 +52,9 @@ def query(folder: str = "INBOX", filter: str = "UNSEEN", limit: int = 5) -> list
     if not is_configured():
         return []
     settings = brain.read(section="settings")
-    vip_list = settings.get("email_vip", [])
-    blacklist = settings.get("email_blacklist", [])
+    contacts = settings.get("contacts", {})
+    vip_list = contacts.get("email_vip", [])
+    blacklist = contacts.get("email_blacklist", [])
     fetch_limit = limit * 4
     results = []
     try:
