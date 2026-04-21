@@ -4,7 +4,9 @@ import re
 import json
 import queue
 import threading
+import time
 from enum import Enum
+import anthropic
 import audio
 import stt
 import llm
@@ -71,26 +73,43 @@ def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
         print("J.A.R.V.I.S.: ", end="", flush=True)
         first_chunk_sent = False
 
-        with llm.stream(system_prompt, client_messages, tools.DEFINITIONS) as s:
-            for chunk in s.text_stream:
-                print(chunk, end="", flush=True)
-                buffer += chunk
-                turn_text += chunk
-                set_state(State.THINKING)
-                while True:
-                    match = SENTENCE_END.search(buffer)
-                    if match and match.end() >= TTS_BUFFER_MIN:
-                        send = buffer[:match.end()].strip()
-                        buffer = buffer[match.end():].lstrip()
-                        if send:
-                            if not first_chunk_sent:
-                                thinking_stop.set()
-                                first_chunk_sent = True
-                            set_state(State.SPEAKING)
-                            tts_queue.put(send)
-                    else:
-                        break
-            final = s.get_final_message()
+        try:
+            with llm.stream(system_prompt, client_messages, tools.DEFINITIONS) as s:
+                for chunk in s.text_stream:
+                    print(chunk, end="", flush=True)
+                    buffer += chunk
+                    turn_text += chunk
+                    set_state(State.THINKING)
+                    while True:
+                        match = SENTENCE_END.search(buffer)
+                        if match and match.end() >= TTS_BUFFER_MIN:
+                            send = buffer[:match.end()].strip()
+                            buffer = buffer[match.end():].lstrip()
+                            if send:
+                                if not first_chunk_sent:
+                                    thinking_stop.set()
+                                    first_chunk_sent = True
+                                set_state(State.SPEAKING)
+                                tts_queue.put(send)
+                        else:
+                            break
+                final = s.get_final_message()
+        except anthropic.APIStatusError as e:
+            thinking_stop.set()
+            tts_queue.put(None)
+            if "overloaded" in str(e).lower():
+                print("\n[!] Anthropic überlastet, warte 5s...")
+                time.sleep(5)
+                tts.speak("Entschuldigung Sir, die Server sind kurz überlastet. Bitte wiederholen Sie Ihre Anfrage.")
+            else:
+                print(f"\n[!] API-Fehler: {e}")
+                tts.speak("Es gab einen API-Fehler, Sir.")
+            return ""
+        except Exception as e:
+            thinking_stop.set()
+            tts_queue.put(None)
+            print(f"\n[!] Unerwarteter Fehler: {e}")
+            return ""
 
         thinking_stop.set()
         if buffer.strip():
