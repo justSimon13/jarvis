@@ -30,9 +30,9 @@ class AppWindow(ctk.CTk):
             on_quit=self._quit,
             get_mode=lambda: self._mode,
         )
-        self._tray.start()
 
         self._engine.start()
+        self.after(500, self._start_tray)
         self.after(100, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -152,6 +152,12 @@ class AppWindow(ctk.CTk):
         from gui.settings_view import SettingsWindow
         win = SettingsWindow(self)
         win.grab_set()
+
+    def _start_tray(self):
+        try:
+            self._tray.start()
+        except Exception:
+            pass
 
     def _show_window(self):
         self.deiconify()
