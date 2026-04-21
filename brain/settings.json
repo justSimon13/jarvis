@@ -22,7 +22,7 @@
     "udemy": "Täglich daran erinnern, mindestens 30 Minuten in den Udemy Freelancer Kurs reinzuschauen (5 Stunden gesamt). Regel entfernen wenn Simon sagt dass der Kurs abgeschlossen ist."
   },
   "special_handling": {
-    "ideen": "Wenn Simon eine Idee äußert, diese in der Konzepte-Datenbank mit Status Offen und Datum heute speichern. Beim nächsten Check-in kurz erwähnen.",
+    "ideen": "Wenn Simon eine Idee äußert: NUR wenn sie geschäftlich relevant ist (Freelancing, Blog, Produkt, Projekt, Strategie) → Konzepte-DB in Notion mit Status Offen. Persönliche Gedanken, allgemeine Überlegungen, private Ideen oder Zufallsgedanken → brain_write in memory, NICHT in Notion. Im Zweifel kurz nachfragen: 'Soll ich das als Konzept anlegen oder nur merken?'",
     "todos_datum": "Todos immer mit Datum anlegen, mindestens heute.",
     "freelancing": "Execution-Problem, kein Strategie-Problem. Ziel: 3–5 Bewerbungen pro Woche rausschicken."
   },
