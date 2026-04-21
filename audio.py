@@ -17,7 +17,7 @@ VAD_MAX_SECONDS = 30          # Maximale Aufnahmedauer
 
 # Silero VAD: Schwelle + Stille-Dauer (viel kürzer möglich da neural)
 _SILERO_THRESHOLD = 0.4       # Sprach-Wahrscheinlichkeit ab der als Sprache gilt
-_SILENCE_MS = 2200            # ms Stille bis Stop (vs 2500ms bei RMS)
+_SILENCE_MS = 3500            # ms echte Stille bis Stop (Silero erkennt Sprache zuverlässig)
 
 _silero_model = None
 _silero_lock = threading.Lock()
