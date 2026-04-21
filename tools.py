@@ -457,7 +457,7 @@ DEFINITIONS = [
     },
     {
         "name": "alarm_set",
-        "description": "Stellt einen Wecker für eine bestimmte Uhrzeit. JARVIS spricht eine Erinnerung.",
+        "description": "Stellt einen Wecker in Apple Reminders — synct via iCloud aufs iPhone und feuert als Notification.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -645,10 +645,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
             return f"Timer gesetzt: '{tool_input['label']}' läuft in {duration} ab. (ID: {timer_id})"
 
         if tool_name == "alarm_set":
-            timer_id, fires_at = timer_service.set_alarm(
+            return reminders_service.set_alarm(
                 tool_input["label"], tool_input["hour"], tool_input["minute"]
             )
-            return f"Wecker gesetzt: '{tool_input['label']}' um {fires_at.strftime('%H:%M')} Uhr. (ID: {timer_id})"
 
         if tool_name == "timer_list":
             active = timer_service.list_active()

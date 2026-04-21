@@ -47,6 +47,34 @@ def get_items(list_name: str = "Einkaufsliste") -> list[str]:
         return []
 
 
+def set_alarm(label: str, hour: int, minute: int) -> str:
+    """Erstellt einen Wecker in Apple Reminders — synct via iCloud aufs iPhone."""
+    if sys.platform != "darwin":
+        return "Apple Reminders ist nur auf macOS verfügbar."
+    import datetime
+    now = datetime.datetime.now()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    # AppleScript date format: "21.04.2026 07:30:00"
+    date_str = target.strftime("%d.%m.%Y %H:%M:%S")
+    script = f'''
+    tell application "Reminders"
+        if not (exists list "Wecker") then
+            make new list with properties {{name:"Wecker"}}
+        end if
+        tell list "Wecker"
+            make new reminder with properties {{name:"{label}", due date:date "{date_str}", remind me date:date "{date_str}"}}
+        end tell
+    end tell
+    '''
+    try:
+        _run(script)
+        return f"Wecker gesetzt: '{label}' um {target.strftime('%H:%M')} Uhr (synct aufs iPhone)."
+    except Exception as e:
+        return f"Fehler: {e}"
+
+
 def remove_item(item: str, list_name: str = "Einkaufsliste") -> str:
     if sys.platform != "darwin":
         return "Apple Reminders ist nur auf macOS verfügbar."
