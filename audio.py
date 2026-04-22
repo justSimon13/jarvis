@@ -108,36 +108,49 @@ def record_with_vad(interrupt: threading.Event | None = None) -> str:
     )
 
     frames = []
-    speaking_started = False
     stop_event = threading.Event()
+    pcm_q: queue.Queue = queue.Queue(maxsize=200)
 
-    def callback(indata, frame_count, time_info, status):
-        nonlocal speaking_started
-        chunk = indata[:, 0].copy()
-        frames.append(chunk)
+    # Callback läuft im PortAudio-Realtime-Thread — nur Daten queuen, kein PyTorch hier.
+    def audio_callback(indata, frame_count, time_info, status):
+        try:
+            pcm_q.put_nowait(indata[:, 0].copy())
+        except queue.Full:
+            pass
 
-        tensor = torch.from_numpy(chunk)
-        result = vad(tensor)
+    def vad_worker():
+        speaking_started = False
+        while not stop_event.is_set():
+            try:
+                chunk = pcm_q.get(timeout=0.1)
+                frames.append(chunk)
+                result = vad(torch.from_numpy(chunk))
+                if result is not None:
+                    if "start" in result:
+                        speaking_started = True
+                    elif "end" in result and speaking_started:
+                        stop_event.set()
+            except queue.Empty:
+                pass
 
-        if result is not None:
-            if "start" in result:
-                speaking_started = True
-            elif "end" in result and speaking_started:
-                stop_event.set()
+    vad_thread = threading.Thread(target=vad_worker, daemon=True)
+    vad_thread.start()
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
         dtype="float32",
         blocksize=VAD_BLOCKSIZE,
-        callback=callback,
+        callback=audio_callback,
         device=_input_device(),
     ):
         while not stop_event.is_set():
             if interrupt and interrupt.is_set():
+                stop_event.set()
                 break
             stop_event.wait(timeout=0.2)
 
+    vad_thread.join(timeout=1.0)
     vad.reset_states()
 
     if not frames:
