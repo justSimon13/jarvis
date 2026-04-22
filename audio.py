@@ -1,3 +1,4 @@
+import queue
 import subprocess
 import sys
 import tempfile
@@ -46,31 +47,51 @@ def _get_oww():
 def listen_for_wake_word(interrupt: threading.Event | None = None):
     """Blockiert bis 'Hey JARVIS' erkannt wird oder interrupt gesetzt wird."""
     oww = _get_oww()
+    oww.reset()  # State zwischen Sessions leeren
+
     detected = threading.Event()
+    pcm_q: queue.Queue = queue.Queue(maxsize=20)
     chunk_size = 1280  # 80ms @ 16kHz
 
-    def callback(indata, frames, time_info, status):
-        pcm = (indata[:, 0] * 32767).astype(np.int16)
-        scores = oww.predict(pcm)
-        if scores.get("hey_jarvis", 0) >= 0.35:
-            detected.set()
+    # Callback läuft im PortAudio-Realtime-Thread — nur Daten queuen, KEIN ONNX hier.
+    # ONNX RT im Realtime-Thread führt zu unbegrenztem Thread-local-Heap-Wachstum.
+    def audio_callback(indata, frames, time_info, status):
+        try:
+            pcm_q.put_nowait((indata[:, 0] * 32767).astype(np.int16).copy())
+        except queue.Full:
+            pass
+
+    def inference_worker():
+        while not detected.is_set():
+            try:
+                pcm = pcm_q.get(timeout=0.1)
+                scores = oww.predict(pcm)
+                if scores.get("hey_jarvis", 0) >= 0.35:
+                    detected.set()
+            except queue.Empty:
+                pass
+
+    infer_thread = threading.Thread(target=inference_worker, daemon=True)
+    infer_thread.start()
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
         dtype="float32",
         blocksize=chunk_size,
-        callback=callback,
+        callback=audio_callback,
         device=_input_device(),
     ):
         while not detected.is_set():
             if interrupt and interrupt.is_set():
-                return
+                detected.set()
+                break
             detected.wait(timeout=0.2)
 
+    infer_thread.join(timeout=1.0)
     _beep()
     import time
-    time.sleep(0.3)  # Beep abklingen lassen bevor Aufnahme startet
+    time.sleep(0.3)
 
 
 def record_with_vad(interrupt: threading.Event | None = None) -> str:
