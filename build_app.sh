@@ -18,7 +18,6 @@ mkdir -p "$APP_PATH/Contents/Resources"
 cat > "$APP_PATH/Contents/MacOS/$APP_NAME" << EOF
 #!/bin/bash
 export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
-export DYLD_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:\$DYLD_LIBRARY_PATH"
 APP_DIR="$SCRIPT_DIR"
 cd "\$APP_DIR"
 exec "\$APP_DIR/.venv/bin/python3" "\$APP_DIR/app.py" "\$@"

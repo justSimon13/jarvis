@@ -9,8 +9,8 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 MANUAL_MODE = os.getenv("MANUAL_MODE", "false").lower() == "true"
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-GITHUB_BRAIN_REPO = os.getenv("GITHUB_BRAIN_REPO", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://whwcinntvtfnezupkdsx.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indod2Npbm50dnRmbmV6dXBrZHN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NjY0ODIsImV4cCI6MjA5MjQ0MjQ4Mn0.Hy_ViYL5czC6d-pFzA-tQc_uU3DIE8MrG2PoWgY5dGY")
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "")
@@ -53,6 +53,7 @@ Antworte immer auf Deutsch. Präzise, direkt, handlungsorientiert.
 - Notion-Tools NICHT aufrufen für Daten die bereits im Kontext stehen.
 - Tools nur für explizite Schreib-/Änderungsoperationen.
 - Wenn Simon sagt "merk dir X" oder "von jetzt an Y" → brain_write aufrufen.
+- Wenn Simon sagt "lade beim Start auch X" oder "zeig mir keine Y mehr" → brain_write(section="context_config", ...) aufrufen um den Kontext-Load dauerhaft anzupassen.
 
 ## Follow-ups (WICHTIG)
 - Wenn Simon ein Thema oder eine Aufgabe anspricht aber es nicht klar abschließt (kein "ja hab ich gemacht" / "mach ich" / "skip"), speichere es: brain_write(section="followups", key="kurzer_schlüssel", value="Was genau offen ist und seit wann")

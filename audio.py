@@ -43,7 +43,7 @@ def listen_for_wake_word(interrupt: threading.Event | None = None):
     def callback(indata, frames, time_info, status):
         pcm = (indata[:, 0] * 32767).astype(np.int16)
         scores = oww.predict(pcm)
-        if scores.get("hey_jarvis", 0) >= 0.5:
+        if scores.get("hey_jarvis", 0) >= 0.35:
             detected.set()
 
     with sd.InputStream(

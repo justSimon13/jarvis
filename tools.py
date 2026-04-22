@@ -104,7 +104,8 @@ DEFINITIONS = [
         "description": (
             "Liest einen Wert aus JARVIS's eigenem Gedächtnis (GitHub Brain). "
             "Sections: 'profile' (Simons Profil), 'settings' (aktive Routinen & Präferenzen), "
-            "'memory' (was JARVIS über Simon gelernt hat), 'followups' (offene Follow-up Punkte). "
+            "'memory' (was JARVIS über Simon gelernt hat), 'followups' (offene Follow-up Punkte), "
+            "'context_config' (was beim Start aus Notion geladen wird). "
             "key optional – ohne key wird die ganze Section zurückgegeben."
         ),
         "input_schema": {
@@ -112,7 +113,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups"],
+                    "enum": ["profile", "settings", "memory", "followups", "context_config"],
                     "description": "Welche Section lesen",
                 },
                 "key": {
@@ -128,12 +129,18 @@ DEFINITIONS = [
         "description": (
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
-            "Sections: 'profile', 'settings', 'memory', 'followups'. "
+            "Sections: 'profile', 'settings', 'memory', 'followups', 'context_config'. "
             "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung oder null zum Löschen. "
             "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
             "Für Pausen flache Keys nutzen: key='checkin_pausiert_bis', value='2026-05-01'. "
             "Email-VIP manuell: section='settings', key='contacts.email_vip', value=[...bestehende Liste + X]. "
             "Memory (section='memory'): value kann String oder Dict sein, wird als neuer Eintrag angehängt. "
+            "context_config: steuert was beim Start aus Notion geladen wird. Dot-Notation: "
+            "key='projekte.extra_felder', value=['typ'] – Projekttyp im Prompt anzeigen. "
+            "key='projekte.status_filter', value=['In Bearbeitung','Planung'] – welche Projekt-Status geladen werden. "
+            "key='todos.tage_zurueck', value=14 – Todos der letzten N Tage laden. "
+            "key='todos.max', value=30 – maximale Anzahl Todos. "
+            "key='konzepte.laden', value=false – Konzepte komplett ausblenden. "
             "Vor dem Schreiben von Listen erst brain_read aufrufen um bestehende Einträge nicht zu überschreiben."
         ),
         "input_schema": {
@@ -141,7 +148,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups"],
+                    "enum": ["profile", "settings", "memory", "followups", "context_config"],
                     "description": "Welche Section updaten",
                 },
                 "key": {

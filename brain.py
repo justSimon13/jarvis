@@ -1,97 +1,104 @@
-import json
-import subprocess
 from datetime import date
 from pathlib import Path
 import config
 
-# Brain liegt in ~/.jarvis/brain/ als eigenständiges Git-Repo
-_BRAIN_DIR = Path.home() / ".jarvis" / "brain"
-_BRAIN_DIR.mkdir(parents=True, exist_ok=True)
+_SECTIONS = ["profile", "settings", "memory", "followups", "context_config"]
+_MEMORY_DEFAULT = []
+_DICT_DEFAULT = {}
 
-_SECTIONS = ["profile", "settings", "memory", "followups"]
-
-
-def _path(section: str) -> Path:
-    return _BRAIN_DIR / f"{section}.json"
+# Lokaler Fallback-Pfad falls Supabase nicht konfiguriert
+_LOCAL_DIR = Path.home() / ".jarvis" / "brain"
 
 
-def _read(section: str) -> dict:
-    p = _path(section)
+def _use_supabase() -> bool:
+    return bool(config.SUPABASE_URL and config.SUPABASE_KEY)
+
+
+def _get_client():
+    from supabase import create_client
+    return create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+
+
+def _default(section: str):
+    return _MEMORY_DEFAULT.copy() if section == "memory" else dict(_DICT_DEFAULT)
+
+
+# ── Supabase I/O ──────────────────────────────────────────────────────────────
+
+def _sb_read(section: str):
+    try:
+        result = _get_client().table("brain").select("data").eq("section", section).single().execute()
+        return result.data["data"] if result.data else _default(section)
+    except Exception as e:
+        print(f"[brain] Supabase read error ({section}): {e}")
+        return _default(section)
+
+
+def _sb_write(section: str, data):
+    try:
+        _get_client().table("brain").upsert(
+            {"section": section, "data": data},
+            on_conflict="section"
+        ).execute()
+    except Exception as e:
+        print(f"[brain] Supabase write error ({section}): {e}")
+
+
+# ── Lokales Fallback I/O ──────────────────────────────────────────────────────
+
+def _local_path(section: str) -> Path:
+    return _LOCAL_DIR / f"{section}.json"
+
+
+def _local_read(section: str):
+    import json
+    p = _local_path(section)
     if not p.exists():
-        return {}
+        return _default(section)
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        return _default(section)
 
 
-def _write(section: str, data: dict):
-    _path(section).write_text(
+def _local_write(section: str, data):
+    import json
+    _LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+    _local_path(section).write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
-def _git_push(message: str):
-    try:
-        subprocess.run(["git", "add", "-A"], cwd=_BRAIN_DIR, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-m", message], cwd=_BRAIN_DIR, check=True, capture_output=True)
-        subprocess.run(["git", "push"], cwd=_BRAIN_DIR, capture_output=True)
-    except subprocess.CalledProcessError:
-        pass  # nichts zu committen oder kein remote – kein Fehler
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def _read(section: str):
+    if _use_supabase():
+        return _sb_read(section)
+    return _local_read(section)
+
+
+def _write(section: str, data):
+    if _use_supabase():
+        _sb_write(section, data)
+    else:
+        _local_write(section, data)
+
+
+def sync():
+    """Beim Start: abgelaufene Pausen aus Settings entfernen."""
+    _check_expirations()
 
 
 def _check_expirations():
-    """Keys mit Suffix '_pausiert_bis' prüfen und abgelaufene entfernen."""
     settings = _read("settings")
+    if not isinstance(settings, dict):
+        return
     today = date.today().isoformat()
     expired = [k for k in settings if k.endswith("_pausiert_bis") and settings[k] <= today]
     if expired:
         for k in expired:
             del settings[k]
         _write("settings", settings)
-        _git_push("JARVIS: abgelaufene Pausen entfernt")
-
-
-def sync():
-    """Brain-Repo initialisieren (falls nötig), pullen und Pausen prüfen."""
-    _ensure_git_repo()
-    try:
-        subprocess.run(["git", "pull", "--ff-only"], cwd=_BRAIN_DIR, capture_output=True)
-    except Exception:
-        pass
-    _check_expirations()
-
-
-def _ensure_git_repo():
-    """Brain-Verzeichnis als Git-Repo einrichten falls noch nicht vorhanden."""
-    if (_BRAIN_DIR / ".git").exists():
-        return
-    repo = config.GITHUB_BRAIN_REPO
-    if not repo:
-        return
-    remote = f"https://github.com/{repo}.git"
-    try:
-        # Versuche zu klonen (falls Remote schon Inhalt hat)
-        result = subprocess.run(
-            ["git", "clone", remote, str(_BRAIN_DIR)],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            return
-        # Remote leer oder nicht erreichbar → lokal initialisieren und pushen
-        subprocess.run(["git", "init", "-b", "main"], cwd=_BRAIN_DIR, capture_output=True)
-        subprocess.run(["git", "remote", "add", "origin", remote], cwd=_BRAIN_DIR, capture_output=True)
-        # Initiale brain-Dateien anlegen falls nicht vorhanden
-        for section in ["profile", "settings", "memory", "followups"]:
-            p = _BRAIN_DIR / f"{section}.json"
-            if not p.exists():
-                default = [] if section == "memory" else {}
-                p.write_text(json.dumps(default, indent=2), encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=_BRAIN_DIR, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "JARVIS: brain initialisiert"], cwd=_BRAIN_DIR, capture_output=True)
-        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=_BRAIN_DIR, capture_output=True)
-    except Exception:
-        pass
 
 
 def load() -> dict:
@@ -102,18 +109,16 @@ def read(section: str, key: str | None = None):
     data = _read(section)
     if key is None:
         return data
-    # Dot-Notation: "contacts.email_vip" → data["contacts"]["email_vip"]
     parts = key.split(".", 1)
     if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
         return data[parts[0]].get(parts[1])
-    return data.get(key)
+    return data.get(key) if isinstance(data, dict) else None
 
 
 def write(section: str, key: str, value) -> str:
     data = _read(section)
 
     if section == "memory":
-        # Memory ist eine Liste — neuen Eintrag anhängen
         if not isinstance(data, list):
             data = []
         if isinstance(value, dict):
@@ -121,12 +126,15 @@ def write(section: str, key: str, value) -> str:
         else:
             data.append({"type": "note", "key": key, "text": str(value)})
         _write(section, data)
-        _git_push(f"JARVIS: memory Eintrag hinzugefügt")
         return f"Gespeichert: memory → {value}"
 
-    # Dot-Notation für nested Settings: "contacts.email_vip"
+    if not isinstance(data, dict):
+        data = {}
+
     parts = key.split(".", 1)
-    if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
+    if len(parts) == 2:
+        if not isinstance(data.get(parts[0]), dict):
+            data[parts[0]] = {}
         if value is None:
             data[parts[0]].pop(parts[1], None)
         else:
@@ -138,11 +146,12 @@ def write(section: str, key: str, value) -> str:
             data[key] = value
 
     _write(section, data)
-    _git_push(f"JARVIS: {section}.{key} aktualisiert")
     if value is None:
         return f"Gelöscht: {section} → {key}"
     return f"Gespeichert: {section} → {key} = {value}"
 
+
+# ── System Prompt Section ─────────────────────────────────────────────────────
 
 def _format_month_day(value: str) -> str:
     try:
@@ -156,7 +165,6 @@ def build_prompt_section() -> str:
     data = load()
     parts = []
 
-    # 1. Profil
     profile = data.get("profile", {})
     if profile:
         ordered_keys = [
@@ -186,7 +194,6 @@ def build_prompt_section() -> str:
                 lines.append(f"- {key}: {value}")
         parts.append("\n".join(lines))
 
-    # 2. Offene Follow-ups
     followups = data.get("followups", {})
     if isinstance(followups, dict) and followups:
         lines = ["## Offene Follow-ups — heute aktiv ansprechen"]
@@ -195,10 +202,8 @@ def build_prompt_section() -> str:
                 lines.append(f"- {v}")
         parts.append("\n".join(lines))
 
-    # 3. Settings
     settings = data.get("settings", {})
-
-    behavior = settings.get("behavior", {})
+    behavior = settings.get("behavior", {}) if isinstance(settings, dict) else {}
     if behavior:
         lines = ["## Wie du dich verhalten sollst"]
         label_map_b = {
@@ -212,11 +217,11 @@ def build_prompt_section() -> str:
                 lines.append(f"- {label_map_b.get(k, k)}: {v}")
         parts.append("\n".join(lines))
 
-    features = settings.get("features", {})
-    checkin_rules = settings.get("checkin_rules", {})
-    ongoing_reminders = settings.get("ongoing_reminders", {})
-    special_handling = settings.get("special_handling", {})
-    contacts = settings.get("contacts", {})
+    features = settings.get("features", {}) if isinstance(settings, dict) else {}
+    checkin_rules = settings.get("checkin_rules", {}) if isinstance(settings, dict) else {}
+    ongoing_reminders = settings.get("ongoing_reminders", {}) if isinstance(settings, dict) else {}
+    special_handling = settings.get("special_handling", {}) if isinstance(settings, dict) else {}
+    contacts = settings.get("contacts", {}) if isinstance(settings, dict) else {}
 
     active_rules = []
     if features.get("morning_checkin"):
@@ -225,7 +230,6 @@ def build_prompt_section() -> str:
         active_rules.append("- Evening Checkout ist aktiv.")
     if features.get("daily_football_fact"):
         active_rules.append("- Daily Football Fact ist aktiv.")
-
     if checkin_rules.get("todos"):
         active_rules.append(f"- Todo-Regel: {checkin_rules['todos']}")
     if checkin_rules.get("projekte"):
@@ -236,7 +240,6 @@ def build_prompt_section() -> str:
         active_rules.append(f"- Konzepte-Regel: {checkin_rules['konzepte']}")
     if checkin_rules.get("abschluss"):
         active_rules.append(f"- Abschluss-Regel: {checkin_rules['abschluss']}")
-
     for k, v in ongoing_reminders.items():
         if v:
             active_rules.append(f"- Laufende Erinnerung: {v}")
@@ -247,9 +250,8 @@ def build_prompt_section() -> str:
         vip_list = ", ".join(contacts["email_vip"])
         active_rules.append(f"- VIP-E-Mail-Kontakte: {vip_list}")
 
-    # Flache Top-Level-Keys (z.B. _pausiert_bis) als Fallback
     known_sections = {"features", "behavior", "checkin_rules", "ongoing_reminders", "special_handling", "contacts"}
-    for k, v in settings.items():
+    for k, v in (settings.items() if isinstance(settings, dict) else []):
         if k in known_sections:
             continue
         if k.endswith("_pausiert_bis") and v:
@@ -261,7 +263,6 @@ def build_prompt_section() -> str:
     if active_rules:
         parts.append("## Aktive Verhaltensregeln\n" + "\n".join(active_rules))
 
-    # 3. Erinnerungen
     memory = data.get("memory", [])
     memory_lines = []
     if isinstance(memory, list):
@@ -271,12 +272,12 @@ def build_prompt_section() -> str:
                 continue
             if entry.get("type") == "birthday":
                 name = entry.get("name", "Unbekannt")
-                context = entry.get("context")
+                ctx = entry.get("context")
                 date_val = entry.get("date")
                 repeat = entry.get("repeat")
                 line = f"- {name}"
-                if context:
-                    line += f" ({context})"
+                if ctx:
+                    line += f" ({ctx})"
                 if date_val:
                     line += f" hat am {_format_month_day(date_val)} Geburtstag"
                 if repeat == "yearly":

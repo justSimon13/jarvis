@@ -83,16 +83,19 @@ class JarvisEngine(threading.Thread):
 
             if self.mode == "voice":
                 if not in_conversation:
-                    self._emit("status_text", "Warte auf Wake Word…")
-                    self._wake_interrupt.clear()
-                    try:
-                        audio.listen_for_wake_word(interrupt=self._wake_interrupt)
-                    except Exception:
-                        if self._stop.is_set():
-                            break
-                        continue
-                    if self.mode != "voice":
-                        continue
+                    if not config.MANUAL_MODE:
+                        self._emit("status_text", "Warte auf Wake Word…")
+                        self._wake_interrupt.clear()
+                        try:
+                            audio.listen_for_wake_word(interrupt=self._wake_interrupt)
+                        except Exception:
+                            if self._stop.is_set():
+                                break
+                            continue
+                        if self.mode != "voice":
+                            continue
+                    else:
+                        self._emit("status_text", "Bereit (kein Wake Word)…")
 
                 self._emit("state", State.LISTENING)
                 self._emit("status_text", "Ich höre…")

@@ -42,8 +42,8 @@ def _set_cached(conn: sqlite3.Connection, key: str, data):
     conn.commit()
 
 
-def _fetch_todos(notion: NotionClient) -> list[dict]:
-    week_ago = (date.today() - timedelta(days=7)).isoformat()
+def _fetch_todos(notion: NotionClient, tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
+    week_ago = (date.today() - timedelta(days=tage_zurueck)).isoformat()
     try:
         response = notion.databases.query(
             database_id=config.NOTION_TODOS_DB_ID,
@@ -60,6 +60,7 @@ def _fetch_todos(notion: NotionClient) -> list[dict]:
                 ]
             },
             sorts=[{"property": "Datum", "direction": "ascending"}],
+            page_size=max_results,
         )
         results = []
         for page in response.get("results", []):
@@ -104,17 +105,13 @@ def _fetch_konzepte(notion: NotionClient) -> list[dict]:
         return []
 
 
-def _fetch_projekte(notion: NotionClient) -> list[dict]:
+def _fetch_projekte(notion: NotionClient, status_filter: list | None = None) -> list[dict]:
+    if status_filter is None:
+        status_filter = ["In Bearbeitung", "Planung", "Angebot"]
     try:
         response = notion.databases.query(
             database_id=config.NOTION_PROJEKTE_DB_ID,
-            filter={
-                "or": [
-                    {"property": "Status", "select": {"equals": "In Bearbeitung"}},
-                    {"property": "Status", "select": {"equals": "Planung"}},
-                    {"property": "Status", "select": {"equals": "Angebot"}},
-                ]
-            },
+            filter={"or": [{"property": "Status", "select": {"equals": s}} for s in status_filter]},
         )
         results = []
         for page in response.get("results", []):
@@ -125,7 +122,9 @@ def _fetch_projekte(notion: NotionClient) -> list[dict]:
             status = status_prop.get("name") if status_prop else None
             desc_list = props.get("Beschreibung", {}).get("rich_text", [])
             desc = desc_list[0]["plain_text"][:100] if desc_list else None
-            results.append({"name": name, "status": status, "beschreibung": desc})
+            typ_prop = props.get("Typ", {}).get("select")
+            typ = typ_prop.get("name") if typ_prop else None
+            results.append({"name": name, "status": status, "beschreibung": desc, "typ": typ})
         return results
     except Exception as e:
         print(f"[context] Projekte-Fetch fehlgeschlagen: {e}")
@@ -142,15 +141,29 @@ def invalidate(key: str):
 def refresh_if_stale():
     if not config.NOTION_API_KEY:
         return
+    cc = brain.read("context_config") or {}
+    if not isinstance(cc, dict):
+        cc = {}
+    cc_todos = cc.get("todos", {})
+    cc_proj = cc.get("projekte", {})
+    cc_konz = cc.get("konzepte", {})
+
     conn = _get_db()
     notion = NotionClient(auth=config.NOTION_API_KEY)
     if _is_stale(conn, "todos"):
         print("[context] Lade Todos aus Notion...")
-        _set_cached(conn, "todos", _fetch_todos(notion))
+        _set_cached(conn, "todos", _fetch_todos(
+            notion,
+            tage_zurueck=cc_todos.get("tage_zurueck", 7),
+            max_results=cc_todos.get("max", 20),
+        ))
     if _is_stale(conn, "projekte"):
         print("[context] Lade Projekte aus Notion...")
-        _set_cached(conn, "projekte", _fetch_projekte(notion))
-    if _is_stale(conn, "konzepte"):
+        _set_cached(conn, "projekte", _fetch_projekte(
+            notion,
+            status_filter=cc_proj.get("status_filter"),
+        ))
+    if cc_konz.get("laden", True) and _is_stale(conn, "konzepte"):
         print("[context] Lade Konzepte aus Notion...")
         _set_cached(conn, "konzepte", _fetch_konzepte(notion))
     conn.close()
@@ -173,10 +186,17 @@ def build_system_prompt() -> str:
     if not config.NOTION_API_KEY:
         return "\n\n".join(parts)
 
+    cc = brain.read("context_config") or {}
+    if not isinstance(cc, dict):
+        cc = {}
+    cc_proj = cc.get("projekte", {})
+    cc_konz = cc.get("konzepte", {})
+    proj_extra = cc_proj.get("extra_felder", [])
+
     conn = _get_db()
     todos = _get_cached(conn, "todos") or []
     projekte = _get_cached(conn, "projekte") or []
-    konzepte = _get_cached(conn, "konzepte") or []
+    konzepte = _get_cached(conn, "konzepte") or [] if cc_konz.get("laden", True) else []
     conn.close()
 
     today = date.today()
@@ -203,7 +223,10 @@ def build_system_prompt() -> str:
     if projekte:
         lines = ["## Aktive Projekte"]
         for p in projekte:
-            line = f"- {p['name']} ({p['status']})"
+            meta_parts = [p["status"]]
+            if "typ" in proj_extra and p.get("typ"):
+                meta_parts.append(p["typ"])
+            line = f"- {p['name']} ({', '.join(meta_parts)})"
             if p.get("beschreibung"):
                 line += f": {p['beschreibung']}"
             lines.append(line)
