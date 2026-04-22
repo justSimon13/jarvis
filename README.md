@@ -6,7 +6,7 @@ Persönlicher KI-Sprachassistent für macOS. Wake Word, Sprache, Chat-Fenster, K
 
 ## Installation
 
-### 1. Installer herunterladen
+### 1. Installer herunterladen & ausführen
 
 Aus dem [aktuellen Release](https://github.com/justSimon13/j.a.r.v.i.s./releases/latest) die Datei `JARVIS-installer.zip` herunterladen.
 
@@ -16,64 +16,55 @@ cd JARVIS
 ./install.sh
 ```
 
-Das Skript kopiert alles nach `~/.jarvis/`, erstellt eine Python-Umgebung und legt `/Applications/JARVIS.app` an.
+Das Skript installiert automatisch alle Abhängigkeiten (Homebrew, Python, PortAudio, ffmpeg), kopiert alles nach `~/.jarvis/` und legt `/Applications/JARVIS.app` an.
 
 ---
 
-### 2. API Keys eintragen
+### 2. JARVIS starten & einrichten
 
-```bash
-nano ~/.jarvis/.env
+```
+open /Applications/JARVIS.app
 ```
 
-| Variable | Woher | Pflicht |
+Beim ersten Start öffnet sich automatisch der **Setup Wizard** — API Keys, Google Calendar und E-Mail direkt in der App eingeben. Jeder Schritt kann übersprungen und später in den Einstellungen nachgetragen werden.
+
+---
+
+### 3. API Keys
+
+| Key | Woher | Pflicht |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | Ja |
 | `ELEVENLABS_API_KEY` | [elevenlabs.io](https://elevenlabs.io) | Ja |
 | `ELEVENLABS_VOICE_ID` | ElevenLabs → Voices → Voice ID kopieren | Ja |
-| `NOTION_API_KEY` | [notion.so/my-integrations](https://www.notion.so/my-integrations) → New Integration | Ja |
-| `GITHUB_TOKEN` | GitHub → Settings → Developer Settings → Personal Access Tokens | Ja (für Brain-Sync) |
-| `GITHUB_BRAIN_REPO` | `deinusername/jarvis-brain` — privates Repo für Gedächtnis-Sync | Ja (für Brain-Sync) |
+| `NOTION_API_KEY` | [notion.so/my-integrations](https://www.notion.so/my-integrations) → New Integration | Nein |
 | `EMAIL_ADDRESS` | Deine E-Mail-Adresse | Nein |
 | `WEATHER_CITY` | Stadtname für Wetter, z.B. `München` | Nein |
-| `WHISPER_MODEL` | `tiny` / `base` / `small` / `medium` — schneller vs. genauer | Nein (Standard: `base`) |
 
 ---
 
-### 3. Google Calendar einrichten (einmalig)
+### 4. Google Calendar einrichten (optional)
+
+Im Setup Wizard oder in den Einstellungen (⚙):
 
 1. [Google Cloud Console](https://console.cloud.google.com) → Neues Projekt
 2. APIs & Services → **Google Calendar API** aktivieren
 3. APIs & Services → Anmeldedaten → **OAuth 2.0-Client-ID** erstellen (Typ: Desktop-App)
-4. JSON herunterladen → speichern als `~/.jarvis/google_credentials.json`
-5. Einmalig authentifizieren:
-
-```bash
-cd ~/.jarvis && .venv/bin/python3 setup_google.py
-```
+4. JSON herunterladen
+5. In JARVIS: ⚙ → Google Calendar → **credentials.json auswählen** → **Verbinden**
 
 ---
 
-### 4. Apple Reminders freischalten (einmalig)
+### 5. Apple Reminders freischalten (für Wecker)
 
-Systemeinstellungen → Datenschutz & Sicherheit → Automatisierung → Terminal (oder JARVIS.app) → **Erinnerungen** aktivieren
+Systemeinstellungen → Datenschutz & Sicherheit → Automatisierung → JARVIS.app → **Erinnerungen** aktivieren
 
 ---
 
-### 5. Notion-Integration verbinden
+### 6. Notion-Integration verbinden (optional)
 
 In jeder genutzten Notion-Datenbank (Todos, Projekte, Konzepte):  
 Datenbank öffnen → `...` → **Verbindungen** → deine JARVIS-Integration hinzufügen
-
----
-
-## Starten
-
-```
-/Applications/JARVIS.app
-```
-
-Oder per Spotlight: `cmd + space` → "JARVIS"
 
 ---
 
@@ -97,7 +88,6 @@ Mitten im Satz pausieren ist okay — JARVIS wartet bis du fertig bist (bis zu 1
 | E-Mail | "Habe ich neue wichtige Mails?" / "Schreib eine Mail an Max" |
 | Timer | "Stell einen Timer auf 10 Minuten, Nudeln" |
 | Wecker | "Wecker um 7:30 Uhr, Aufstehen" (synct via iCloud aufs iPhone) |
-| Einkaufsliste | "Füge Milch und Brot zur Einkaufsliste hinzu" |
 | Gedächtnis | "Merk dir dass ich Laktoseintolerant bin" |
 | Wetter | "Wie wird das Wetter heute?" |
 | Bitcoin | "Was ist der aktuelle BTC-Kurs?" |
@@ -114,6 +104,7 @@ In der App oben rechts auf **⚙** klicken:
 - Mikrofon auswählen
 - Wake Word an/aus
 - ElevenLabs Voice ID ändern
+- Google Calendar verbinden
 - API Keys aktualisieren
 - Autostart beim Login aktivieren
 
@@ -127,7 +118,7 @@ Mikrofon → Silero VAD → Whisper (lokal) → Claude API → ElevenLabs TTS �
                               Notion / Google Calendar / E-Mail / Brain
 ```
 
-Brain (`~/.jarvis/brain/`) speichert dein Profil, Gedächtnis und Einstellungen — versioniert per Git und automatisch synchronisiert.
+Brain (Profil, Gedächtnis, Einstellungen) wird in Supabase gespeichert — geräteübergreifend synchronisiert, kein GitHub nötig.
 
 ---
 

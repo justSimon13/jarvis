@@ -1,5 +1,5 @@
 #!/bin/bash
-# JARVIS Installer — kopiert alles nach ~/.jarvis und legt JARVIS.app in /Applications/
+# JARVIS Installer — vollständige Installation inkl. Abhängigkeiten
 
 set -e
 
@@ -8,10 +8,55 @@ INSTALL_DIR="$HOME/.jarvis"
 APP_PATH="/Applications/JARVIS.app"
 APP_NAME="JARVIS"
 
-echo "Installiere J.A.R.V.I.S. nach $INSTALL_DIR ..."
+echo ""
+echo "════════════════════════════════════════"
+echo "  J.A.R.V.I.S. Installer"
+echo "════════════════════════════════════════"
 echo ""
 
-# ── 1. Dateien kopieren ────────────────────────────────────────────────────────
+# ── 1. Homebrew ────────────────────────────────────────────────────────────────
+if ! command -v brew &>/dev/null; then
+    echo "Installiere Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # PATH für den Rest des Skripts setzen
+    if [ -f /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    else
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    echo "✓ Homebrew installiert"
+else
+    echo "✓ Homebrew vorhanden"
+fi
+
+# ── 2. Python ──────────────────────────────────────────────────────────────────
+PYTHON=$(command -v python3.14 2>/dev/null || command -v python3.13 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || true)
+if [ -z "$PYTHON" ]; then
+    echo "Installiere Python..."
+    brew install python@3.13
+    PYTHON="$(brew --prefix)/bin/python3.13"
+    echo "✓ Python installiert"
+else
+    echo "✓ Python: $($PYTHON --version)"
+fi
+
+# ── 3. System-Abhängigkeiten ───────────────────────────────────────────────────
+echo "Prüfe System-Abhängigkeiten..."
+
+if ! brew list portaudio &>/dev/null; then
+    echo "  Installiere portaudio..."
+    brew install portaudio
+fi
+echo "✓ portaudio"
+
+if ! brew list ffmpeg &>/dev/null; then
+    echo "  Installiere ffmpeg (für Whisper)..."
+    brew install ffmpeg
+fi
+echo "✓ ffmpeg"
+
+# ── 4. Dateien kopieren ────────────────────────────────────────────────────────
+echo "Kopiere Dateien nach $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 rsync -a \
     --exclude='.git' \
@@ -21,28 +66,21 @@ rsync -a \
     --exclude='*.pyc' \
     --exclude='.env' \
     "$SCRIPT_DIR/" "$INSTALL_DIR/"
+echo "✓ Dateien kopiert"
 
-# ── 2. Python-Version prüfen ───────────────────────────────────────────────────
-PYTHON=$(which python3.14 2>/dev/null || which python3 2>/dev/null)
-if [ -z "$PYTHON" ]; then
-    echo "✗ Python 3 nicht gefunden. Bitte installieren: brew install python@3.14"
-    exit 1
-fi
-echo "✓ Python: $($PYTHON --version)"
-
-# ── 3. Virtuelle Umgebung ──────────────────────────────────────────────────────
-echo "Erstelle venv..."
+# ── 5. Virtuelle Umgebung ──────────────────────────────────────────────────────
+echo "Erstelle Python-Umgebung..."
 cd "$INSTALL_DIR"
 "$PYTHON" -m venv .venv
 echo "✓ venv erstellt"
 
-# ── 4. Dependencies installieren ──────────────────────────────────────────────
-echo "Installiere Dependencies (kann einige Minuten dauern)..."
+# ── 6. Dependencies installieren ──────────────────────────────────────────────
+echo "Installiere Python-Pakete (kann einige Minuten dauern)..."
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
-echo "✓ Dependencies installiert"
+echo "✓ Pakete installiert"
 
-# ── 5. .env anlegen ───────────────────────────────────────────────────────────
+# ── 7. .env anlegen ───────────────────────────────────────────────────────────
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     cat > "$INSTALL_DIR/.env" << 'ENV'
 ANTHROPIC_API_KEY=
@@ -55,12 +93,9 @@ WHISPER_MODEL=base
 AUDIO_INPUT_DEVICE=
 MANUAL_MODE=false
 ENV
-    echo "⚠  API-Keys eintragen: nano $INSTALL_DIR/.env"
-else
-    echo "✓ .env bereits vorhanden"
 fi
 
-# ── 6. .app Bundle ────────────────────────────────────────────────────────────
+# ── 8. .app Bundle ────────────────────────────────────────────────────────────
 echo "Erstelle JARVIS.app..."
 mkdir -p "$APP_PATH/Contents/MacOS"
 mkdir -p "$APP_PATH/Contents/Resources"
@@ -68,7 +103,6 @@ mkdir -p "$APP_PATH/Contents/Resources"
 cat > "$APP_PATH/Contents/MacOS/$APP_NAME" << LAUNCHER
 #!/bin/bash
 export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
-export DYLD_LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:\$DYLD_LIBRARY_PATH"
 cd "$INSTALL_DIR"
 exec "$INSTALL_DIR/.venv/bin/python3" "$INSTALL_DIR/app.py" "\$@"
 LAUNCHER
@@ -90,9 +124,9 @@ cat > "$APP_PATH/Contents/Info.plist" << 'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.simonfischer.jarvis</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>CFBundleExecutable</key>
     <string>JARVIS</string>
     <key>CFBundleIconFile</key>
@@ -118,9 +152,7 @@ echo "════════════════════════�
 echo "  J.A.R.V.I.S. erfolgreich installiert!"
 echo "════════════════════════════════════════"
 echo ""
-echo "1. API-Keys eintragen:"
-echo "   nano $INSTALL_DIR/.env"
+echo "  open /Applications/JARVIS.app"
 echo ""
-echo "2. JARVIS starten:"
-echo "   open /Applications/JARVIS.app"
+echo "  Beim ersten Start öffnet sich der Setup Wizard."
 echo ""
