@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import threading
 import urllib.request
+import json
 from pathlib import Path
 import config
 
@@ -12,10 +13,11 @@ def _parse_version(v: str) -> tuple:
 
 def check_latest() -> tuple[str, bool]:
     """Gibt (latest_version, is_newer) zurück. Wirft Exception bei Netzwerkfehler."""
-    url = f"https://raw.githubusercontent.com/{config.GITHUB_REPO}/main/version.txt"
+    url = f"https://api.github.com/repos/{config.GITHUB_REPO}/releases/latest"
     req = urllib.request.Request(url, headers={"User-Agent": "JARVIS-Updater"})
     with urllib.request.urlopen(req, timeout=10) as resp:
-        latest = resp.read().decode().strip().lstrip("v")
+        data = json.loads(resp.read())
+    latest = data["tag_name"].lstrip("v")
     is_newer = _parse_version(latest) > _parse_version(config.VERSION)
     return latest, is_newer
 

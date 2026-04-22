@@ -8,7 +8,7 @@ Persönlicher KI-Sprachassistent für macOS. Wake Word, Sprache, Chat-Fenster, K
 
 ### 1. Installer herunterladen & ausführen
 
-Aus dem [aktuellen Release](https://github.com/justSimon13/j.a.r.v.i.s./releases/latest) die Datei `JARVIS-installer.zip` herunterladen.
+Aus dem [aktuellen Release](https://github.com/justSimon13/jarvis/releases/latest) die Datei `JARVIS-installer.zip` herunterladen.
 
 ```bash
 unzip JARVIS-installer.zip -d JARVIS
