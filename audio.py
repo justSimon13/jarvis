@@ -21,6 +21,8 @@ _SILENCE_MS = 1500            # ms Stille bis VAD "end" feuert — Engine akkumu
 
 _silero_model = None
 _silero_lock = threading.Lock()
+_oww_model = None
+_oww_lock = threading.Lock()
 
 
 def _get_silero():
@@ -32,11 +34,18 @@ def _get_silero():
     return _silero_model
 
 
+def _get_oww():
+    global _oww_model
+    with _oww_lock:
+        if _oww_model is None:
+            from openwakeword.model import Model
+            _oww_model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+    return _oww_model
+
+
 def listen_for_wake_word(interrupt: threading.Event | None = None):
     """Blockiert bis 'Hey JARVIS' erkannt wird oder interrupt gesetzt wird."""
-    from openwakeword.model import Model
-
-    oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+    oww = _get_oww()
     detected = threading.Event()
     chunk_size = 1280  # 80ms @ 16kHz
 
