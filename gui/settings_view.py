@@ -84,13 +84,13 @@ class SettingsWindow(ctk.CTkToplevel):
         self._add_section(scroll, "Allgemein")
         self._add_entry(scroll, "Wetter-Stadt", "WEATHER_CITY")
         self._add_autostart(scroll)
+        self._add_update(scroll)
 
         self._add_section(scroll, "API Keys")
         for label, key in [
             ("Anthropic API Key", "ANTHROPIC_API_KEY"),
             ("ElevenLabs API Key", "ELEVENLABS_API_KEY"),
             ("Notion API Key", "NOTION_API_KEY"),
-            ("GitHub Token", "GITHUB_TOKEN"),
             ("Email-Adresse", "EMAIL_ADDRESS"),
         ]:
             self._add_entry(scroll, label, key, secret=True)
@@ -109,6 +109,63 @@ class SettingsWindow(ctk.CTkToplevel):
             btn_frame, text="Speichern", width=100, fg_color="#1e3a5f", hover_color="#2a4f7f",
             command=self._save,
         ).pack(side="right", padx=12, pady=10)
+
+    def _add_update(self, parent):
+        import config
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=4)
+        self._update_status = ctk.StringVar(value=f"Version {config.VERSION}")
+        ctk.CTkLabel(row, textvariable=self._update_status, font=("SF Pro", 13),
+                     anchor="w").pack(side="left", fill="x", expand=True)
+        self._btn_update = ctk.CTkButton(
+            row, text="Nach Updates suchen", width=160, font=("SF Pro", 13),
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._check_update,
+        )
+        self._btn_update.pack(side="right")
+
+    def _check_update(self):
+        import updater
+        self._update_status.set("Prüfe…")
+        self._btn_update.configure(state="disabled")
+
+        def _run():
+            try:
+                latest, is_newer = updater.check_latest()
+                if is_newer:
+                    self.after(0, lambda: self._update_status.set(f"Update verfügbar: v{latest}"))
+                    self.after(0, lambda: self._btn_update.configure(
+                        text="Jetzt installieren", state="normal",
+                        fg_color="#1e3a5f", hover_color="#2a4f7f",
+                        command=lambda: self._install_update(latest),
+                    ))
+                else:
+                    self.after(0, lambda: self._update_status.set("✓ Aktuell"))
+                    self.after(0, lambda: self._btn_update.configure(
+                        state="normal", text="Nach Updates suchen",
+                        fg_color="#2a2a2a", hover_color="#3a3a3a",
+                        command=self._check_update,
+                    ))
+            except Exception as e:
+                self.after(0, lambda: self._update_status.set(f"Fehler: {e}"))
+                self.after(0, lambda: self._btn_update.configure(state="normal"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _install_update(self, latest_version: str):
+        import updater
+        self._btn_update.configure(state="disabled")
+        updater.install_update(
+            latest_version,
+            on_progress=lambda msg: self.after(0, lambda: self._update_status.set(msg)),
+            on_done=lambda v: self.after(0, lambda: self._update_status.set(
+                f"✓ v{v} installiert — JARVIS neu starten"
+            )),
+            on_error=lambda e: self.after(0, lambda: [
+                self._update_status.set(f"Fehler: {e}"),
+                self._btn_update.configure(state="normal"),
+            ]),
+        )
 
     def _add_section(self, parent, title: str):
         ctk.CTkLabel(

@@ -20,6 +20,9 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 AUDIO_INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE")  # None = System-Default
 WEATHER_CITY = os.getenv("WEATHER_CITY", "Stuttgart")
 
+VERSION = "1.1.0"
+GITHUB_REPO = "justSimon13/j.a.r.v.i.s."
+
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)
 
