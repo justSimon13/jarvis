@@ -1,5 +1,0 @@
-#!/bin/bash
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-APP_DIR="/Users/simon/Documents/Arbeit/Simon Fischer Consulting/Apps/j.a.r.v.i.s."
-cd "$APP_DIR"
-exec "$APP_DIR/.venv/bin/python3" "$APP_DIR/app.py" "$@"
