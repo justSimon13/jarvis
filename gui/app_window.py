@@ -31,6 +31,20 @@ class AppWindow(ctk.CTk):
             get_mode=lambda: self._mode,
         )
 
+        from gui.setup_wizard import needs_setup, SetupWizard
+        if needs_setup():
+            self.withdraw()
+            SetupWizard(self, on_complete=self._after_setup)
+        else:
+            self._start_engine()
+
+    def _after_setup(self):
+        import importlib, config as cfg
+        importlib.reload(cfg)
+        self.deiconify()
+        self._start_engine()
+
+    def _start_engine(self):
         self._engine.start()
         self.after(500, self._start_tray)
         self.after(100, self._poll_events)

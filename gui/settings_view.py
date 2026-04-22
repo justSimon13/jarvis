@@ -1,11 +1,15 @@
 import plistlib
+import shutil
 import subprocess
+import threading
 import sounddevice as sd
 from pathlib import Path
+from tkinter import filedialog
 from dotenv import dotenv_values, set_key
 import customtkinter as ctk
 
 ENV_PATH = Path(__file__).parent.parent / ".env"
+JARVIS_DIR = Path.home() / ".jarvis"
 PLIST_PATH = Path.home() / "Library/LaunchAgents/com.simonfischer.jarvis.plist"
 WHISPER_MODELS = ["tiny", "base", "small", "medium", "large"]
 
@@ -67,6 +71,9 @@ class SettingsWindow(ctk.CTkToplevel):
         devices = _get_audio_devices()
         device_labels = ["(Standard)"] + [f"{i}: {n}" for i, n in devices]
         self._add_dropdown(scroll, "Mikrofon", "AUDIO_INPUT_DEVICE", device_labels)
+
+        self._add_section(scroll, "Google Calendar")
+        self._add_gcal(scroll)
 
         self._add_section(scroll, "Wake Word & Modus")
         self._add_switch(scroll, "Wake Word aktiviert (= kein MANUAL_MODE)", "MANUAL_MODE", invert=True)
@@ -140,6 +147,74 @@ class SettingsWindow(ctk.CTkToplevel):
         var = ctk.BooleanVar(value=value)
         ctk.CTkSwitch(row, text="", variable=var, width=46).pack(side="right")
         self._widgets[env_key] = ("switch_inverted" if invert else "switch", var)
+
+    def _add_gcal(self, parent):
+        has_token = (JARVIS_DIR / "google_token.json").exists()
+        has_creds = (JARVIS_DIR / "google_credentials.json").exists()
+        if has_token:
+            status_text, status_color = "● Verbunden", "#22c55e"
+        elif has_creds:
+            status_text, status_color = "○ Credentials vorhanden – noch nicht verbunden", "#f59e0b"
+        else:
+            status_text, status_color = "○ Nicht eingerichtet", "#888888"
+
+        self._gcal_status = ctk.StringVar(value=status_text)
+        self._gcal_color = status_color
+
+        status_label = ctk.CTkLabel(
+            parent, textvariable=self._gcal_status,
+            font=("SF Pro", 12), text_color=status_color, anchor="w",
+        )
+        status_label.pack(fill="x", padx=16, pady=(0, 6))
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(0, 8))
+
+        ctk.CTkButton(
+            row, text="credentials.json auswählen", width=200,
+            fg_color="#2a2a2a", hover_color="#3a3a3a", font=("SF Pro", 13),
+            command=lambda: self._pick_gcal(status_label),
+        ).pack(side="left")
+
+        self._btn_gcal = ctk.CTkButton(
+            row, text="Verbinden", width=100, font=("SF Pro", 13),
+            fg_color="#1e3a5f", hover_color="#2a4f7f",
+            command=lambda: self._connect_gcal(status_label),
+            state="normal" if has_creds else "disabled",
+        )
+        self._btn_gcal.pack(side="left", padx=12)
+
+    def _pick_gcal(self, status_label):
+        path = filedialog.askopenfilename(
+            title="Google Credentials JSON auswählen",
+            filetypes=[("JSON", "*.json")],
+        )
+        if not path:
+            return
+        JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(path, JARVIS_DIR / "google_credentials.json")
+        self._gcal_status.set("○ Credentials gespeichert – jetzt verbinden")
+        status_label.configure(text_color="#f59e0b")
+        self._btn_gcal.configure(state="normal")
+
+    def _connect_gcal(self, status_label):
+        self._gcal_status.set("⏳ Browser öffnet sich…")
+        self._btn_gcal.configure(state="disabled", text="Verbinde…")
+
+        def _run():
+            try:
+                import google_auth
+                google_auth.get_credentials()
+                self.after(0, lambda: [
+                    self._gcal_status.set("● Verbunden"),
+                    status_label.configure(text_color="#22c55e"),
+                ])
+            except Exception as e:
+                self.after(0, lambda: self._gcal_status.set(f"✗ Fehler: {e}"))
+            finally:
+                self.after(0, lambda: self._btn_gcal.configure(state="normal", text="Verbinden"))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _add_autostart(self, parent):
         row = ctk.CTkFrame(parent, fg_color="transparent")
