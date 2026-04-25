@@ -1,12 +1,13 @@
 import json
 import sqlite3
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from notion_client import Client as NotionClient
 import config
 import brain
 import btc
 import calendar_service
+import session_memory
 
 
 def _get_db() -> sqlite3.Connection:
@@ -174,14 +175,17 @@ _MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
            "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
 
-def build_system_prompt() -> str:
-    today = date.today()
-    today_str = f"{_WOCHENTAGE[today.weekday()]}, {today.day}. {_MONATE[today.month - 1]} {today.year}"
-    parts = [config.SYSTEM_PROMPT_BASE + f"\n\nHeute ist {today_str}."]
+def build_static_prompt() -> str:
+    """Stabiler Teil — für Prompt Caching geeignet. Ändert sich höchstens alle 15 min."""
+    parts = [config.SYSTEM_PROMPT_BASE]
 
     brain_section = brain.build_prompt_section()
     if brain_section:
         parts.append(brain_section)
+
+    session_section = session_memory.load_for_prompt(days=3)
+    if session_section:
+        parts.append(session_section)
 
     if not config.NOTION_API_KEY:
         return "\n\n".join(parts)
@@ -240,6 +244,29 @@ def build_system_prompt() -> str:
                 line += f": {k['notiz']}"
             lines.append(line)
         parts.append("\n".join(lines))
+
+    return "\n\n".join(parts)
+
+
+def build_dynamic_prompt() -> str:
+    """Volatiler Teil — Uhrzeit, BTC, Kalender. Nie gecacht."""
+    now = datetime.now()
+    hour = now.hour
+    today = now.date()
+    today_str = f"{_WOCHENTAGE[today.weekday()]}, {today.day}. {_MONATE[today.month - 1]} {today.year}"
+
+    if 5 <= hour < 11:
+        tageszeit = "Morgen"
+    elif 11 <= hour < 14:
+        tageszeit = "Mittag"
+    elif 14 <= hour < 18:
+        tageszeit = "Nachmittag"
+    elif 18 <= hour < 22:
+        tageszeit = "Abend"
+    else:
+        tageszeit = "Nacht"
+
+    parts = [f"Aktuelle Zeit: {today_str}, {now.strftime('%H:%M')} ({tageszeit})"]
 
     cal = calendar_service.format_for_prompt()
     if cal:

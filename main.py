@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import queue
+import signal
 import threading
 import time
 from enum import Enum
@@ -14,6 +15,7 @@ import tts
 import tools
 import context
 import brain
+import session_memory
 import config
 
 
@@ -26,6 +28,7 @@ class State(Enum):
 
 
 _state = State.IDLE
+_current_history: list[dict] = []
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
 TTS_BUFFER_MIN = 120  # Mindestzeichen bevor ein Chunk abgeschickt wird
@@ -48,7 +51,7 @@ def _compress_tool_result(tool_name: str, result: str) -> str:
     return result if len(result) <= 300 else result[:300] + "…"
 
 
-def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
+def _run_with_streaming_tts(system_static: str, system_dynamic: str, messages: list[dict]) -> str:
     """LLM streamen, Sätze buffern und gebündelt an ElevenLabs senden."""
     client_messages = messages.copy()
     full_response = ""
@@ -74,7 +77,7 @@ def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
         first_chunk_sent = False
 
         try:
-            with llm.stream(system_prompt, client_messages, tools.DEFINITIONS) as s:
+            with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS) as s:
                 for chunk in s.text_stream:
                     print(chunk, end="", flush=True)
                     buffer += chunk
@@ -142,12 +145,31 @@ def _run_with_streaming_tts(system_prompt: str, messages: list[dict]) -> str:
     return full_response
 
 
+def _shutdown():
+    global _current_history
+    if _current_history:
+        print("\n[session] Speichere Session...")
+        t = session_memory.save(list(_current_history))
+        t.join(timeout=10)
+    print("Auf Wiedersehen, Sir.")
+
+
+def _signal_handler(sig, frame):
+    _shutdown()
+    sys.exit(0)
+
+
 def main():
+    global _current_history
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGHUP, _signal_handler)
+
     print("J.A.R.V.I.S. startet...")
 
     brain.sync()
     context.refresh_if_stale()
-    system_prompt = context.build_system_prompt()
+    system_static = context.build_static_prompt()
     stt.load_model()
 
     wake_word_mode = not config.MANUAL_MODE
@@ -162,6 +184,7 @@ def main():
     tts.speak("Alle Systeme bereit, Sir.")
 
     history: list[dict] = []
+    _current_history = history
     in_conversation = False
     silent_turns = 0
     MAX_SILENT_TURNS = 2  # nach 2 leeren Aufnahmen → zurück zum Wake Word
@@ -213,17 +236,19 @@ def main():
             history.append({"role": "user", "content": user_text})
 
             context.refresh_if_stale()
-            system_prompt = context.build_system_prompt()
+            system_static = context.build_static_prompt()
+            system_dynamic = context.build_dynamic_prompt()
 
             set_state(State.THINKING)
-            response = _run_with_streaming_tts(system_prompt, history)
+            response = _run_with_streaming_tts(system_static, system_dynamic, history)
             history.append({"role": "assistant", "content": response})
-            history = history[-20:]
+            if len(history) > 20:
+                del history[:-20]
 
             print("─" * 50)
 
     except KeyboardInterrupt:
-        print("\n\nJ.A.R.V.I.S. beendet.")
+        _shutdown()
         sys.exit(0)
 
 

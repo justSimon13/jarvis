@@ -263,6 +263,24 @@ def build_prompt_section() -> str:
     if active_rules:
         parts.append("## Aktive Verhaltensregeln\n" + "\n".join(active_rules))
 
+    routines = settings.get("routines", {}) if isinstance(settings, dict) else {}
+    if routines:
+        routine_lines = []
+        for rname, rcfg in routines.items():
+            if not isinstance(rcfg, dict) or not rcfg.get("active", True):
+                continue
+            desc = rcfg.get("description", rname)
+            window = rcfg.get("window", {})
+            days_str = "/".join(window.get("days", [])) if window.get("days") else "täglich"
+            time_str = f"{window.get('from', '?')}–{window.get('to', '?')}" if window.get("from") else ""
+            prio = rcfg.get("priority", 99)
+            line = f"- [{prio}] {desc}"
+            if time_str:
+                line += f" ({days_str}, {time_str})"
+            routine_lines.append(line)
+        if routine_lines:
+            parts.append("## Aktive Routinen (nach Priorität)\n" + "\n".join(routine_lines))
+
     memory = data.get("memory", [])
     memory_lines = []
     if isinstance(memory, list):

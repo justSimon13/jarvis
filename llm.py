@@ -14,8 +14,11 @@ def _get_client() -> anthropic.Anthropic:
 
 
 @contextmanager
-def stream(system_prompt: str, messages: list[dict], tools: list[dict] = None):
-    system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None):
+    system = [
+        {"type": "text", "text": system_static, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": system_dynamic},
+    ]
 
     cached_tools = None
     if tools:
