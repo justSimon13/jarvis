@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import config
 
@@ -85,8 +85,67 @@ def _write(section: str, data):
 
 
 def sync():
-    """Beim Start: abgelaufene Pausen aus Settings entfernen."""
+    """Beim Start: abgelaufene Pausen entfernen und verpasste Routinen flaggen."""
     _check_expirations()
+    _check_missed_routines()
+
+
+def _check_missed_routines():
+    settings = _read("settings")
+    if not isinstance(settings, dict):
+        return
+    routines = settings.get("routines", {})
+    if not isinstance(routines, dict) or not routines:
+        return
+
+    now = datetime.now()
+    today_iso = now.date().isoformat()
+    now_time = now.strftime("%H:%M")
+    _DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    today_day = _DAYS[now.weekday()]
+
+    followups = _read("followups")
+    if not isinstance(followups, dict):
+        followups = {}
+
+    followups_changed = False
+    settings_changed = False
+
+    for rname, rcfg in routines.items():
+        if not isinstance(rcfg, dict) or not rcfg.get("active", True):
+            continue
+        if rcfg.get("last_done") == today_iso:
+            continue
+
+        days = rcfg.get("window", {}).get("days", [])
+        if days and today_day not in days:
+            continue
+
+        window_to = rcfg.get("window", {}).get("to", "23:59")
+        cutoff = rcfg.get("carry_over_until", window_to)
+        if now_time <= cutoff:
+            continue
+
+        deferred = rcfg.get("deferred_until")
+        if deferred:
+            if now_time < deferred:
+                continue
+            routines[rname].pop("deferred_until", None)
+            settings_changed = True
+
+        followup_key = f"missed_{rname}"
+        if followup_key not in followups:
+            short_name = rcfg.get("description", rname).split(":")[0]
+            followups[followup_key] = {
+                "text": f"Heute kein {short_name} — Warum? Nachholen, direkt zum Checkout oder alles erledigt?",
+                "mandatory": True,
+            }
+            followups_changed = True
+
+    if followups_changed:
+        _write("followups", followups)
+    if settings_changed:
+        _write("settings", settings)
 
 
 def _check_expirations():
@@ -197,7 +256,8 @@ def build_prompt_section() -> str:
     followups = data.get("followups", {})
     if isinstance(followups, dict) and followups:
         today_iso = date.today().isoformat()
-        active = []
+        mandatory_items = []
+        regular_items = []
         for k, v in followups.items():
             if not v:
                 continue
@@ -205,12 +265,21 @@ def build_prompt_section() -> str:
                 due = v.get("due")
                 if due and due > today_iso:
                     continue
-                active.append(v.get("text", str(v)))
+                text = v.get("text", str(v))
+                if v.get("mandatory"):
+                    mandatory_items.append(text)
+                else:
+                    regular_items.append(text)
             else:
-                active.append(str(v))
-        if active:
+                regular_items.append(str(v))
+        if mandatory_items:
+            lines = ["## PFLICHT-Follow-ups — sofort ansprechen, keine Ausnahme"]
+            for item in mandatory_items:
+                lines.append(f"- {item}")
+            parts.append("\n".join(lines))
+        if regular_items:
             lines = ["## Offene Follow-ups — heute aktiv ansprechen"]
-            for item in active:
+            for item in regular_items:
                 lines.append(f"- {item}")
             parts.append("\n".join(lines))
 
@@ -277,18 +346,24 @@ def build_prompt_section() -> str:
 
     routines = settings.get("routines", {}) if isinstance(settings, dict) else {}
     if routines:
+        today_iso = date.today().isoformat()
         routine_lines = []
         for rname, rcfg in routines.items():
             if not isinstance(rcfg, dict) or not rcfg.get("active", True):
+                continue
+            if rcfg.get("last_done") == today_iso:
                 continue
             desc = rcfg.get("description", rname)
             window = rcfg.get("window", {})
             days_str = "/".join(window.get("days", [])) if window.get("days") else "täglich"
             time_str = f"{window.get('from', '?')}–{window.get('to', '?')}" if window.get("from") else ""
             prio = rcfg.get("priority", 99)
+            deferred = rcfg.get("deferred_until")
             line = f"- [{prio}] {desc}"
             if time_str:
                 line += f" ({days_str}, {time_str})"
+            if deferred:
+                line += f" — verschoben auf {deferred}"
             routine_lines.append(line)
         if routine_lines:
             parts.append("## Aktive Routinen (nach Priorität)\n" + "\n".join(routine_lines))
