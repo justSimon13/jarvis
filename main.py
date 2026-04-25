@@ -145,11 +145,20 @@ def _run_with_streaming_tts(system_static: str, system_dynamic: str, messages: l
     return full_response
 
 
-def _shutdown():
+def _end_conversation() -> threading.Thread | None:
+    """Aktuelle Session speichern und History leeren. Für 24/7-Betrieb."""
     global _current_history
-    if _current_history:
-        print("\n[session] Speichere Session...")
-        t = session_memory.save(list(_current_history))
+    if not _current_history:
+        return None
+    print("\n[session] Gespräch beendet, speichere Session...")
+    t = session_memory.save(list(_current_history))
+    _current_history.clear()
+    return t
+
+
+def _shutdown():
+    t = _end_conversation()
+    if t:
         t.join(timeout=10)
     print("Auf Wiedersehen, Sir.")
 
@@ -196,6 +205,9 @@ def main():
             if wake_word_mode and not in_conversation:
                 print("\nHöre auf Wake Word...")
                 audio.listen_for_wake_word()
+                brain.check_missed_routines()
+                context.refresh_if_stale()
+                system_static = context.build_static_prompt()
 
             if wake_word_mode:
                 print("Ich höre... (Stille beendet Aufnahme)")
@@ -210,6 +222,8 @@ def main():
                 print("[!] Keine Aufnahme erkannt.")
                 silent_turns += 1
                 if silent_turns >= MAX_SILENT_TURNS:
+                    if in_conversation:
+                        _end_conversation()
                     in_conversation = False
                     silent_turns = 0
                 continue
@@ -225,6 +239,8 @@ def main():
                 print("[!] Kein Text erkannt.")
                 silent_turns += 1
                 if silent_turns >= MAX_SILENT_TURNS:
+                    if in_conversation:
+                        _end_conversation()
                     in_conversation = False
                     silent_turns = 0
                 continue

@@ -87,10 +87,10 @@ def _write(section: str, data):
 def sync():
     """Beim Start: abgelaufene Pausen entfernen und verpasste Routinen flaggen."""
     _check_expirations()
-    _check_missed_routines()
+    check_missed_routines()
 
 
-def _check_missed_routines():
+def check_missed_routines():
     settings = _read("settings")
     if not isinstance(settings, dict):
         return
