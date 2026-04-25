@@ -130,7 +130,7 @@ DEFINITIONS = [
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
             "Sections: 'profile', 'settings', 'memory', 'followups', 'context_config'. "
-            "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung oder null zum Löschen. "
+            "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung (String) oder {\"text\": \"...\", \"due\": \"YYYY-MM-DD\"} für zeitgesteuertes Erinnern — wird erst am/nach dem Datum angezeigt. null zum Löschen. "
             "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
             "Für Pausen flache Keys nutzen: key='checkin_pausiert_bis', value='2026-05-01'. "
             "Email-VIP manuell: section='settings', key='contacts.email_vip', value=[...bestehende Liste + X]. "

@@ -196,11 +196,23 @@ def build_prompt_section() -> str:
 
     followups = data.get("followups", {})
     if isinstance(followups, dict) and followups:
-        lines = ["## Offene Follow-ups — heute aktiv ansprechen"]
+        today_iso = date.today().isoformat()
+        active = []
         for k, v in followups.items():
-            if v:
-                lines.append(f"- {v}")
-        parts.append("\n".join(lines))
+            if not v:
+                continue
+            if isinstance(v, dict):
+                due = v.get("due")
+                if due and due > today_iso:
+                    continue
+                active.append(v.get("text", str(v)))
+            else:
+                active.append(str(v))
+        if active:
+            lines = ["## Offene Follow-ups — heute aktiv ansprechen"]
+            for item in active:
+                lines.append(f"- {item}")
+            parts.append("\n".join(lines))
 
     settings = data.get("settings", {})
     behavior = settings.get("behavior", {}) if isinstance(settings, dict) else {}
