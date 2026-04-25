@@ -1,22 +1,25 @@
-import whisper
 import numpy as np
 import scipy.io.wavfile as wav
+from elevenlabs.client import ElevenLabs
 import config
 
-_model = None
-_MIN_RMS = 0.01   # unter diesem Wert gilt die Aufnahme als zu leise
+_client = None
+_MIN_RMS = 0.01
 _MIN_SECONDS = 0.5
 
 
+def _get_client() -> ElevenLabs:
+    global _client
+    if _client is None:
+        _client = ElevenLabs(api_key=config.ELEVENLABS_API_KEY)
+    return _client
+
+
 def load_model():
-    global _model
-    if _model is None:
-        print(f"[stt] Lade Whisper-Modell '{config.WHISPER_MODEL}'...")
-        _model = whisper.load_model(config.WHISPER_MODEL)
+    pass
 
 
 def transcribe(wav_path: str) -> str:
-    # Leere oder zu leise Aufnahmen vor Whisper abfangen
     try:
         rate, data = wav.read(wav_path)
         if data.size == 0 or len(data) / rate < _MIN_SECONDS:
@@ -27,6 +30,10 @@ def transcribe(wav_path: str) -> str:
     except Exception:
         pass
 
-    load_model()
-    result = _model.transcribe(wav_path, language="de")
-    return result["text"].strip()
+    with open(wav_path, "rb") as f:
+        result = _get_client().speech_to_text.convert(
+            file=f,
+            model_id="scribe_v1",
+            language_code="de",
+        )
+    return result.text.strip()
