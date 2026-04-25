@@ -15,12 +15,17 @@ def _get_client() -> anthropic.Anthropic:
 
 @contextmanager
 def stream(system_prompt: str, messages: list[dict], tools: list[dict] = None):
-    kwargs = {"tools": tools} if tools else {}
+    system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+
+    cached_tools = None
+    if tools:
+        cached_tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
+
     with _get_client().messages.stream(
         model=MODEL,
         max_tokens=1024,
-        system=system_prompt,
+        system=system,
         messages=messages,
-        **kwargs,
+        **({"tools": cached_tools} if cached_tools else {}),
     ) as s:
         yield s
