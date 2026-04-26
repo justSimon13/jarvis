@@ -1,0 +1,11 @@
+anthropic>=0.40.0
+ddgs>=0.1.0
+elevenlabs>=1.0.0
+numpy
+scipy
+python-dotenv
+notion-client==2.2.1
+supabase>=2.0.0
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+websockets>=12.0

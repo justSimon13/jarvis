@@ -2,7 +2,6 @@ import subprocess
 import sys
 import tempfile
 import numpy as np
-import sounddevice as sd
 import config
 
 _elevenlabs_client = None
@@ -82,6 +81,7 @@ def speak_response(text_queue, done_event):
     fetcher = threading.Thread(target=fetch_worker, daemon=True)
     fetcher.start()
 
+    import sounddevice as sd
     with sd.OutputStream(samplerate=PCM_SAMPLERATE, channels=1, dtype="int16") as stream:
         while True:
             chunk = audio_queue.get()
@@ -90,6 +90,32 @@ def speak_response(text_queue, done_event):
             stream.write(np.frombuffer(chunk, dtype=np.int16))
 
     fetcher.join()
+    done_event.set()
+
+
+def stream_response_audio(text_queue, done_event, audio_callback):
+    """
+    Server-Modus: generiert PCM-Audio-Chunks und ruft audio_callback(bytes)
+    auf statt lokal abzuspielen. Beendet wenn None in text_queue kommt.
+    """
+    client = _get_elevenlabs()
+    while True:
+        text = text_queue.get()
+        if text is None:
+            break
+        try:
+            audio_stream = client.text_to_speech.convert(
+                voice_id=config.ELEVENLABS_VOICE_ID,
+                text=text,
+                model_id="eleven_turbo_v2_5",
+                output_format="pcm_24000",
+                voice_settings=_voice_settings(),
+            )
+            for chunk in audio_stream:
+                if chunk:
+                    audio_callback(chunk)
+        except Exception as e:
+            print(f"[tts] stream_response_audio Fehler: {e}")
     done_event.set()
 
 
