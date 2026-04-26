@@ -451,6 +451,25 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "notion_clear_page",
+        "description": (
+            "Löscht alle Blöcke (Inhalte) einer Notion-Seite, behält aber die Seite selbst. "
+            "Danach mit notion_append_blocks neu befüllen. "
+            "Verwenden wenn eine Seite aufgeräumt oder komplett neu geschrieben werden soll. "
+            "page_id aus notion_query oder notion_search_pages entnehmen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "ID der Notion-Seite",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
         "name": "notion_read_page",
         "description": (
             "Liest den vollständigen Textinhalt einer Notion-Seite (Blöcke: Paragraphen, Überschriften, "
@@ -662,6 +681,10 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 limit=tool_input.get("limit", 5),
             )
             return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "notion_clear_page":
+            n = notion_service.clear_page(page_id=tool_input["page_id"])
+            return f"{n} Blöcke gelöscht."
 
         if tool_name == "notion_read_page":
             return notion_service.read_page(page_id=tool_input["page_id"])

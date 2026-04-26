@@ -183,6 +183,28 @@ def _to_blocks(items: list[dict]) -> list[dict]:
     return result
 
 
+def clear_page(page_id: str) -> int:
+    """Löscht alle Blöcke einer Notion-Seite. Gibt die Anzahl gelöschter Blöcke zurück."""
+    client = _get_client()
+    deleted = 0
+    cursor = None
+    while True:
+        kwargs = {"block_id": page_id, "page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        response = client.blocks.children.list(**kwargs)
+        for block in response.get("results", []):
+            try:
+                client.blocks.update(block_id=block["id"], archived=True)
+                deleted += 1
+            except Exception:
+                pass
+        if not response.get("has_more"):
+            break
+        cursor = response.get("next_cursor")
+    return deleted
+
+
 def append_blocks(page_id: str, blocks: list[dict]) -> None:
     """Fügt Blöcke (Checkboxen, Text etc.) an eine bestehende Notion-Seite an."""
     _get_client().blocks.children.append(block_id=page_id, children=_to_blocks(blocks))
