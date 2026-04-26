@@ -13,6 +13,7 @@ import tts
 import tools
 import context
 import brain
+import session_memory
 import config
 import timer_service
 
@@ -179,6 +180,11 @@ class JarvisEngine(threading.Thread):
             if response:
                 history.append({"role": "assistant", "content": response})
                 history = history[-20:]
+
+        if history:
+            t = session_memory.save(list(history))
+            if t:
+                t.join(timeout=10)
 
     def _run_llm(self, system_static: str, system_dynamic: str, messages: list[dict]) -> str:
         client_messages = messages.copy()

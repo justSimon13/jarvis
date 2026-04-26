@@ -49,6 +49,7 @@ class AppWindow(ctk.CTk):
         self.after(500, self._start_tray)
         self.after(100, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.createcommand("tk::mac::Quit", self._quit)
 
     # ── UI Build ─────────────────────────────────────────────────────────────
 
