@@ -410,7 +410,8 @@ DEFINITIONS = [
         "name": "notion_append_blocks",
         "description": (
             "Fügt Blöcke (Checkboxen, Text, Aufzählungen) als Inhalt an eine bestehende Notion-Seite an. "
-            "Nützlich um z.B. einer Todo-Seite eine Checkliste hinzuzufügen. "
+            "WICHTIG: Immer ALLE Blöcke in einem einzigen Aufruf schicken — nicht mehrere Aufrufe hintereinander. "
+            "Bis zu 100 Blöcke pro Aufruf, bei mehr wird intern automatisch gebatcht. "
             "page_id aus notion_query oder notion_write (gibt page_id zurück) entnehmen."
         ),
         "input_schema": {

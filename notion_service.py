@@ -279,8 +279,11 @@ def clear_page(page_id: str) -> int:
 
 
 def append_blocks(page_id: str, blocks: list[dict]) -> None:
-    """Fügt Blöcke (Checkboxen, Text etc.) an eine bestehende Notion-Seite an."""
-    _get_client().blocks.children.append(block_id=page_id, children=_to_blocks(blocks))
+    """Fügt Blöcke an eine bestehende Notion-Seite an. Batcht automatisch bei > 100 Blöcken."""
+    notion_blocks = _to_blocks(blocks)
+    client = _get_client()
+    for i in range(0, len(notion_blocks), 100):
+        client.blocks.children.append(block_id=page_id, children=notion_blocks[i:i + 100])
 
 
 def read_page(page_id: str, max_blocks: int = 100) -> str:
