@@ -183,8 +183,81 @@ def _to_blocks(items: list[dict]) -> list[dict]:
     return result
 
 
+def _fetch_all_blocks(page_id: str) -> list:
+    client = _get_client()
+    blocks = []
+    cursor = None
+    while True:
+        kwargs = {"block_id": page_id, "page_size": 100}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        response = client.blocks.children.list(**kwargs)
+        blocks.extend(response.get("results", []))
+        if not response.get("has_more"):
+            break
+        cursor = response.get("next_cursor")
+    return blocks
+
+
+def _backup_dir():
+    import config as _cfg
+    d = _cfg.JARVIS_DIR / "notion_backups"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def backup_page(page_id: str) -> Path:
+    """Sichert alle Blöcke einer Seite lokal. Gibt den Backup-Pfad zurück."""
+    import json
+    from datetime import datetime
+    blocks = _fetch_all_blocks(page_id)
+    safe_id = page_id.replace("-", "")[:16]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = _backup_dir() / f"{safe_id}_{ts}.json"
+    path.write_text(json.dumps(blocks, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def restore_page(page_id: str) -> str:
+    """Stellt eine Seite aus dem neuesten lokalen Backup wieder her."""
+    import json
+    safe_id = page_id.replace("-", "")[:16]
+    backups = sorted(_backup_dir().glob(f"{safe_id}_*.json"), reverse=True)
+    if not backups:
+        return "Kein Backup für diese Seite gefunden."
+    blocks = json.loads(backups[0].read_text(encoding="utf-8"))
+
+    restored = []
+    for block in blocks:
+        t = block.get("type")
+        content = block.get(t, {})
+        new_block = {"object": "block", "type": t}
+        if "rich_text" in content:
+            new_block[t] = {"rich_text": content["rich_text"]}
+            if t == "to_do":
+                new_block[t]["checked"] = content.get("checked", False)
+            elif t == "code":
+                new_block[t]["language"] = content.get("language", "plain text")
+        elif t == "divider":
+            new_block[t] = {}
+        else:
+            continue
+        restored.append(new_block)
+
+    if not restored:
+        return "Backup enthält keine wiederherstellbaren Blöcke."
+
+    clear_page(page_id)
+    client = _get_client()
+    for i in range(0, len(restored), 100):
+        client.blocks.children.append(block_id=page_id, children=restored[i:i + 100])
+
+    return f"{len(restored)} Blöcke aus {backups[0].name} wiederhergestellt."
+
+
 def clear_page(page_id: str) -> int:
-    """Löscht alle Blöcke einer Notion-Seite. Gibt die Anzahl gelöschter Blöcke zurück."""
+    """Löscht alle Blöcke einer Notion-Seite. Erstellt vorher automatisch ein Backup."""
+    backup_page(page_id)
     client = _get_client()
     deleted = 0
     cursor = None

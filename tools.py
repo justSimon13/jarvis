@@ -454,9 +454,27 @@ DEFINITIONS = [
         "name": "notion_clear_page",
         "description": (
             "Löscht alle Blöcke (Inhalte) einer Notion-Seite, behält aber die Seite selbst. "
+            "Erstellt automatisch ein lokales Backup — mit notion_restore_page wiederherstellbar. "
             "Danach mit notion_append_blocks neu befüllen. "
-            "Verwenden wenn eine Seite aufgeräumt oder komplett neu geschrieben werden soll. "
             "page_id aus notion_query oder notion_search_pages entnehmen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "ID der Notion-Seite",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
+        "name": "notion_restore_page",
+        "description": (
+            "Stellt eine Notion-Seite aus dem letzten lokalen Backup wieder her. "
+            "Backup wird automatisch von notion_clear_page erstellt. "
+            "Verwenden wenn JARVIS eine Seite versehentlich geleert hat oder ein Rebuild schiefgelaufen ist."
         ),
         "input_schema": {
             "type": "object",
@@ -684,7 +702,10 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "notion_clear_page":
             n = notion_service.clear_page(page_id=tool_input["page_id"])
-            return f"{n} Blöcke gelöscht."
+            return f"{n} Blöcke gelöscht (Backup erstellt)."
+
+        if tool_name == "notion_restore_page":
+            return notion_service.restore_page(page_id=tool_input["page_id"])
 
         if tool_name == "notion_read_page":
             return notion_service.read_page(page_id=tool_input["page_id"])
