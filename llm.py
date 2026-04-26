@@ -26,7 +26,7 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
 
     with _get_client().messages.stream(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=8096,
         system=system,
         messages=messages,
         **({"tools": cached_tools} if cached_tools else {}),

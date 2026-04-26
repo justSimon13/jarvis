@@ -257,24 +257,24 @@ def restore_page(page_id: str) -> str:
 
 def clear_page(page_id: str) -> int:
     """Löscht alle Blöcke einer Notion-Seite. Erstellt vorher automatisch ein Backup."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     backup_page(page_id)
+    blocks = _fetch_all_blocks(page_id)
     client = _get_client()
+
+    def _delete(block_id):
+        try:
+            client.blocks.update(block_id=block_id, archived=True)
+            return True
+        except Exception:
+            return False
+
     deleted = 0
-    cursor = None
-    while True:
-        kwargs = {"block_id": page_id, "page_size": 100}
-        if cursor:
-            kwargs["start_cursor"] = cursor
-        response = client.blocks.children.list(**kwargs)
-        for block in response.get("results", []):
-            try:
-                client.blocks.update(block_id=block["id"], archived=True)
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = [ex.submit(_delete, b["id"]) for b in blocks]
+        for f in as_completed(futures):
+            if f.result():
                 deleted += 1
-            except Exception:
-                pass
-        if not response.get("has_more"):
-            break
-        cursor = response.get("next_cursor")
     return deleted
 
 
