@@ -286,63 +286,103 @@ def append_blocks(page_id: str, blocks: list[dict]) -> None:
         client.blocks.children.append(block_id=page_id, children=notion_blocks[i:i + 100])
 
 
-def read_page(page_id: str, max_blocks: int = 100) -> str:
-    """Liest den Textinhalt einer Notion-Seite (Blöcke) und gibt ihn als lesbaren Text zurück."""
-    def _extract_rich_text(rich_text: list) -> str:
-        return "".join(t.get("plain_text", "") for t in rich_text)
+def _block_to_text(block: dict, with_id: bool = False) -> str:
+    t = block.get("type", "")
+    data = block.get(t, {})
+    rt = data.get("rich_text", [])
+    text = "".join(x.get("plain_text", "") for x in rt)
+    if not text and t not in ("divider", "table_of_contents"):
+        return ""
+    if t == "heading_1":
+        rendered = f"# {text}"
+    elif t == "heading_2":
+        rendered = f"## {text}"
+    elif t == "heading_3":
+        rendered = f"### {text}"
+    elif t == "bulleted_list_item":
+        rendered = f"- {text}"
+    elif t == "numbered_list_item":
+        rendered = f"• {text}"
+    elif t == "to_do":
+        done = "✓" if data.get("checked") else "○"
+        rendered = f"{done} {text}"
+    elif t == "quote":
+        rendered = f"> {text}"
+    elif t == "code":
+        rendered = f"```{data.get('language', '')}\n{text}\n```"
+    elif t == "callout":
+        icon = (data.get("icon") or {}).get("emoji", "")
+        rendered = f"{icon} {text}".strip()
+    elif t == "divider":
+        rendered = "---"
+    else:
+        rendered = text
+    if with_id:
+        return f"[id:{block['id']}] {rendered}"
+    return rendered
 
-    def _block_to_text(block: dict) -> str:
-        t = block.get("type", "")
-        data = block.get(t, {})
-        rt = data.get("rich_text", [])
-        text = _extract_rich_text(rt)
-        if not text and t not in ("divider", "table_of_contents"):
-            return ""
-        if t == "heading_1":
-            return f"# {text}"
-        if t == "heading_2":
-            return f"## {text}"
-        if t == "heading_3":
-            return f"### {text}"
-        if t == "bulleted_list_item":
-            return f"- {text}"
-        if t == "numbered_list_item":
-            return f"• {text}"
-        if t == "to_do":
-            done = "✓" if data.get("checked") else "○"
-            return f"{done} {text}"
-        if t == "quote":
-            return f"> {text}"
-        if t == "code":
-            lang = data.get("language", "")
-            return f"```{lang}\n{text}\n```"
-        if t == "callout":
-            icon = (data.get("icon") or {}).get("emoji", "")
-            return f"{icon} {text}".strip()
-        if t == "divider":
-            return "---"
-        return text
 
+def read_page(page_id: str, max_blocks: int = 200, with_ids: bool = False) -> str:
+    """Liest den Textinhalt einer Notion-Seite. with_ids=True gibt Block-IDs mit aus."""
     client = _get_client()
     lines = []
     cursor = None
     fetched = 0
-
     while fetched < max_blocks:
         kwargs = {"block_id": page_id, "page_size": min(100, max_blocks - fetched)}
         if cursor:
             kwargs["start_cursor"] = cursor
         response = client.blocks.children.list(**kwargs)
         for block in response.get("results", []):
-            line = _block_to_text(block)
+            line = _block_to_text(block, with_id=with_ids)
             if line:
                 lines.append(line)
         fetched += len(response.get("results", []))
         if not response.get("has_more"):
             break
         cursor = response.get("next_cursor")
-
     return "\n".join(lines) if lines else "(Seite hat keinen lesbaren Textinhalt)"
+
+
+def update_block(block_id: str, text: str, block_type: str = "paragraph") -> None:
+    """Ändert den Textinhalt eines bestehenden Blocks."""
+    type_map = {
+        "paragraph": "paragraph",
+        "heading": "heading_2",
+        "heading_1": "heading_1",
+        "heading_2": "heading_2",
+        "heading_3": "heading_3",
+        "bullet": "bulleted_list_item",
+        "numbered": "numbered_list_item",
+        "to_do": "to_do",
+        "quote": "quote",
+    }
+    notion_type = type_map.get(block_type, block_type)
+    rich = [{"type": "text", "text": {"content": text}}]
+    payload = {notion_type: {"rich_text": rich}}
+    if notion_type == "to_do":
+        payload[notion_type]["checked"] = False
+    _get_client().blocks.update(block_id=block_id, **payload)
+
+
+def delete_blocks(block_ids: list[str]) -> int:
+    """Löscht mehrere Blöcke parallel. Gibt die Anzahl gelöschter Blöcke zurück."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    client = _get_client()
+
+    def _delete(bid):
+        try:
+            client.blocks.update(block_id=bid, archived=True)
+            return True
+        except Exception:
+            return False
+
+    deleted = 0
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for f in as_completed([ex.submit(_delete, bid) for bid in block_ids]):
+            if f.result():
+                deleted += 1
+    return deleted
 
 
 def search_pages(query: str, limit: int = 5) -> list[dict]:

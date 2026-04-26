@@ -491,21 +491,57 @@ DEFINITIONS = [
     {
         "name": "notion_read_page",
         "description": (
-            "Liest den vollständigen Textinhalt einer Notion-Seite (Blöcke: Paragraphen, Überschriften, "
-            "Checklisten, Aufzählungen etc.). "
-            "page_id aus notion_query oder notion_search_pages entnehmen. "
-            "Verwenden wenn Simon sagt 'zeig mir das Konzept X', 'lies die Seite Y' oder nach notion_search_pages "
-            "um den Inhalt einer gefundenen Seite zu lesen."
+            "Liest den vollständigen Textinhalt einer Notion-Seite. "
+            "with_ids=true gibt jede Zeile mit Block-ID zurück ([id:...]) — nötig wenn danach "
+            "notion_update_block oder notion_delete_blocks aufgerufen werden soll. "
+            "with_ids=false (Standard) für reines Lesen ohne Bearbeitungsabsicht."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
-                },
+                "page_id": {"type": "string", "description": "ID der Notion-Seite"},
+                "with_ids": {"type": "boolean", "description": "Block-IDs ausgeben (Standard: false)"},
             },
             "required": ["page_id"],
+        },
+    },
+    {
+        "name": "notion_update_block",
+        "description": (
+            "Ändert den Textinhalt eines einzelnen Blocks. "
+            "block_id aus notion_read_page (with_ids=true) entnehmen. "
+            "Für kleine Korrekturen — kein Clear/Rebuild der ganzen Seite nötig."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "block_id": {"type": "string", "description": "ID des Blocks"},
+                "text": {"type": "string", "description": "Neuer Textinhalt"},
+                "block_type": {
+                    "type": "string",
+                    "description": "Typ: paragraph, heading_1/2/3, bullet, numbered, to_do, quote (Standard: paragraph)",
+                },
+            },
+            "required": ["block_id", "text"],
+        },
+    },
+    {
+        "name": "notion_delete_blocks",
+        "description": (
+            "Löscht einen oder mehrere Blöcke aus einer Notion-Seite. "
+            "block_ids aus notion_read_page (with_ids=true) entnehmen. "
+            "Für gezieltes Entfernen von Duplikaten oder veralteten Abschnitten."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "block_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Liste der Block-IDs die gelöscht werden sollen",
+                },
+            },
+            "required": ["block_ids"],
         },
     },
     {
@@ -709,7 +745,22 @@ def execute(tool_name: str, tool_input: dict) -> str:
             return notion_service.restore_page(page_id=tool_input["page_id"])
 
         if tool_name == "notion_read_page":
-            return notion_service.read_page(page_id=tool_input["page_id"])
+            return notion_service.read_page(
+                page_id=tool_input["page_id"],
+                with_ids=tool_input.get("with_ids", False),
+            )
+
+        if tool_name == "notion_update_block":
+            notion_service.update_block(
+                block_id=tool_input["block_id"],
+                text=tool_input["text"],
+                block_type=tool_input.get("block_type", "paragraph"),
+            )
+            return "Block aktualisiert."
+
+        if tool_name == "notion_delete_blocks":
+            n = notion_service.delete_blocks(block_ids=tool_input["block_ids"])
+            return f"{n} Block(s) gelöscht."
 
         if tool_name == "timer_set":
             total_seconds = (tool_input.get("minutes", 0) * 60) + tool_input.get("seconds", 0)
