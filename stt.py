@@ -30,10 +30,14 @@ def transcribe(wav_path: str) -> str:
     except Exception:
         pass
 
-    with open(wav_path, "rb") as f:
-        result = _get_client().speech_to_text.convert(
-            file=f,
-            model_id="scribe_v1",
-            language_code="de",
-        )
-    return result.text.strip()
+    try:
+        with open(wav_path, "rb") as f:
+            result = _get_client().speech_to_text.convert(
+                file=f,
+                model_id="scribe_v1",
+                language_code="de",
+            )
+        return result.text.strip()
+    except Exception as e:
+        print(f"[stt] ElevenLabs Scribe Fehler: {e}")
+        return ""

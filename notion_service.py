@@ -188,6 +188,65 @@ def append_blocks(page_id: str, blocks: list[dict]) -> None:
     _get_client().blocks.children.append(block_id=page_id, children=_to_blocks(blocks))
 
 
+def read_page(page_id: str, max_blocks: int = 100) -> str:
+    """Liest den Textinhalt einer Notion-Seite (Blöcke) und gibt ihn als lesbaren Text zurück."""
+    def _extract_rich_text(rich_text: list) -> str:
+        return "".join(t.get("plain_text", "") for t in rich_text)
+
+    def _block_to_text(block: dict) -> str:
+        t = block.get("type", "")
+        data = block.get(t, {})
+        rt = data.get("rich_text", [])
+        text = _extract_rich_text(rt)
+        if not text and t not in ("divider", "table_of_contents"):
+            return ""
+        if t == "heading_1":
+            return f"# {text}"
+        if t == "heading_2":
+            return f"## {text}"
+        if t == "heading_3":
+            return f"### {text}"
+        if t == "bulleted_list_item":
+            return f"- {text}"
+        if t == "numbered_list_item":
+            return f"• {text}"
+        if t == "to_do":
+            done = "✓" if data.get("checked") else "○"
+            return f"{done} {text}"
+        if t == "quote":
+            return f"> {text}"
+        if t == "code":
+            lang = data.get("language", "")
+            return f"```{lang}\n{text}\n```"
+        if t == "callout":
+            icon = (data.get("icon") or {}).get("emoji", "")
+            return f"{icon} {text}".strip()
+        if t == "divider":
+            return "---"
+        return text
+
+    client = _get_client()
+    lines = []
+    cursor = None
+    fetched = 0
+
+    while fetched < max_blocks:
+        kwargs = {"block_id": page_id, "page_size": min(100, max_blocks - fetched)}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        response = client.blocks.children.list(**kwargs)
+        for block in response.get("results", []):
+            line = _block_to_text(block)
+            if line:
+                lines.append(line)
+        fetched += len(response.get("results", []))
+        if not response.get("has_more"):
+            break
+        cursor = response.get("next_cursor")
+
+    return "\n".join(lines) if lines else "(Seite hat keinen lesbaren Textinhalt)"
+
+
 def search_pages(query: str, limit: int = 5) -> list[dict]:
     """Sucht beliebige Notion-Seiten nach Titel (nicht nur Datenbank-Einträge)."""
     response = _get_client().search(

@@ -451,6 +451,26 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "notion_read_page",
+        "description": (
+            "Liest den vollständigen Textinhalt einer Notion-Seite (Blöcke: Paragraphen, Überschriften, "
+            "Checklisten, Aufzählungen etc.). "
+            "page_id aus notion_query oder notion_search_pages entnehmen. "
+            "Verwenden wenn Simon sagt 'zeig mir das Konzept X', 'lies die Seite Y' oder nach notion_search_pages "
+            "um den Inhalt einer gefundenen Seite zu lesen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "ID der Notion-Seite",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
         "name": "timer_set",
         "description": "Startet einen Timer der nach X Minuten/Sekunden abläuft. JARVIS spricht eine Erinnerung.",
         "input_schema": {
@@ -642,6 +662,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 limit=tool_input.get("limit", 5),
             )
             return json.dumps(results, ensure_ascii=False)
+
+        if tool_name == "notion_read_page":
+            return notion_service.read_page(page_id=tool_input["page_id"])
 
         if tool_name == "timer_set":
             total_seconds = (tool_input.get("minutes", 0) * 60) + tool_input.get("seconds", 0)
