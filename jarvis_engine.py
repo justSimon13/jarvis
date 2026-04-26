@@ -170,16 +170,17 @@ class JarvisEngine(threading.Thread):
 
             history.append({"role": "user", "content": user_text})
             context.refresh_if_stale()
-            system_prompt = context.build_system_prompt()
+            system_static = context.build_static_prompt()
+            system_dynamic = context.build_dynamic_prompt()
 
             self._emit("state", State.THINKING)
-            response = self._run_llm(system_prompt, history)
+            response = self._run_llm(system_static, system_dynamic, history)
 
             if response:
                 history.append({"role": "assistant", "content": response})
                 history = history[-20:]
 
-    def _run_llm(self, system_prompt: str, messages: list[dict]) -> str:
+    def _run_llm(self, system_static: str, system_dynamic: str, messages: list[dict]) -> str:
         client_messages = messages.copy()
         full_response = ""
         text_only = (self.mode == "text")
@@ -209,7 +210,7 @@ class JarvisEngine(threading.Thread):
             self._emit("response_start", None)
 
             try:
-                with llm.stream(system_prompt, client_messages, tools.DEFINITIONS) as s:
+                with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS) as s:
                     for chunk in s.text_stream:
                         buffer += chunk
                         turn_text += chunk
