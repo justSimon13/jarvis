@@ -213,11 +213,14 @@ class JarvisEngine(threading.Thread):
                 thinking_stop.set()
 
             first_chunk_sent = False
-            self._emit("response_start", None)
+            response_started = False
 
             try:
                 with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS) as s:
                     for chunk in s.text_stream:
+                        if not response_started:
+                            self._emit("response_start", None)
+                            response_started = True
                         buffer += chunk
                         turn_text += chunk
                         self._emit("response_chunk", chunk)

@@ -81,6 +81,9 @@ class ChatView(ctk.CTkScrollableFrame):
         self._scroll_to_bottom()
 
     def finalize_jarvis_message(self):
+        if self._current_jarvis_bubble is not None:
+            if not self._current_jarvis_bubble.cget("text"):
+                self._current_jarvis_bubble.master.destroy()
         self._current_jarvis_bubble = None
 
     def add_error(self, text: str):
