@@ -286,6 +286,7 @@ class JarvisEngine(threading.Thread):
                             "content": result,
                         })
                 client_messages = client_messages + [{"role": "user", "content": tool_results}]
+                client_messages = llm.compress_tool_history(client_messages)
                 self._emit("state", State.THINKING)
 
         return full_response

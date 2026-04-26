@@ -140,6 +140,7 @@ def _run_with_streaming_tts(system_static: str, system_dynamic: str, messages: l
                         "content": result,
                     })
             client_messages = client_messages + [{"role": "user", "content": tool_results}]
+            client_messages = llm.compress_tool_history(client_messages)
             set_state(State.THINKING)
 
     return full_response
