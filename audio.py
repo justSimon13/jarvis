@@ -17,9 +17,32 @@ def _input_channels() -> int:
     """Gibt die tatsächlich unterstützte Kanalanzahl des Input-Geräts zurück (min 1, max 2)."""
     try:
         info = sd.query_devices(_input_device(), "input")
-        return min(2, max(1, info["max_input_channels"]))
-    except Exception:
+        ch = int(info["max_input_channels"])
+        print(f"[audio] Input device: {info['name']!r}  max_input_channels={ch}", flush=True)
+        return min(2, max(1, ch))
+    except Exception as e:
+        print(f"[audio] _input_channels fallback (err: {e})", flush=True)
         return 1
+
+
+def _open_input_stream(samplerate: int, blocksize: int, callback) -> sd.InputStream:
+    """Öffnet InputStream; probiert verschiedene Channel-Counts wenn der erste fehlschlägt."""
+    device = _input_device()
+    for channels in (_input_channels(), 1, 2):
+        try:
+            stream = sd.InputStream(
+                samplerate=samplerate,
+                channels=channels,
+                dtype="float32",
+                blocksize=blocksize,
+                callback=callback,
+                device=device,
+            )
+            print(f"[audio] InputStream geöffnet: device={device!r} channels={channels}", flush=True)
+            return stream
+        except sd.PortAudioError as e:
+            print(f"[audio] channels={channels} fehlgeschlagen: {e}", flush=True)
+    raise sd.PortAudioError("InputStream: kein Channel-Count funktioniert")
 
 SAMPLE_RATE = 16000
 VAD_BLOCKSIZE = 512           # Silero VAD benötigt 512 samples @ 16kHz
@@ -83,14 +106,7 @@ def listen_for_wake_word(interrupt: threading.Event | None = None):
     infer_thread = threading.Thread(target=inference_worker, daemon=True)
     infer_thread.start()
 
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=_input_channels(),
-        dtype="float32",
-        blocksize=chunk_size,
-        callback=audio_callback,
-        device=_input_device(),
-    ):
+    with _open_input_stream(SAMPLE_RATE, chunk_size, audio_callback):
         while not detected.is_set():
             if interrupt and interrupt.is_set():
                 detected.set()
@@ -145,14 +161,7 @@ def record_with_vad(interrupt: threading.Event | None = None) -> str:
     vad_thread = threading.Thread(target=vad_worker, daemon=True)
     vad_thread.start()
 
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=_input_channels(),
-        dtype="float32",
-        blocksize=VAD_BLOCKSIZE,
-        callback=audio_callback,
-        device=_input_device(),
-    ):
+    with _open_input_stream(SAMPLE_RATE, VAD_BLOCKSIZE, audio_callback):
         while not stop_event.is_set():
             if interrupt and interrupt.is_set():
                 stop_event.set()

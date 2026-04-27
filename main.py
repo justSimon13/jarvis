@@ -105,8 +105,20 @@ def _on_event(event: dict):
 
 # ── Haupt-Loop ────────────────────────────────────────────────────────────────
 
+def _print_audio_devices():
+    import sounddevice as sd
+    print("[audio] Verfügbare Input-Geräte:")
+    for i, info in enumerate(sd.query_devices()):
+        ch = info.get("max_input_channels", 0)
+        if ch > 0:
+            print(f"  [{i}] {info['name']}  (in={ch}, {int(info['default_samplerate'])}Hz)")
+    default = sd.query_devices(kind="input")
+    print(f"[audio] System-Default Input: {default['name']!r}", flush=True)
+
+
 def main():
     print("J.A.R.V.I.S. startet...")
+    _print_audio_devices()
 
     brain.sync()
     context.refresh_if_stale()
