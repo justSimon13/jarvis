@@ -8,117 +8,86 @@ Zentrale Logik auf einem lokalen Server, Clients sind reine Ein-/Ausgabe-Geräte
 
 ## Repos
 
-| Repo | Beschreibung |
-|---|---|
-| `jarvis` | Server — läuft 24/7 auf HP EliteDesk |
-| `jarvis-app` | Mac + Windows Client mit GUI |
-| `jarvis-satellite` | Headless Audio Client (Laptop, Raspberry Pi) |
-| `jarvis-dashboard` | Wall Tablet PWA (React) — später |
+| Repo | URL | Beschreibung |
+|---|---|---|
+| `jarvis` | github.com/justSimon13/jarvis | Server — läuft 24/7 auf HP EliteDesk |
+| `jarvis-app` | github.com/justSimon13/jarvis-app | Mac + Windows Client mit GUI |
+| `jarvis-satellite` | github.com/justSimon13/jarvis-satellite | Headless Audio Client (Laptop, Raspberry Pi) |
+| `jarvis-dashboard` | — | Wall Tablet PWA (React) — später |
 
 ---
 
 ## Hardware
 
-| Gerät | Rolle |
-|---|---|
-| HP EliteDesk (Ubuntu Server) | Zentrales Gehirn, kein Audio direkt |
-| MacBook | Client 1 — GUI + Audio |
-| Alter Laptop (Linux) | Client 2 — Headless Audio (Schlafzimmer) |
-| Raspberry Pi pro Raum | Client 3+ — Headless Audio (Multi-Room) |
-| iPad / Android Tablet | Dashboard PWA — Transkript, Kalender, Todos |
+| Gerät | Rolle | Status |
+|---|---|---|
+| HP EliteDesk (Ubuntu Server) | Zentrales Gehirn, 24/7 | ⏳ Netzteil fehlt noch |
+| MacBook | Client 1 — GUI + Audio | ✅ läuft (standalone / server) |
+| Alter Laptop (Ubuntu) | Client 2 — Headless Audio | 🔧 einrichten |
+| Raspberry Pi pro Raum | Client 3+ — Headless Audio | später |
+| iPad / Android Tablet | Dashboard PWA | später |
 
-Netzwerk: LAN/WLAN im Heimnetz. Remote-Zugriff via Tailscale.
+Netzwerk: LAN/WLAN im Heimnetz. Remote-Zugriff via Tailscale (später).
 
 ---
 
-## Server (`jarvis`)
-
-### Dateistruktur
+## Wie alles zusammenhängt
 
 ```
-server.py           ← WebSocket Server, eine Pipeline-Instanz pro Client
-pipeline.py         ← Herzstück: STT → LLM → TTS, callback-basiert
-client_manager.py   ← Client-Registry, Active-Client-Tracking, Audio-Routing
-protocol.py         ← WebSocket Message-Typen und PCM-Format-Konstanten
-main.py             ← Standalone-Modus (Entwicklung/Fallback, keine WebSocket)
-llm.py              ← LLM-Abstraktion (aktuell Claude, austauschbar)
-stt.py              ← STT-Abstraktion (aktuell ElevenLabs Scribe, austauschbar)
-tts.py              ← TTS-Abstraktion (aktuell ElevenLabs, austauschbar)
-audio.py            ← Wake Word (OpenWakeWord) + VAD (Silero) — nur standalone
+┌─────────────────────────────────────────────────────┐
+│                   JARVIS Server                     │
+│  server.py  →  pipeline.py  →  llm / tts / stt     │
+│  Läuft auf: Mac (jetzt) → HP EliteDesk (später)     │
+└──────────────┬──────────────────────────────────────┘
+               │ WebSocket (ws://192.168.x.x:8765)
+       ┌───────┴────────┐
+       │                │
+  jarvis-app       jarvis-satellite
+  (Mac GUI)        (Ubuntu Laptop, headless)
+  Mikrofon → WAV   Mikrofon → WAV
+  PCM → Speaker    PCM → Speaker
+```
+
+**Wichtig:** Clients haben keine Logik, keine API Keys (außer JARVIS_SERVER).
+Alles — Claude, ElevenLabs, Notion, Brain — läuft auf dem Server.
+
+---
+
+## Modi
+
+| Modus | Beschreibung |
+|---|---|
+| **Standalone** | `python3 main.py` auf dem Mac. Kein Server nötig, alles lokal. Für Entwicklung. |
+| **Server** | `python3 server.py` — startet WebSocket Server, Clients verbinden sich. |
+| **Client** | `python3 client.py` (satellite) oder `python3 app.py` (GUI). Braucht laufenden Server. |
+
+---
+
+## Server-Dateien (`jarvis`)
+
+```
+server.py           ← WebSocket Server, eine Pipeline pro Client
+pipeline.py         ← STT → LLM → TTS, callback-basiert
+client_manager.py   ← Client-Registry, Audio-Routing
+protocol.py         ← Nachrichten-Typen + PCM-Format
+main.py             ← Standalone-Modus (kein WebSocket, Entwicklung)
+llm.py              ← Claude (austauschbar gegen Ollama etc.)
+stt.py              ← ElevenLabs Scribe (austauschbar)
+tts.py              ← ElevenLabs TTS (austauschbar)
+audio.py            ← Wake Word + VAD — nur im Standalone-Modus
 tools.py            ← Tool-Definitionen + execute()
-context.py          ← System Prompt: build_static_prompt() + build_dynamic_prompt()
-brain.py            ← Brain Storage (SQLite)
+context.py          ← System Prompt Builder
+brain.py            ← Langzeit-Speicher (SQLite)
 session_memory.py   ← Session History (SQLite)
 config.py           ← Konfiguration aus .env
 ```
 
-### pipeline.py — Interface
-
-```python
-class JarvisPipeline:
-    def __init__(self, client_id: str, on_event, on_audio):
-        # on_event(type, data)  → JSON-Event an Client senden
-        # on_audio(pcm_bytes)   → PCM-Audio an Client senden
-
-    def process_audio(self, wav_bytes: bytes)  # WAV → STT → process_text()
-    def process_text(self, text: str)          # LLM streaming → TTS → Callbacks
+### Datenbanken (lokal auf Server)
 ```
-
-Standalone (`main.py`):
-```python
-pipeline = JarvisPipeline(
-    client_id="local",
-    on_event=lambda t, d: ...,        # lokal verarbeiten
-    on_audio=lambda pcm: sd.play(pcm)
-)
+~/.jarvis/brain.db          ← Profil, Einstellungen, Memory, Follow-ups
+~/.jarvis/sessions.db       ← Session History (Zusammenfassungen)
+~/.jarvis/notion_cache.db   ← Notion API Cache
 ```
-
-Server (`server.py`):
-```python
-pipeline = JarvisPipeline(
-    client_id=ws.id,
-    on_event=lambda t, d: ws.send(json.dumps(...)),
-    on_audio=lambda pcm: ws.send(pcm)
-)
-```
-
-### client_manager.py — Interface
-
-```python
-class ClientManager:
-    def register(self, client_id: str, send_audio: callable)
-    def unregister(self, client_id: str)
-    def set_active(self, client_id: str)
-    def get_active(self) -> str
-    def send_audio_to(self, client_id: str, pcm: bytes)
-    def broadcast_event(self, type: str, data: dict)
-```
-
-### Datenbank (SQLite, lokal auf Server)
-
-```
-~/.jarvis/brain.db          ← Brain Storage (ersetzt Supabase)
-~/.jarvis/sessions.db       ← Session History (ersetzt Supabase)
-~/.jarvis/notion_cache.db   ← Notion API Cache (bereits SQLite, bleibt)
-```
-
-### Abstraktionsschichten
-
-LLM und TTS/STT sind bewusst abstrahiert — Austausch möglich sobald lokale
-Modelle gut genug sind (Ollama, Coqui, Piper).
-
----
-
-## Client-Modi
-
-| Client | Modus | Input | Output |
-|---|---|---|---|
-| `jarvis-app` | Voice-to-Voice | Mikrofon → WAV | PCM Audio abspielen |
-| `jarvis-app` | Text-to-Text | Texteingabe | `response_chunk` anzeigen, kein Audio |
-| `jarvis-satellite` | Voice-to-Voice | Mikrofon → WAV | PCM Audio abspielen |
-| `jarvis-dashboard` | Text-to-Text | — | Transkript + Status anzeigen |
-
-Text-to-Text signalisiert der Client mit `"tts": false` im `text_input` — Server überspringt TTS, spart Latenz und Kosten.
 
 ---
 
@@ -127,156 +96,192 @@ Text-to-Text signalisiert der Client mit `"tts": false` im `text_input` — Serv
 ```
 Mikrofon (Client)
     │
-    ▼
-Wake Word Detection     OpenWakeWord — hey_jarvis, ONNX
+    ▼  lokal auf Client
+Wake Word Detection     OpenWakeWord — hey_jarvis
     │
-    ▼
+    ▼  lokal auf Client
 VAD Recording           Silero VAD — stoppt bei Redepause
-    │  WAV bytes via WebSocket
-    ▼
-STT                     ElevenLabs Scribe  [abstrakt]
-    │  Text
-    ▼
-LLM                     Claude claude-sonnet-4-6, streaming, Prompt Caching  [abstrakt]
-    │  ├── Tool Call → execute() → Result → weiter streamen
-    │  Text-Chunks + PCM via WebSocket
-    ▼
-TTS                     ElevenLabs, sentence-buffered  [abstrakt]  ← entfällt bei tts=false
-    │  PCM (24kHz, mono, int16) via WebSocket
-    ▼
-Lautsprecher (Client)
+    │  WAV via WebSocket → Server
+    ▼  auf Server
+STT                     ElevenLabs Scribe
+    │
+    ▼  auf Server
+LLM                     Claude claude-sonnet-4-6, streaming
+    │  ├── Tool Call → execute() → weiter
+    │  PCM via WebSocket → Client
+    ▼  auf Server
+TTS                     ElevenLabs (entfällt bei tts=false)
+    │
+    ▼  auf Client
+Lautsprecher
 ```
 
 ---
 
 ## WebSocket Protokoll
 
-Binary Frames:
-- Client → Server: WAV-Audio (Spracheingabe)
-- Server → Client: PCM-Audio (TTS-Antwort, 24kHz mono int16)
+**Binary:** Client → Server: WAV | Server → Client: PCM (24kHz, mono, int16)
 
-JSON Frames (Server → Client):
+**JSON Server → Client:**
 ```
 state            idle | listening | thinking | speaking | tool_running
-status           Statustext ("Transkribiere…")
-transcript       Erkannter Sprachtext
-response_start   LLM-Antwort beginnt
+transcript       Erkannter Text
 response_chunk   Streaming-Chunk
-response_done    Antwort abgeschlossen
-tool             Tool wird ausgeführt
+response_done    Antwort fertig
+tool             Tool-Name
 error            Fehlermeldung
 ```
 
-JSON Frames (Client → Server):
+**JSON Client → Server:**
 ```
-text_input       {"type": "text_input", "text": "...", "tts": false}
-ping / pong      Keep-alive
+text_input    {"type": "text_input", "text": "...", "tts": true/false}
+              tts=false → kein Audio, nur Text (Text-Mode)
 ```
 
 ---
 
-## Modi & Personas
+## Setup-Guide
 
-Gleiche Wissensbasis, unterschiedliche Oberfläche.
-
-| Modus | Ton | Ziel |
-|---|---|---|
-| Assistent | Präzise, reaktiv | Aufgaben erledigen |
-| Coach | Fordernd, proaktiv | Wachstum einfordern |
-| Fokus | Minimal | Unterbrechungen vermeiden |
-
-Moduswechsel: manuell per Ansage, automatisch nach Tageszeit.
-Jeder Modus hat eigene ElevenLabs-Stimme.
+### Situation A — Standalone (Mac, kein Server)
+Für Entwicklung und solange kein Server läuft.
+```bash
+cd jarvis
+python3 main.py
+```
+Fertig. Alles läuft lokal auf dem Mac.
 
 ---
 
-## Server-Setup (Schritt für Schritt)
+### Situation B — Mac als Server + Ubuntu Laptop als Client (aktuell)
 
-### Schritt 1 — Daten migrieren (Mac)
+#### Schritt 1: Mac-IP herausfinden
+```bash
+# auf dem Mac:
+ipconfig getifaddr en0        # WLAN
+ipconfig getifaddr en1        # LAN (falls per Kabel)
+# Ergebnis z.B. 192.168.1.42
 ```
-python3 migrate.py
-```
-Zieht Brain + Sessions aus Supabase → SQLite. Gibt danach die scp-Befehle aus.
 
-### Schritt 2 — HP EliteDesk einrichten
-Ubuntu Server installieren (kein Desktop nötig), dann:
+#### Schritt 2: Server auf dem Mac starten
+```bash
+cd /path/to/jarvis
+python3 server.py
+# → [server] J.A.R.V.I.S. bereit — ws://0.0.0.0:8765
 ```
+Der Server läuft jetzt und wartet auf Clients.
+
+#### Schritt 3: Ubuntu Laptop einrichten
+```bash
+# System-Abhängigkeiten
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv git portaudio19-dev
+
+# Repo klonen
+git clone https://github.com/justSimon13/jarvis-satellite
+cd jarvis-satellite
+
+# Python-Umgebung
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Konfiguration
+cp .env.example .env
+nano .env
+```
+
+In der `.env` eintragen:
+```
+JARVIS_SERVER=ws://192.168.1.42:8765   ← Mac-IP von Schritt 1
+MANUAL_MODE=false
+AUDIO_INPUT_DEVICE=                     ← leer lassen, auto-detect
+```
+
+#### Schritt 4: Client starten
+```bash
+source .venv/bin/activate
+python3 client.py
+# → [client] Verbinde mit ws://192.168.1.42:8765…
+# → [client] Verbunden!
+# → [client] Warte auf Wake Word…
+```
+Sag "Hey JARVIS" — der Mac verarbeitet, der Laptop spricht.
+
+---
+
+### Situation C — HP EliteDesk als Server (sobald Netzteil da)
+
+#### Schritt 1: Ubuntu Server installieren
+Minimal-Installation, kein Desktop.
+
+#### Schritt 2: Server einrichten
+```bash
+git clone https://github.com/justSimon13/jarvis
+cd jarvis
 bash install_server.sh
 ```
-Installiert Python-Umgebung, Abhängigkeiten und registriert einen systemd-Service
-der JARVIS automatisch beim Boot startet.
 
-### Schritt 3 — API Keys eintragen
+#### Schritt 3: API Keys eintragen
+```bash
+nano .env
 ```
-nano ~/jarvis/.env
-```
-Folgende Keys eintragen: `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `NOTION_API_KEY` etc.
+Eintragen: `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`,
+`NOTION_API_KEY`, `EMAIL_ADDRESS`, `EMAIL_PASSWORD` etc.
 `SUPABASE_URL` und `SUPABASE_KEY` weglassen — nicht mehr nötig.
 
-### Schritt 4 — SQLite-Daten kopieren
-```
-scp ~/.jarvis/brain.db user@<server-ip>:~/.jarvis/brain.db
-scp ~/.jarvis/sessions.db user@<server-ip>:~/.jarvis/sessions.db
+#### Schritt 4: Brain-Daten kopieren (vom Mac)
+```bash
+# auf dem Mac:
+SERVER_IP=192.168.1.xxx   # IP des HP EliteDesk
+scp ~/.jarvis/brain.db simon@$SERVER_IP:~/.jarvis/brain.db
+scp ~/.jarvis/sessions.db simon@$SERVER_IP:~/.jarvis/sessions.db
 ```
 
-### Schritt 5 — Server starten
-```
+#### Schritt 5: Server starten
+```bash
 sudo systemctl start jarvis
-sudo systemctl status jarvis   # prüfen ob er läuft
+sudo systemctl status jarvis
 journalctl -u jarvis -f        # Live-Logs
 ```
 
-### Schritt 6 — Feste IP für den Server (Router)
-Im Router-Interface (meistens 192.168.1.1 oder fritz.box) eine DHCP-Reservierung
-für den HP EliteDesk einrichten — damit bekommt er immer dieselbe lokale IP.
-Danach nie mehr ändern.
+#### Schritt 6: Feste IP im Router
+Im Router-Interface (meistens fritz.box oder 192.168.1.1):
+DHCP-Reservierung für den HP EliteDesk einrichten.
+Damit bekommt er immer dieselbe IP — einmal konfigurieren, nie wieder ändern.
 
-### Schritt 7 — Clients verbinden
-
-**Mac:**
-In `.env` des Mac-Repos:
+#### Schritt 7: Clients auf neue Server-IP umstellen
+In `.env` jedes Clients:
 ```
-JARVIS_SERVER=ws://192.168.1.xxx:8765
-```
-App neu starten → verbindet automatisch mit dem Server.
-
-**Laptop (Headless):**
-```
-bash install_client.sh
-nano ~/jarvis/.env   # JARVIS_SERVER=ws://192.168.1.xxx:8765 eintragen
-systemctl --user start jarvis-client
+JARVIS_SERVER=ws://192.168.1.xxx:8765   ← IP des HP EliteDesk
 ```
 
 ---
 
-## Remote-Zugriff (Tailscale) — später einrichten
+## Remote-Zugriff (Tailscale) — später
 
-Tailscale ist ein VPN-Tool das alle deine Geräte in ein virtuelles Netzwerk steckt —
-egal ob zuhause oder unterwegs. Damit erreichst du den JARVIS-Server auch vom Café aus.
-
-**Solange du nur zuhause bist: nicht nötig.** Lokale IP reicht völlig.
+Tailscale steckt alle Geräte in ein privates VPN — erreichbar von überall.
+**Solange du nur zuhause bist: nicht nötig.**
 
 Einrichten wenn gewünscht:
-1. Tailscale auf Server, Mac und Laptop installieren (`tailscale.com`)
-2. Alle Geräte mit demselben Account einloggen
-3. Tailscale-IP des Servers herausfinden: `tailscale ip`
-4. `JARVIS_SERVER=ws://<tailscale-ip>:8765` in `.env` aller Clients setzen
-5. Funktioniert dann überall — zuhause wie unterwegs, verschlüsselt, ohne offene Ports
+1. `tailscale.com` → auf Server, Mac und Laptop installieren
+2. Alle mit demselben Account einloggen
+3. `tailscale ip` auf dem Server → gibt die Tailscale-IP zurück
+4. `JARVIS_SERVER=ws://<tailscale-ip>:8765` in alle Clients eintragen
 
 ---
 
 ## Offene Punkte
 
+- [x] SQLite Brain + Sessions (brain.py, session_memory.py)
+- [x] Migration Supabase → SQLite (migrate.py)
+- [x] pipeline.py + client_manager.py implementieren
+- [x] server.py auf Pipeline umgestellt
+- [x] jarvis-app Repo angelegt (github.com/justSimon13/jarvis-app)
+- [x] jarvis-satellite Repo angelegt (github.com/justSimon13/jarvis-satellite)
 - [ ] HP EliteDesk: Ubuntu Server, systemd Service, feste IP
-- [x] SQLite Schema für Brain + Session definieren
-- [x] Migration Supabase → SQLite (`brain.py`, `session_memory.py`, `migrate.py`)
-- [x] `pipeline.py` implementieren + `main.py` darauf umstellen
-- [x] `client_manager.py` implementieren
-- [x] `server.py` auf Pipeline + ClientManager umstellen
-- [ ] `jarvis-app` Repo anlegen — GUI-Code aus `jarvis` rausziehen: `app.py`, `gui/`, `jarvis_engine.py`, `audio.py`, `protocol.py`, `config.py`, eigene `requirements.txt`
-- [ ] `jarvis-satellite` Repo anlegen — Headless-Code rausziehen: `client.py`, `audio.py`, `protocol.py`, `config.py`, `requirements_client.txt` → wird zu `requirements.txt`
-- [ ] Abstraktionsschicht LLM formalisieren
-- [ ] Abstraktionsschicht TTS/STT formalisieren
-- [ ] Background Task System (später)
+- [ ] Ubuntu Laptop als Client 2 einrichten (jarvis-satellite)
 - [ ] Tailscale auf Server + Clients einrichten
-- [ ] Wall Tablet PWA (später)
+- [ ] Abstraktionsschicht LLM (Claude → Ollama)
+- [ ] Abstraktionsschicht TTS/STT
+- [ ] Background Task System
+- [ ] Wall Tablet PWA (jarvis-dashboard)
