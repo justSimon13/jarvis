@@ -25,24 +25,55 @@ def _input_channels() -> int:
         return 1
 
 
+_INPUT_BLACKLIST = ("iphone", "ipad", "teams", "eqmac")
+_INPUT_PREFER = ("macbook", "mikrofon", "microphone", "kopfhörer", "headphone")
+
+
+def _rank_input_device(name: str) -> int:
+    """Niedrigerer Rang = höhere Priorität."""
+    n = name.lower()
+    if any(b in n for b in _INPUT_BLACKLIST):
+        return 99
+    for i, p in enumerate(_INPUT_PREFER):
+        if p in n:
+            return i
+    return 50
+
+
 def _open_input_stream(samplerate: int, blocksize: int, callback) -> sd.InputStream:
-    """Öffnet InputStream; probiert verschiedene Channel-Counts wenn der erste fehlschlägt."""
-    device = _input_device()
-    for channels in (_input_channels(), 1, 2):
+    """Öffnet InputStream. Explizit konfiguriertes Gerät zuerst, sonst nach Präferenz sortiert."""
+    explicit = _input_device()
+    if explicit is not None:
+        candidates: list[int] = [explicit]
+    else:
+        # Alle echten Input-Geräte nach Präferenz sortiert
+        devs = [
+            (i, info) for i, info in enumerate(sd.query_devices())
+            if info.get("max_input_channels", 0) > 0
+        ]
+        devs.sort(key=lambda x: _rank_input_device(x[1]["name"]))
+        candidates = [i for i, _ in devs]
+
+    for device in candidates:
+        try:
+            dev_info = sd.query_devices(device)
+            ch = max(1, min(2, int(dev_info.get("max_input_channels", 1))))
+        except Exception:
+            ch = 1
         try:
             stream = sd.InputStream(
                 samplerate=samplerate,
-                channels=channels,
+                channels=ch,
                 dtype="float32",
                 blocksize=blocksize,
                 callback=callback,
                 device=device,
             )
-            print(f"[audio] InputStream geöffnet: device={device!r} channels={channels}", flush=True)
+            print(f"[audio] InputStream: [{device}] {dev_info.get('name', '?')!r} ch={ch}", flush=True)
             return stream
         except sd.PortAudioError as e:
-            print(f"[audio] channels={channels} fehlgeschlagen: {e}", flush=True)
-    raise sd.PortAudioError("InputStream: kein Channel-Count funktioniert")
+            print(f"[audio] [{device}] fehlgeschlagen: {e}", flush=True)
+    raise sd.PortAudioError("InputStream: kein Input-Gerät funktioniert")
 
 SAMPLE_RATE = 16000
 VAD_BLOCKSIZE = 512           # Silero VAD benötigt 512 samples @ 16kHz
