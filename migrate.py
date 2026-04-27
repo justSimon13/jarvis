@@ -56,11 +56,9 @@ def migrate_brain():
 
 def _read_supabase_brain() -> dict | None:
     try:
-        import os
-        from dotenv import load_dotenv
-        load_dotenv()
-        url = os.getenv("SUPABASE_URL", "")
-        key = os.getenv("SUPABASE_KEY", "")
+        import config  # holt URL/Key auch aus Hardcode-Defaults
+        url = config.SUPABASE_URL
+        key = config.SUPABASE_KEY
         if not url or not key:
             return None
         from supabase import create_client
