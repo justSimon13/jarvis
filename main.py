@@ -132,7 +132,12 @@ def main():
     )
 
     def shutdown(sig=None, frame=None):
-        pipeline.save_session()
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            pipeline.save_session()
+        except Exception:
+            pass
         print("\nAuf Wiedersehen, Sir.")
         sys.exit(0)
 
@@ -143,7 +148,7 @@ def main():
 
     in_conversation = False
     silent_turns = 0
-    MAX_SILENT_TURNS = 2
+    MAX_SILENT_TURNS = 1
 
     print("\nJ.A.R.V.I.S. bereit.")
     if not config.MANUAL_MODE:
@@ -199,6 +204,7 @@ def main():
             silent_turns = 0
             in_conversation = True
             pipeline.process_text(user_text, use_tts=True)
+            import time; time.sleep(0.6)  # Audio aushalten lassen bevor Mic öffnet
             print("─" * 50)
 
     except KeyboardInterrupt:

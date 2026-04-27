@@ -10,7 +10,7 @@ import config
 
 def _input_device():
     v = config.AUDIO_INPUT_DEVICE
-    return int(v) if v is not None else None
+    return int(v) if v else None
 
 
 def _input_channels() -> int:

@@ -67,7 +67,16 @@ def _summarize(history: list[dict]) -> dict | None:
                 ),
             }],
         )
-        return json.loads(response.content[0].text.strip())
+        raw = response.content[0].text.strip()
+        if not raw:
+            return None
+        # Claude gibt manchmal ```json ... ``` zurück trotz Anweisung
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        return json.loads(raw)
     except Exception as e:
         print(f"[session] Zusammenfassung fehlgeschlagen: {e}")
         return None
