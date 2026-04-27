@@ -183,6 +183,7 @@ def main():
                         pipeline.save_session()
                     in_conversation = False
                     silent_turns = 0
+                    import time; time.sleep(1.5)  # Pause vor Wake-Word damit kein Sofort-Retriggering
                 continue
 
             print("Transkribiere...")
@@ -199,6 +200,7 @@ def main():
                         pipeline.save_session()
                     in_conversation = False
                     silent_turns = 0
+                    import time; time.sleep(1.5)
                 continue
 
             silent_turns = 0

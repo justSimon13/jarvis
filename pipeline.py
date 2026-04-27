@@ -61,7 +61,10 @@ class JarvisPipeline:
     def process_text(self, text: str, use_tts: bool = True):
         """Text → LLM → (TTS) → Events"""
         self.history.append({"role": "user", "content": text})
-        context.refresh_if_stale()
+        # Nur beim ersten Turn einer Konversation refreshen — nicht nach jedem Turn.
+        # Sonst sieht JARVIS seine eigenen Notion-Updates als neue Info und wiederholt sie.
+        if len(self.history) == 1:
+            context.refresh_if_stale()
         system_static = context.build_static_prompt()
         system_dynamic = context.build_dynamic_prompt()
 
