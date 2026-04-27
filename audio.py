@@ -12,6 +12,15 @@ def _input_device():
     v = config.AUDIO_INPUT_DEVICE
     return int(v) if v is not None else None
 
+
+def _input_channels() -> int:
+    """Gibt die tatsächlich unterstützte Kanalanzahl des Input-Geräts zurück (min 1, max 2)."""
+    try:
+        info = sd.query_devices(_input_device(), "input")
+        return min(2, max(1, info["max_input_channels"]))
+    except Exception:
+        return 1
+
 SAMPLE_RATE = 16000
 VAD_BLOCKSIZE = 512           # Silero VAD benötigt 512 samples @ 16kHz
 VAD_MAX_SECONDS = 30          # Maximale Aufnahmedauer
@@ -76,7 +85,7 @@ def listen_for_wake_word(interrupt: threading.Event | None = None):
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
-        channels=1,
+        channels=_input_channels(),
         dtype="float32",
         blocksize=chunk_size,
         callback=audio_callback,
@@ -138,7 +147,7 @@ def record_with_vad(interrupt: threading.Event | None = None) -> str:
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
-        channels=1,
+        channels=_input_channels(),
         dtype="float32",
         blocksize=VAD_BLOCKSIZE,
         callback=audio_callback,

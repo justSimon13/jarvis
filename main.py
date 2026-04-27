@@ -23,24 +23,39 @@ from pipeline import JarvisPipeline
 # ── Lokale Audio-Wiedergabe ───────────────────────────────────────────────────
 
 class _LocalPlayer:
-    """Persistenter Playback-Thread für PCM-Audio (kein Knacken zwischen Chunks)."""
+    """Lazy-open Playback-Thread: OutputStream nur während Wiedergabe offen.
+    Verhindert Core Audio-Konflikte mit dem InputStream beim Wake-Word-Hören."""
+
+    _STOP = object()
+    _IDLE_TIMEOUT = 0.3  # Sekunden Stille bis Stream geschlossen wird
 
     def __init__(self):
         import sounddevice as sd
         import numpy as np
+        self._sd = sd
         self._np = np
         self._q: queue.Queue = queue.Queue()
-        self._STOP = object()
+        threading.Thread(target=self._worker, daemon=True).start()
 
-        def _worker():
-            with sd.OutputStream(samplerate=tts.PCM_SAMPLERATE, channels=1, dtype="int16") as stream:
+    def _worker(self):
+        while True:
+            # Warte auf ersten Chunk — kein OutputStream offen während Idle
+            chunk = self._q.get()
+            if chunk is self._STOP:
+                return
+
+            with self._sd.OutputStream(
+                samplerate=tts.PCM_SAMPLERATE, channels=1, dtype="int16"
+            ) as stream:
+                stream.write(self._np.frombuffer(chunk, dtype=self._np.int16))
                 while True:
-                    chunk = self._q.get()
-                    if chunk is self._STOP:
-                        return
-                    stream.write(self._np.frombuffer(chunk, dtype=self._np.int16))
-
-        threading.Thread(target=_worker, daemon=True).start()
+                    try:
+                        chunk = self._q.get(timeout=self._IDLE_TIMEOUT)
+                        if chunk is self._STOP:
+                            return
+                        stream.write(self._np.frombuffer(chunk, dtype=self._np.int16))
+                    except queue.Empty:
+                        break  # Keine weiteren Chunks → Stream schließen
 
     def write(self, pcm_bytes: bytes):
         self._q.put(pcm_bytes)
