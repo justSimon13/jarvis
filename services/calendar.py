@@ -2,7 +2,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from googleapiclient.discovery import build
-import google_auth
+from services import google_auth
 import config
 
 _CACHE_PATH = config.JARVIS_DIR / "calendar_cache.json"

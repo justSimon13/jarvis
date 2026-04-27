@@ -10,8 +10,9 @@ Voraussetzungen:
 Dann dieses Script ausführen:
     python3 setup_google.py
 """
-from pathlib import Path
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 credentials_path = Path.home() / ".jarvis" / "google_credentials.json"
 
@@ -26,7 +27,7 @@ if not credentials_path.exists():
     sys.exit(1)
 
 print("Starte OAuth-Flow (Browser öffnet sich)...")
-import google_auth
+from services import google_auth
 creds = google_auth.get_credentials()
 print(f"✓ Token gespeichert: {google_auth.TOKEN_PATH}")
 print("Google Calendar ist jetzt für JARVIS eingerichtet.")

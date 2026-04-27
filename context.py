@@ -5,8 +5,8 @@ from datetime import date, datetime, timedelta
 from notion_client import Client as NotionClient
 import config
 import brain
-import btc
-import calendar_service
+from services import btc
+from services import calendar as calendar_service
 import session_memory
 
 

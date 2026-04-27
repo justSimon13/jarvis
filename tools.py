@@ -1,14 +1,14 @@
 import json
-import notion_service
 import brain
-import calendar_service
-import email_service
-import btc
-import reminders_service
-import search
-import weather
-import apple_music_service
-import timer_service
+from services import notion as notion_service
+from services import calendar as calendar_service
+from services import email as email_service
+from services import btc
+from services import reminders as reminders_service
+from services import search
+from services import weather
+from services import apple_music as apple_music_service
+from services import timer as timer_service
 
 DEFINITIONS = [
     {
