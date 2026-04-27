@@ -25,5 +25,7 @@ ERROR = "error"               # {"type": "error", "message": "..."}
 PONG = "pong"                 # {"type": "pong"}
 
 # ── Client → Server ───────────────────────────────────────────────────────────
-TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "..."}
+TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": bool}
+                              #   tts=True  → LLM + TTS (Voice-Mode, Default)
+                              #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}

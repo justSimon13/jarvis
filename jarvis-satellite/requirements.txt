@@ -1,0 +1,7 @@
+numpy
+scipy
+sounddevice
+openwakeword
+silero-vad
+python-dotenv
+websockets>=12.0

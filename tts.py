@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import tempfile
+import threading
 import numpy as np
 import config
 
@@ -27,21 +28,21 @@ def _voice_settings():
 
 
 def speak(text: str):
-    """Vollständigen Text sprechen (Fallback / kurze Texte)."""
+    """Vollständigen Text sprechen (Startup-Meldungen, kurze Texte)."""
     if config.ELEVENLABS_API_KEY:
         _speak_elevenlabs(text)
     else:
         _speak_native(text)
 
 
-def speak_response(text_queue, done_event):
+def speak_response(text_queue, done_event, audio_callback=None):
     """
-    Liest Text-Chunks aus text_queue, ruft ElevenLabs auf und spielt
-    alles über EINEN persistenten OutputStream ab — kein Knacken zwischen Chunks.
+    Liest Text-Chunks aus text_queue, ruft ElevenLabs auf und gibt Audio aus.
     Beendet wenn None in text_queue kommt.
-    """
-    import queue as _queue
 
+    audio_callback=None    : lokal abspielen via sounddevice (standalone)
+    audio_callback=callable: PCM-Bytes an Callback übergeben (server/pipeline)
+    """
     if not config.ELEVENLABS_API_KEY:
         chunks = []
         while True:
@@ -49,20 +50,19 @@ def speak_response(text_queue, done_event):
             if t is None:
                 break
             chunks.append(t)
-        _speak_native(" ".join(chunks))
+        if chunks:
+            _speak_native(" ".join(chunks))
         done_event.set()
         return
 
     client = _get_elevenlabs()
-    audio_queue = _queue.Queue()
-    _SENTINEL = object()
 
-    def fetch_worker():
+    if audio_callback:
+        # Callback-Modus: ElevenLabs → callback(pcm_bytes)
         while True:
             text = text_queue.get()
             if text is None:
-                audio_queue.put(_SENTINEL)
-                return
+                break
             try:
                 audio_stream = client.text_to_speech.convert(
                     voice_id=config.ELEVENLABS_VOICE_ID,
@@ -73,50 +73,50 @@ def speak_response(text_queue, done_event):
                 )
                 for chunk in audio_stream:
                     if chunk:
-                        audio_queue.put(chunk)
+                        audio_callback(chunk)
             except Exception as e:
                 print(f"[tts] Fehler: {e}")
+        done_event.set()
 
-    import threading
-    fetcher = threading.Thread(target=fetch_worker, daemon=True)
-    fetcher.start()
+    else:
+        # Lokaler Modus: ElevenLabs → interner Queue → persistenter OutputStream
+        import sounddevice as sd
 
-    import sounddevice as sd
-    with sd.OutputStream(samplerate=PCM_SAMPLERATE, channels=1, dtype="int16") as stream:
-        while True:
-            chunk = audio_queue.get()
-            if chunk is _SENTINEL:
-                break
-            stream.write(np.frombuffer(chunk, dtype=np.int16))
+        internal_queue = _Queue()
+        _SENTINEL = object()
 
-    fetcher.join()
-    done_event.set()
+        def fetch_worker():
+            while True:
+                text = text_queue.get()
+                if text is None:
+                    internal_queue.put(_SENTINEL)
+                    return
+                try:
+                    audio_stream = client.text_to_speech.convert(
+                        voice_id=config.ELEVENLABS_VOICE_ID,
+                        text=text,
+                        model_id="eleven_turbo_v2_5",
+                        output_format="pcm_24000",
+                        voice_settings=_voice_settings(),
+                    )
+                    for chunk in audio_stream:
+                        if chunk:
+                            internal_queue.put(chunk)
+                except Exception as e:
+                    print(f"[tts] Fehler: {e}")
 
+        fetcher = threading.Thread(target=fetch_worker, daemon=True)
+        fetcher.start()
 
-def stream_response_audio(text_queue, done_event, audio_callback):
-    """
-    Server-Modus: generiert PCM-Audio-Chunks und ruft audio_callback(bytes)
-    auf statt lokal abzuspielen. Beendet wenn None in text_queue kommt.
-    """
-    client = _get_elevenlabs()
-    while True:
-        text = text_queue.get()
-        if text is None:
-            break
-        try:
-            audio_stream = client.text_to_speech.convert(
-                voice_id=config.ELEVENLABS_VOICE_ID,
-                text=text,
-                model_id="eleven_turbo_v2_5",
-                output_format="pcm_24000",
-                voice_settings=_voice_settings(),
-            )
-            for chunk in audio_stream:
-                if chunk:
-                    audio_callback(chunk)
-        except Exception as e:
-            print(f"[tts] stream_response_audio Fehler: {e}")
-    done_event.set()
+        with sd.OutputStream(samplerate=PCM_SAMPLERATE, channels=1, dtype="int16") as stream:
+            while True:
+                chunk = internal_queue.get()
+                if chunk is _SENTINEL:
+                    break
+                stream.write(np.frombuffer(chunk, dtype=np.int16))
+
+        fetcher.join()
+        done_event.set()
 
 
 def _speak_elevenlabs(text: str):
@@ -143,3 +143,8 @@ def _speak_native(text: str):
         subprocess.run(["say", "-v", "Anna", text], check=True)
     else:
         subprocess.run(["espeak", "-v", "de", text], stderr=subprocess.DEVNULL)
+
+
+# queue.Queue Alias um Import oben zu vermeiden
+import queue as _queue_module
+_Queue = _queue_module.Queue

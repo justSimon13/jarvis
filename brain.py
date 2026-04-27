@@ -1,88 +1,49 @@
+import json
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
-import config
 
 _SECTIONS = ["profile", "settings", "memory", "followups", "context_config"]
-_MEMORY_DEFAULT = []
-_DICT_DEFAULT = {}
-
-# Lokaler Fallback-Pfad falls Supabase nicht konfiguriert
-_LOCAL_DIR = Path.home() / ".jarvis" / "brain"
+_DB_PATH = Path.home() / ".jarvis" / "brain.db"
 
 
-def _use_supabase() -> bool:
-    return bool(config.SUPABASE_URL and config.SUPABASE_KEY)
+# ── SQLite I/O ────────────────────────────────────────────────────────────────
 
+def _get_db() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS brain (
+            section TEXT PRIMARY KEY,
+            data    TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.commit()
+    return conn
 
-def _get_client():
-    from supabase import create_client
-    return create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-
-
-def _default(section: str):
-    return _MEMORY_DEFAULT.copy() if section == "memory" else dict(_DICT_DEFAULT)
-
-
-# ── Supabase I/O ──────────────────────────────────────────────────────────────
-
-def _sb_read(section: str):
-    try:
-        result = _get_client().table("brain").select("data").eq("section", section).single().execute()
-        return result.data["data"] if result.data else _default(section)
-    except Exception as e:
-        print(f"[brain] Supabase read error ({section}): {e}")
-        return _default(section)
-
-
-def _sb_write(section: str, data):
-    try:
-        _get_client().table("brain").upsert(
-            {"section": section, "data": data},
-            on_conflict="section"
-        ).execute()
-    except Exception as e:
-        print(f"[brain] Supabase write error ({section}): {e}")
-
-
-# ── Lokales Fallback I/O ──────────────────────────────────────────────────────
-
-def _local_path(section: str) -> Path:
-    return _LOCAL_DIR / f"{section}.json"
-
-
-def _local_read(section: str):
-    import json
-    p = _local_path(section)
-    if not p.exists():
-        return _default(section)
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return _default(section)
-
-
-def _local_write(section: str, data):
-    import json
-    _LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-    _local_path(section).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
 
 def _read(section: str):
-    if _use_supabase():
-        return _sb_read(section)
-    return _local_read(section)
+    with _get_db() as conn:
+        row = conn.execute(
+            "SELECT data FROM brain WHERE section = ?", (section,)
+        ).fetchone()
+    if not row:
+        return [] if section == "memory" else {}
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return [] if section == "memory" else {}
 
 
 def _write(section: str, data):
-    if _use_supabase():
-        _sb_write(section, data)
-    else:
-        _local_write(section, data)
+    with _get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO brain (section, data) VALUES (?, ?)",
+            (section, json.dumps(data, ensure_ascii=False))
+        )
 
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def sync():
     """Beim Start: abgelaufene Pausen entfernen und verpasste Routinen flaggen."""

@@ -19,6 +19,7 @@ EMAIL_SEND_ENABLED = os.getenv("EMAIL_SEND_ENABLED", "false").lower() == "true"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 AUDIO_INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE")  # None = System-Default
 WEATHER_CITY = os.getenv("WEATHER_CITY", "Stuttgart")
+JARVIS_SERVER = os.getenv("JARVIS_SERVER", "")  # z.B. "ws://100.x.x.x:8765" — leer = Standalone
 
 VERSION = "1.2.0"
 GITHUB_REPO = "justSimon13/jarvis"

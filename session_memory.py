@@ -1,12 +1,35 @@
 import json
+import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import anthropic
 import config
 
-_SESSIONS_FILE = Path.home() / ".jarvis" / "brain" / "sessions.jsonl"
+_DB_PATH = Path.home() / ".jarvis" / "sessions.db"
 
+
+# ── SQLite I/O ────────────────────────────────────────────────────────────────
+
+def _get_db() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            date       TEXT NOT NULL,
+            time       TEXT NOT NULL,
+            summary    TEXT,
+            context    TEXT,
+            follow_ups TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+# ── Zusammenfassung via LLM ───────────────────────────────────────────────────
 
 def _summarize(history: list[dict]) -> dict | None:
     if not history:
@@ -27,8 +50,6 @@ def _summarize(history: list[dict]) -> dict | None:
     if not turns:
         return None
 
-    conversation_text = "\n".join(turns)
-
     try:
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         response = client.messages.create(
@@ -42,33 +63,37 @@ def _summarize(history: list[dict]) -> dict | None:
                     '{"summary": "2-3 Sätze: Was wurde besprochen, entschieden, getan?", '
                     '"context": ["Max 3 kurze Hinweise zu Simons Stimmung/Zustand/Situation"], '
                     '"follow_ups": ["Max 3 offene Punkte die beim nächsten Gespräch relevant sein könnten"]}\n\n'
-                    f"Gespräch:\n{conversation_text}"
+                    f"Gespräch:\n{chr(10).join(turns)}"
                 ),
             }],
         )
-        text = response.content[0].text.strip()
-        return json.loads(text)
+        return json.loads(response.content[0].text.strip())
     except Exception as e:
         print(f"[session] Zusammenfassung fehlgeschlagen: {e}")
         return None
 
 
+# ── Public API ────────────────────────────────────────────────────────────────
+
 def save(history: list[dict]) -> threading.Thread:
-    """Session asynchron zusammenfassen und speichern. Gibt Thread zurück zum joinen."""
+    """Session asynchron zusammenfassen und in SQLite speichern."""
     def _do_save():
         summary_data = _summarize(history)
         if not summary_data:
             return
         now = datetime.now()
-        entry = {
-            "date": now.date().isoformat(),
-            "time": now.strftime("%H:%M"),
-            **summary_data,
-        }
-        _SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SESSIONS_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        print(f"[session] Gespeichert: {entry['summary'][:60]}...")
+        with _get_db() as conn:
+            conn.execute(
+                "INSERT INTO sessions (date, time, summary, context, follow_ups) VALUES (?, ?, ?, ?, ?)",
+                (
+                    now.date().isoformat(),
+                    now.strftime("%H:%M"),
+                    summary_data.get("summary", ""),
+                    json.dumps(summary_data.get("context", []), ensure_ascii=False),
+                    json.dumps(summary_data.get("follow_ups", []), ensure_ascii=False),
+                )
+            )
+        print(f"[session] Gespeichert: {summary_data.get('summary', '')[:60]}...")
 
     t = threading.Thread(target=_do_save, daemon=False)
     t.start()
@@ -76,38 +101,27 @@ def save(history: list[dict]) -> threading.Thread:
 
 
 def load_for_prompt(days: int = 3) -> str:
-    """Letzte Sessions als System-Prompt-Abschnitt formatieren."""
-    if not _SESSIONS_FILE.exists():
-        return ""
-
     cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
-    recent = []
 
     try:
-        with open(_SESSIONS_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    if entry.get("date", "") >= cutoff:
-                        recent.append(entry)
-                except json.JSONDecodeError:
-                    pass
+        with _get_db() as conn:
+            rows = conn.execute(
+                """SELECT date, time, summary, context, follow_ups
+                   FROM sessions WHERE date >= ?
+                   ORDER BY date, time""",
+                (cutoff,)
+            ).fetchall()
     except Exception:
         return ""
 
-    if not recent:
+    if not rows:
         return ""
 
     lines = ["## Letzte Sessions"]
-    for entry in recent[-5:]:
-        date_str = entry.get("date", "")
-        time_str = entry.get("time", "")
-        summary = entry.get("summary", "")
-        context_items = entry.get("context", [])
-        follow_ups = entry.get("follow_ups", [])
+    for row in rows[-5:]:
+        date_str, time_str, summary, context_json, follow_ups_json = row
+        context_items = json.loads(context_json or "[]")
+        follow_ups = json.loads(follow_ups_json or "[]")
 
         line = f"- {date_str} {time_str}: {summary}"
         if context_items:
