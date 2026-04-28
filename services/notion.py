@@ -1,4 +1,5 @@
 from datetime import date as date_cls
+from pathlib import Path
 from notion_client import Client as NotionClient
 import config
 import context
