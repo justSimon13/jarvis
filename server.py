@@ -19,6 +19,7 @@ import stt
 from client_manager import ClientManager
 from pipeline import JarvisPipeline
 from services import alarm as alarm_service
+from services import client_music as client_music_service
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
@@ -91,6 +92,7 @@ async def main():
     context.refresh_if_stale()
     stt.load_model()
     alarm_service.init(manager)
+    client_music_service.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
     async with websockets.serve(handle_connection, HOST, PORT):
         await asyncio.Future()

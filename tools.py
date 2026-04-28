@@ -10,6 +10,7 @@ from services import weather
 from services import apple_music as apple_music_service
 from services import timer as timer_service
 from services import alarm as alarm_service
+from services import client_music as client_music_service
 
 DEFINITIONS = [
     {
@@ -561,6 +562,7 @@ DEFINITIONS = [
                 "target": {"type": "string", "description": "Client-Name (z.B. 'schlafzimmer'). Leer = aktiver Client."},
                 "snooze_minutes": {"type": "integer", "description": "Snooze-Dauer in Minuten (Standard: 9)"},
                 "max_snooze": {"type": "integer", "description": "Max. erlaubte Snoozes (Standard: 2)"},
+                "song": {"type": "string", "description": "Song/Artist als Weckton via YouTube (z.B. 'Eye of the Tiger'). Leer = Standard-Beep."},
             },
             "required": ["hour", "minute", "label"],
         },
@@ -619,6 +621,33 @@ DEFINITIONS = [
                 "minute": {"type": "integer", "description": "Minute (0-59)"},
             },
             "required": ["label", "hour", "minute"],
+        },
+    },
+    {
+        "name": "client_music_play",
+        "description": (
+            "Spielt einen Song auf dem Satellite-Client ab (mpv + YouTube). "
+            "Für Musik im Schlafzimmer, Wohnzimmer etc. "
+            "target: Client-Name (z.B. 'schlafzimmer'). Leer = aktiver Client."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "song": {"type": "string", "description": "Song, Artist oder Playlist-Beschreibung"},
+                "target": {"type": "string", "description": "Client-Name (optional, leer = aktiver Client)"},
+                "volume": {"type": "integer", "description": "Lautstärke 0–100 (Standard: 70)"},
+            },
+            "required": ["song"],
+        },
+    },
+    {
+        "name": "client_music_stop",
+        "description": "Stoppt die Musikwiedergabe auf dem Satellite-Client.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "Client-Name (optional, leer = aktiver Client)"},
+            },
         },
     },
     {
@@ -813,6 +842,18 @@ def execute(tool_name: str, tool_input: dict) -> str:
             n = notion_service.delete_blocks(block_ids=tool_input["block_ids"])
             return f"{n} Block(s) gelöscht."
 
+        if tool_name == "client_music_play":
+            client_music_service.play(
+                song=tool_input["song"],
+                target=tool_input.get("target") or None,
+                volume=tool_input.get("volume", 70),
+            )
+            return f"Spiele '{tool_input['song']}' auf Client."
+
+        if tool_name == "client_music_stop":
+            client_music_service.stop(target=tool_input.get("target") or None)
+            return "Musik gestoppt."
+
         if tool_name == "alarm_start":
             alarm_id, fires_at = alarm_service.schedule(
                 label=tool_input["label"],
@@ -821,6 +862,7 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 target=tool_input.get("target") or None,
                 snooze_minutes=tool_input.get("snooze_minutes", 9),
                 max_snooze=tool_input.get("max_snooze", 2),
+                song=tool_input.get("song") or None,
             )
             return f"Alarm gesetzt: '{tool_input['label']}' um {fires_at} Uhr. (ID: {alarm_id})"
 

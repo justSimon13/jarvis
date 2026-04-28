@@ -17,7 +17,7 @@ def init(client_manager) -> None:
 
 def schedule(label: str, hour: int, minute: int,
              target: str | None = None, snooze_minutes: int = 9,
-             max_snooze: int = 3) -> tuple[str, str]:
+             max_snooze: int = 2, song: str | None = None) -> tuple[str, str]:
     alarm_id = f"alarm_{int(time.time() * 1000)}"
     fires_at = f"{hour:02d}:{minute:02d}"
     _alarm_targets[alarm_id] = target
@@ -29,6 +29,7 @@ def schedule(label: str, hour: int, minute: int,
         "label": label,
         "snooze_minutes": snooze_minutes,
         "max_snooze": max_snooze,
+        "song": song,
     })
     return alarm_id, fires_at
 
