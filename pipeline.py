@@ -21,8 +21,18 @@ import tools
 import tts
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
-_NOISE_ONLY = re.compile(r'^(\s*\([^)]*\)\s*)+$')
+_STRIP_PARENS = re.compile(r'\([^)]*\)')
+_NON_ALPHA = re.compile(r'[^\w]', re.UNICODE)
+_MIN_MEANINGFUL = 3
 TTS_BUFFER_MIN = 120
+
+
+def _is_noise(text: str) -> bool:
+    """True wenn text keine bedeutsame Sprache enthält (nur Geräuschbeschreibungen, Kurzfüller etc.)"""
+    if not text:
+        return True
+    cleaned = _STRIP_PARENS.sub('', text).strip()
+    return len(_NON_ALPHA.sub('', cleaned)) < _MIN_MEANINGFUL
 
 
 class JarvisPipeline:
@@ -52,7 +62,7 @@ class JarvisPipeline:
         except OSError:
             pass
 
-        if not user_text or _NOISE_ONLY.match(user_text):
+        if _is_noise(user_text):
             self._emit(P.STATE, state="idle")
             return
 
