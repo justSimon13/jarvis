@@ -21,6 +21,7 @@ import tools
 import tts
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
+_NOISE_ONLY = re.compile(r'^(\s*\([^)]*\)\s*)+$')
 TTS_BUFFER_MIN = 120
 
 
@@ -51,7 +52,7 @@ class JarvisPipeline:
         except OSError:
             pass
 
-        if not user_text:
+        if not user_text or _NOISE_ONLY.match(user_text):
             self._emit(P.STATE, state="idle")
             return
 
