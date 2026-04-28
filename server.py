@@ -48,6 +48,14 @@ async def handle_connection(websocket):
     manager.register(client_id, send_audio)
     send_json({"type": P.STATE, "state": "idle"})
 
+    # Kurze Begrüßung damit der Client weiß dass er verbunden ist
+    print("[server] Starte Greeting…", flush=True)
+    try:
+        await loop.run_in_executor(None, pipeline.process_text, "Sag nur: Bereit.", True)
+        print("[server] Greeting fertig.", flush=True)
+    except Exception as e:
+        print(f"[server] Greeting Fehler: {e}", flush=True)
+
     try:
         async for message in websocket:
             if isinstance(message, bytes):

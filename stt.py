@@ -4,7 +4,7 @@ from elevenlabs.client import ElevenLabs
 import config
 
 _client = None
-_MIN_RMS = 0.01
+_MIN_RMS = 0.001
 _MIN_SECONDS = 0.5
 
 
@@ -25,7 +25,9 @@ def transcribe(wav_path: str) -> str:
         if data.size == 0 or len(data) / rate < _MIN_SECONDS:
             return ""
         rms = float(np.sqrt(np.mean((data.astype(np.float32) / 32768) ** 2)))
+        print(f"[stt] rate={rate} samples={data.size} duration={len(data)/rate:.1f}s rms={rms:.4f}", flush=True)
         if rms < _MIN_RMS:
+            print(f"[stt] Zu leise (rms={rms:.4f} < {_MIN_RMS}) — übersprungen", flush=True)
             return ""
     except Exception:
         pass
