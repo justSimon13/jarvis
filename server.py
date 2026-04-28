@@ -47,6 +47,7 @@ async def handle_connection(websocket):
     )
 
     manager.register(client_id, send_audio)
+    manager.register_event(client_id, send_json)
     send_json({"type": P.STATE, "state": "idle"})
 
     # Kurze Begrüßung damit der Client weiß dass er verbunden ist
