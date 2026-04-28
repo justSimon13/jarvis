@@ -7,6 +7,7 @@ import threading
 class ClientManager:
     def __init__(self):
         self._clients: dict[str, callable] = {}  # client_id → send_audio(pcm: bytes)
+        self._names: dict[str, str] = {}         # client_id → name
         self._active: str | None = None
         self._lock = threading.Lock()
 
@@ -16,9 +17,14 @@ class ClientManager:
             if self._active is None:
                 self._active = client_id
 
+    def set_name(self, client_id: str, name: str):
+        with self._lock:
+            self._names[client_id] = name.lower()
+
     def unregister(self, client_id: str):
         with self._lock:
             self._clients.pop(client_id, None)
+            self._names.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
 
@@ -34,6 +40,14 @@ class ClientManager:
     def send_audio_to(self, client_id: str, pcm: bytes):
         with self._lock:
             cb = self._clients.get(client_id)
+        if cb:
+            cb(pcm)
+
+    def send_audio_to_name(self, name: str, pcm: bytes):
+        name = name.lower()
+        with self._lock:
+            client_id = next((cid for cid, n in self._names.items() if n == name), None)
+            cb = self._clients.get(client_id) if client_id else None
         if cb:
             cb(pcm)
 

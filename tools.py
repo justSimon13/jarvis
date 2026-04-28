@@ -9,6 +9,7 @@ from services import search
 from services import weather
 from services import apple_music as apple_music_service
 from services import timer as timer_service
+from services import alarm as alarm_service
 
 DEFINITIONS = [
     {
@@ -545,6 +546,51 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "alarm_start",
+        "description": (
+            "Stellt einen JARVIS-Wecker der auf dem Ziel-Client klingelt bis Simon ihn aktiv bestätigt. "
+            "Unter der Woche: max_snooze=0. Am Wochenende: max_snooze=2. "
+            "target: Name des Clients wo der Alarm klingeln soll (z.B. 'schlafzimmer'). "
+            "Leer lässt = aktiver Client."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hour": {"type": "integer", "description": "Stunde (0–23)"},
+                "minute": {"type": "integer", "description": "Minute (0–59)"},
+                "label": {"type": "string", "description": "Bezeichnung, z.B. 'Aufstehen'"},
+                "target": {"type": "string", "description": "Client-Name (z.B. 'schlafzimmer'). Leer = aktiver Client."},
+                "max_snooze": {"type": "integer", "description": "Max. erlaubte Snoozes (0 = kein Snooze)"},
+            },
+            "required": ["hour", "minute", "label"],
+        },
+    },
+    {
+        "name": "alarm_dismiss",
+        "description": (
+            "Stoppt den aktiven Wecker sofort. Aufrufen wenn Simon sagt 'Wecker aus', 'Ich bin wach' o.ä. "
+            "Ohne alarm_id werden alle aktiven Alarme gestoppt."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alarm_id": {"type": "string", "description": "ID des Alarms (optional, leer = alle)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "alarm_snooze",
+        "description": "Snooze: stoppt den klingelnden Alarm und startet ihn nach N Minuten neu. Nur wenn max_snooze > 0.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "minutes": {"type": "integer", "description": "Snooze-Dauer in Minuten (Standard: 5)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "timer_set",
         "description": "Startet einen Timer der nach X Minuten/Sekunden abläuft. JARVIS spricht eine Erinnerung.",
         "input_schema": {
@@ -761,6 +807,24 @@ def execute(tool_name: str, tool_input: dict) -> str:
         if tool_name == "notion_delete_blocks":
             n = notion_service.delete_blocks(block_ids=tool_input["block_ids"])
             return f"{n} Block(s) gelöscht."
+
+        if tool_name == "alarm_start":
+            alarm_id, fires_at = alarm_service.schedule(
+                label=tool_input["label"],
+                hour=tool_input["hour"],
+                minute=tool_input["minute"],
+                target=tool_input.get("target") or None,
+                max_snooze=tool_input.get("max_snooze", 0),
+            )
+            return f"Alarm gesetzt: '{tool_input['label']}' um {fires_at} Uhr. (ID: {alarm_id})"
+
+        if tool_name == "alarm_dismiss":
+            ok = alarm_service.dismiss(tool_input.get("alarm_id") or None)
+            return "Alarm gestoppt." if ok else "Kein aktiver Alarm."
+
+        if tool_name == "alarm_snooze":
+            ok, msg = alarm_service.snooze_alarm(minutes=tool_input.get("minutes", 5))
+            return msg
 
         if tool_name == "timer_set":
             total_seconds = (tool_input.get("minutes", 0) * 60) + tool_input.get("seconds", 0)

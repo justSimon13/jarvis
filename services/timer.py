@@ -1,4 +1,3 @@
-import subprocess
 import threading
 import time
 import datetime
@@ -77,7 +76,4 @@ def _fire(timer_id: str, label: str):
 
 
 def _notify(message: str):
-    subprocess.Popen([
-        "osascript", "-e",
-        f'display notification "{message}" with title "J.A.R.V.I.S." sound name "Glass"',
-    ])
+    pass  # Benachrichtigung via TTS-Callback ausreichend

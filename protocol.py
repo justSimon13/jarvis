@@ -29,3 +29,4 @@ TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": boo
                               #   tts=True  → LLM + TTS (Voice-Mode, Default)
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
+CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer"}

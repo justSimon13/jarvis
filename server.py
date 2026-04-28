@@ -18,6 +18,7 @@ import protocol as P
 import stt
 from client_manager import ClientManager
 from pipeline import JarvisPipeline
+from services import alarm as alarm_service
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
@@ -69,6 +70,11 @@ async def handle_connection(websocket):
                     await loop.run_in_executor(
                         None, pipeline.process_text, data["text"], use_tts
                     )
+                elif data.get("type") == P.CLIENT_HELLO:
+                    name = data.get("name", "")
+                    if name:
+                        manager.set_name(client_id, name)
+                        print(f"[server] Client {addr} heißt jetzt: {name!r}")
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:
@@ -83,6 +89,7 @@ async def main():
     brain.sync()
     context.refresh_if_stale()
     stt.load_model()
+    alarm_service.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
     async with websockets.serve(handle_connection, HOST, PORT):
         await asyncio.Future()
