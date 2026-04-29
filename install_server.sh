@@ -36,7 +36,7 @@ echo "✓ Code"
 echo "Erstelle Python-Umgebung..."
 "$PYTHON" -m venv "$INSTALL_DIR/.venv"
 "$INSTALL_DIR/.venv/bin/pip" install -q --upgrade pip
-"$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements_server.txt"
+"$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
 echo "✓ Python-Umgebung"
 
 # ── 4. .env anlegen (wenn nicht vorhanden) ────────────────────────────────────
