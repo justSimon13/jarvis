@@ -9,6 +9,7 @@ class ClientManager:
         self._clients: dict[str, callable] = {}        # client_id → send_audio(pcm: bytes)
         self._event_handlers: dict[str, callable] = {} # client_id → send_event(dict)
         self._names: dict[str, str] = {}               # client_id → name
+        self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._active: str | None = None
         self._lock = threading.Lock()
 
@@ -30,11 +31,20 @@ class ClientManager:
         with self._lock:
             return self._names.get(client_id)
 
+    def register_pipeline(self, client_id: str, pipeline):
+        with self._lock:
+            self._pipelines[client_id] = pipeline
+
+    def get_active_pipeline(self):
+        with self._lock:
+            return self._pipelines.get(self._active) if self._active else None
+
     def unregister(self, client_id: str):
         with self._lock:
             self._clients.pop(client_id, None)
             self._event_handlers.pop(client_id, None)
             self._names.pop(client_id, None)
+            self._pipelines.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
 

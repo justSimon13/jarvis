@@ -20,6 +20,7 @@ from client_manager import ClientManager
 from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
+from services import sleep_coach
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
@@ -49,6 +50,7 @@ async def handle_connection(websocket):
 
     manager.register(client_id, send_audio)
     manager.register_event(client_id, send_json)
+    manager.register_pipeline(client_id, pipeline)
     send_json({"type": P.STATE, "state": "idle"})
 
     # Kurze Begrüßung damit der Client weiß dass er verbunden ist
@@ -103,6 +105,7 @@ async def main():
     stt.load_model()
     alarm_service.init(manager)
     client_music_service.init(manager)
+    sleep_coach.init(manager, alarm_service)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
     async with websockets.serve(handle_connection, HOST, PORT):
         await asyncio.Future()
