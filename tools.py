@@ -611,19 +611,6 @@ DEFINITIONS = [
         },
     },
     {
-        "name": "alarm_set",
-        "description": "Stellt einen Wecker in Apple Reminders — synct via iCloud aufs iPhone und feuert als Notification.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "label": {"type": "string", "description": "Beschreibung des Weckers, z.B. 'Aufstehen'"},
-                "hour": {"type": "integer", "description": "Stunde (0-23)"},
-                "minute": {"type": "integer", "description": "Minute (0-59)"},
-            },
-            "required": ["label", "hour", "minute"],
-        },
-    },
-    {
         "name": "client_music_play",
         "description": (
             "Spielt einen Song auf dem Satellite-Client ab (mpv + YouTube). "
@@ -882,11 +869,6 @@ def execute(tool_name: str, tool_input: dict) -> str:
             mins, secs = divmod(total_seconds, 60)
             duration = f"{mins}m {secs}s" if mins else f"{secs}s"
             return f"Timer gesetzt: '{tool_input['label']}' läuft in {duration} ab. (ID: {timer_id})"
-
-        if tool_name == "alarm_set":
-            return reminders_service.set_alarm(
-                tool_input["label"], tool_input["hour"], tool_input["minute"]
-            )
 
         if tool_name == "timer_list":
             active = timer_service.list_active()
