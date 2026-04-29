@@ -166,7 +166,7 @@ DEFINITIONS = [
                     "description": "Key der gesetzt werden soll",
                 },
                 "value": {
-                    "description": "Wert (String, Zahl oder Boolean)",
+                    "description": "Wert (String, Zahl, Boolean oder Dict). Für followups mit Datum: {\"text\": \"...\", \"due\": \"YYYY-MM-DD\"}. null zum Löschen.",
                 },
             },
             "required": ["section", "key", "value"],
