@@ -568,6 +568,11 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "alarm_list",
+        "description": "Listet alle aktiven JARVIS-Wecker mit Uhrzeit, Label und Alarm-ID.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "alarm_snooze",
         "description": (
             "DEFAULT-Reaktion wenn der Wecker klingelt und Simon sagt 'Wecker aus', 'Stopp', 'Noch kurz', "
@@ -852,6 +857,12 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 song=tool_input.get("song") or None,
             )
             return f"Alarm gesetzt: '{tool_input['label']}' um {fires_at} Uhr. (ID: {alarm_id})"
+
+        if tool_name == "alarm_list":
+            alarms = alarm_service.list_alarms()
+            if not alarms:
+                return "Keine aktiven Wecker."
+            return json.dumps([{"id": a["alarm_id"], "zeit": a["fires_at"], "label": a["label"]} for a in alarms], ensure_ascii=False)
 
         if tool_name == "alarm_snooze":
             ok, msg = alarm_service.snooze_alarm(minutes=tool_input.get("minutes", 9))
