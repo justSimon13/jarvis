@@ -29,35 +29,48 @@ def _format_time(dt_str: str) -> str:
         return dt_str
 
 
+def _get_calendar_ids() -> list[str]:
+    try:
+        items = _get_service().calendarList().list().execute().get("items", [])
+        return [c["id"] for c in items if c.get("selected", True)]
+    except Exception:
+        return ["primary"]
+
+
 def query(days_ahead: int = 1) -> list[dict]:
     if not google_auth.is_configured():
         return []
     now = datetime.now(timezone.utc)
     end = now + timedelta(days=days_ahead)
-    try:
-        result = _get_service().events().list(
-            calendarId="primary",
-            timeMin=now.isoformat(),
-            timeMax=end.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-        events = []
-        for e in result.get("items", []):
-            start = e["start"].get("dateTime", e["start"].get("date", ""))
-            end_t = e["end"].get("dateTime", e["end"].get("date", ""))
-            events.append({
-                "title": e.get("summary", "(kein Titel)"),
-                "start": start,
-                "end": end_t,
-                "start_fmt": _format_time(start),
-                "location": e.get("location"),
-                "event_id": e["id"],
-            })
-        return events
-    except Exception as e:
-        print(f"[calendar] Fehler: {e}")
-        return []
+    events = []
+    seen_ids: set[str] = set()
+    for cal_id in _get_calendar_ids():
+        try:
+            result = _get_service().events().list(
+                calendarId=cal_id,
+                timeMin=now.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+            for e in result.get("items", []):
+                if e["id"] in seen_ids:
+                    continue
+                seen_ids.add(e["id"])
+                start = e["start"].get("dateTime", e["start"].get("date", ""))
+                end_t = e["end"].get("dateTime", e["end"].get("date", ""))
+                events.append({
+                    "title": e.get("summary", "(kein Titel)"),
+                    "start": start,
+                    "end": end_t,
+                    "start_fmt": _format_time(start),
+                    "location": e.get("location"),
+                    "event_id": e["id"],
+                })
+        except Exception as e:
+            print(f"[calendar] Fehler bei {cal_id}: {e}")
+    events.sort(key=lambda x: x["start"])
+    return events
 
 
 def query_cached(days_ahead: int = 1) -> list[dict]:
