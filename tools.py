@@ -107,7 +107,9 @@ DEFINITIONS = [
             "Liest einen Wert aus JARVIS's eigenem Gedächtnis (GitHub Brain). "
             "Sections: 'profile' (Simons Profil), 'settings' (aktive Routinen & Präferenzen), "
             "'memory' (was JARVIS über Simon gelernt hat), 'followups' (offene Follow-up Punkte), "
-            "'context_config' (was beim Start aus Notion geladen wird). "
+            "'context_config' (was beim Start aus Notion geladen wird), "
+            "'schlaf' (Schlaf-Einstellungen: stunden, fallback), "
+            "'proaktiv' (proaktive Benachrichtigungen: kalender_minuten, kalender_aktiv, email_intervall, email_aktiv). "
             "key optional – ohne key wird die ganze Section zurückgegeben."
         ),
         "input_schema": {
@@ -115,7 +117,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups", "context_config"],
+                    "enum": ["profile", "settings", "memory", "followups", "context_config", "schlaf", "proaktiv"],
                     "description": "Welche Section lesen",
                 },
                 "key": {
@@ -131,7 +133,7 @@ DEFINITIONS = [
         "description": (
             "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
-            "Sections: 'profile', 'settings', 'memory', 'followups', 'context_config'. "
+            "Sections: 'profile', 'settings', 'memory', 'followups', 'context_config', 'schlaf', 'proaktiv'. "
             "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung (String) oder {\"text\": \"...\", \"due\": \"YYYY-MM-DD\"} für zeitgesteuertes Erinnern. null zum Löschen. "
             "Routine-Tracking: routines.{name}.last_done = \"YYYY-MM-DD\" nach abgeschlossener Routine. routines.{name}.deferred_until = \"HH:MM\" wenn Simon verschiebt. "
             "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
@@ -144,6 +146,11 @@ DEFINITIONS = [
             "key='todos.tage_zurueck', value=14 – Todos der letzten N Tage laden. "
             "key='todos.max', value=30 – maximale Anzahl Todos. "
             "key='konzepte.laden', value=false – Konzepte komplett ausblenden. "
+            "schlaf: Schlaf-Einstellungen. key='stunden' (Schlafdauer, default 8), key='fallback' (Schlafzeit ohne Wecker, default '23:30'). "
+            "proaktiv: Proaktive Benachrichtigungen. key='kalender_minuten' (Vorwarnzeit vor Terminen, default 15), "
+            "key='kalender_aktiv' (Kalender-Reminder ein/aus, default 'true'), "
+            "key='email_intervall' (VIP-Email-Check alle N Minuten, default 10), "
+            "key='email_aktiv' (VIP-Email-Push ein/aus, default 'true'). "
             "Vor dem Schreiben von Listen erst brain_read aufrufen um bestehende Einträge nicht zu überschreiben."
         ),
         "input_schema": {
@@ -151,7 +158,7 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups", "context_config"],
+                    "enum": ["profile", "settings", "memory", "followups", "context_config", "schlaf", "proaktiv"],
                     "description": "Welche Section updaten",
                 },
                 "key": {
