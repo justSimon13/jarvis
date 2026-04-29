@@ -57,12 +57,7 @@ def _save() -> None:
 
 
 def _auto_max_snooze(hour: int, minute: int) -> int:
-    """Wochentags kein Snooze (0), Wochenende max. 2."""
-    now = datetime.datetime.now()
-    fire_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if fire_dt <= now:
-        fire_dt += datetime.timedelta(days=1)
-    return 2 if fire_dt.weekday() >= 5 else 0
+    return 3
 
 
 def schedule(label: str, hour: int, minute: int,

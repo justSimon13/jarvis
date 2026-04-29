@@ -550,8 +550,8 @@ DEFINITIONS = [
         "name": "alarm_start",
         "description": (
             "Stellt einen JARVIS-Wecker der auf dem Ziel-Client klingelt. "
-            "Snooze wird automatisch gesetzt: Wochentags kein Snooze (max_snooze=0), Wochenende max. 2. "
-            "snooze_minutes=9. target: Name des Clients (z.B. 'schlafzimmer'). Leer = aktiver Client."
+            "Standard: max_snooze=3, snooze_minutes=9. "
+            "target: Name des Clients (z.B. 'schlafzimmer'). Leer = aktiver Client."
         ),
         "input_schema": {
             "type": "object",
