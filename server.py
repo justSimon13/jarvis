@@ -109,7 +109,11 @@ async def main():
     sleep_coach.init(manager, alarm_service)
     proactive_service.init(manager, alarm_service)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
-    async with websockets.serve(handle_connection, HOST, PORT):
+    async with websockets.serve(
+        handle_connection, HOST, PORT,
+        ping_interval=30,
+        ping_timeout=120,
+    ):
         await asyncio.Future()
 
 
