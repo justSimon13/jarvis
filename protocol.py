@@ -30,6 +30,7 @@ TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": boo
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
 CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer"}
+ALARM_SYNC   = "alarm_sync"   # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
 
 # ── Alarm-Steuerung (Server → Client) ─────────────────────────────────────────
 SET_ALARM    = "set_alarm"    # {"type": "set_alarm", "alarm_id": "...", "hour": H, "minute": M, "label": "...", "snooze_minutes": N, "max_snooze": N, "song": "..."|null}

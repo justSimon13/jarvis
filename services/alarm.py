@@ -83,6 +83,27 @@ def snooze_alarm(alarm_id: str | None = None, minutes: int = 9) -> tuple[bool, s
     return True, f"Snooze {minutes} Minuten."
 
 
+def sync_from_client(client_name: str, alarms: list[dict]) -> None:
+    """Überschreibt alle Einträge dieses Clients mit der aktuellen Liste vom Client."""
+    # Alte Einträge dieses Clients entfernen
+    for aid in [k for k, v in _registry.items() if v.get("target") == client_name or (not v.get("target") and not client_name)]:
+        _registry.pop(aid, None)
+    for alarm in alarms:
+        aid = alarm.get("alarm_id")
+        if aid:
+            _registry[aid] = {
+                "label": alarm.get("label", "Wecker"),
+                "hour": alarm.get("hour", 0),
+                "minute": alarm.get("minute", 0),
+                "fires_at": alarm.get("fires_at", "?"),
+                "target": client_name,
+                "snooze_minutes": alarm.get("snooze_minutes", 9),
+                "max_snooze": alarm.get("max_snooze", 2),
+                "song": alarm.get("song"),
+            }
+    _save()
+
+
 def list_alarms() -> list[dict]:
     return [{"alarm_id": aid, **entry} for aid, entry in _registry.items()]
 

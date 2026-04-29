@@ -26,6 +26,10 @@ class ClientManager:
         with self._lock:
             self._names[client_id] = name.lower()
 
+    def get_name(self, client_id: str) -> str | None:
+        with self._lock:
+            return self._names.get(client_id)
+
     def unregister(self, client_id: str):
         with self._lock:
             self._clients.pop(client_id, None)
