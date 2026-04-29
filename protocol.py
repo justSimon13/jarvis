@@ -30,7 +30,9 @@ TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": boo
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
 CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer"}
-ALARM_SYNC   = "alarm_sync"   # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
+ALARM_SYNC    = "alarm_sync"    # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
+ALARM_RINGING = "alarm_ringing" # {"type": "alarm_ringing", "alarm_id": "...", "label": "..."} — Client → Server wenn Wecker klingelt
+ALARM_DISMISSED = "alarm_dismissed" # {"type": "alarm_dismissed", "alarm_id": "...", "snooze_count": N} — Client → Server wenn Wecker aus
 
 # ── Alarm-Steuerung (Server → Client) ─────────────────────────────────────────
 SET_ALARM    = "set_alarm"    # {"type": "set_alarm", "alarm_id": "...", "hour": H, "minute": M, "label": "...", "snooze_minutes": N, "max_snooze": N, "song": "..."|null}

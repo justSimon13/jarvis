@@ -81,6 +81,12 @@ async def handle_connection(websocket):
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.sync_from_client(client_name, data.get("alarms", []))
                     print(f"[server] Alarm-Sync von {client_name!r}: {len(data.get('alarms', []))} Wecker")
+                elif data.get("type") == P.ALARM_RINGING:
+                    alarm_service.on_ringing(data["alarm_id"])
+                    print(f"[server] Wecker klingelt: {data.get('label')!r} auf {manager.get_name(client_id)!r}")
+                elif data.get("type") == P.ALARM_DISMISSED:
+                    client_name = manager.get_name(client_id) or ""
+                    alarm_service.on_dismissed(data["alarm_id"], data.get("snooze_count", 0))
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:
