@@ -207,7 +207,7 @@ def build_static_prompt() -> str:
     week_start = today - timedelta(days=today.weekday())
 
     if todos:
-        lines = ["## Aktuelle Todos"]
+        overdue, today_todos, future_todos, undated = [], [], [], []
         for t in todos:
             datum = t.get("datum")
             name = t.get("name")
@@ -215,14 +215,34 @@ def build_static_prompt() -> str:
             prio = t.get("prioritaet")
             prio_str = f", {prio}" if prio else ""
             if datum:
-                todo_date = date.fromisoformat(datum)
-                if todo_date < week_start:
-                    lines.append(f"- OFFEN GEBLIEBEN ({datum}): {name}{prio_str}")
-                else:
-                    lines.append(f"- [{datum}] {name} ({status}{prio_str})")
+                try:
+                    todo_date = date.fromisoformat(datum)
+                    entry = f"- [{datum}] {name} ({status}{prio_str})"
+                    if todo_date < today:
+                        overdue.append(f"- ÜBERFÄLLIG ({datum}): {name}{prio_str}")
+                    elif todo_date == today:
+                        today_todos.append(entry)
+                    else:
+                        future_todos.append(entry)
+                except ValueError:
+                    undated.append(f"- {name} ({status}{prio_str})")
             else:
-                lines.append(f"- {name} ({status})")
-        parts.append("\n".join(lines))
+                undated.append(f"- {name} ({status})")
+        lines = []
+        if overdue:
+            lines.append("## Überfällige Todos")
+            lines.extend(overdue)
+        if today_todos:
+            lines.append("## Todos heute")
+            lines.extend(today_todos)
+        if future_todos:
+            lines.append("## Geplante Todos (nicht heute)")
+            lines.extend(future_todos)
+        if undated:
+            lines.append("## Todos ohne Datum")
+            lines.extend(undated)
+        if lines:
+            parts.append("\n".join(lines))
 
     if projekte:
         lines = ["## Aktive Projekte"]
