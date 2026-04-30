@@ -86,6 +86,7 @@ _CARD_REGISTRY = {
     "transcript": {"id": "transcript", "type": "chat",   "title": "Letztes Gespräch"},
     "btc":        {"id": "btc",        "type": "metric", "title": "BTC"},
     "weather":    {"id": "weather",    "type": "metric", "title": "Wetter"},
+    "weather_btc":{"id": "weather_btc","type": "metric", "title": "Wetter & BTC"},
     "todos":      {"id": "todos",      "type": "list",   "title": "Todos heute"},
     "calendar":   {"id": "calendar",   "type": "agenda", "title": "Kalender heute"},
     "alarms":     {"id": "alarms",     "type": "list",   "title": "Wecker"},
