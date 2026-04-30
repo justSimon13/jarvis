@@ -45,30 +45,19 @@ def _set_cached(conn: sqlite3.Connection, key: str, data):
 
 def _fetch_todos(notion: NotionClient, tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
     week_ago = (date.today() - timedelta(days=tage_zurueck)).isoformat()
-    today_iso = date.today().isoformat()
     try:
         response = notion.databases.query(
             database_id=config.NOTION_TODOS_DB_ID,
             filter={
-                "or": [
+                "and": [
                     {
-                        "and": [
-                            {
-                                "or": [
-                                    {"property": "Datum", "date": {"on_or_after": week_ago}},
-                                    {"property": "Datum", "date": {"is_empty": True}},
-                                ]
-                            },
-                            {"property": "Status", "status": {"does_not_equal": "Erledigt"}},
-                            {"property": "Status", "status": {"does_not_equal": "Archiviert"}},
+                        "or": [
+                            {"property": "Datum", "date": {"on_or_after": week_ago}},
+                            {"property": "Datum", "date": {"is_empty": True}},
                         ]
                     },
-                    {
-                        "and": [
-                            {"property": "Datum", "date": {"equals": today_iso}},
-                            {"property": "Status", "status": {"equals": "Erledigt"}},
-                        ]
-                    },
+                    {"property": "Status", "status": {"does_not_equal": "Erledigt"}},
+                    {"property": "Status", "status": {"does_not_equal": "Archiviert"}},
                 ]
             },
             sorts=[{"property": "Datum", "direction": "ascending"}],
