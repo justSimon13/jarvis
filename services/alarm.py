@@ -103,8 +103,15 @@ def dismiss(alarm_id: str | None = None, dismissed_from: str = "") -> bool:
     if alarm_id:
         entries = {alarm_id: _registry.pop(alarm_id, None)}
     else:
-        entries = dict(_registry)
-        _registry.clear()
+        # Ohne ID: nur klingelnde Alarme (fire_ts gesetzt), keine zukünftigen
+        fired = {aid: e for aid, e in _registry.items() if e.get("fire_ts")}
+        if fired:
+            entries = fired
+            for aid in fired:
+                _registry.pop(aid, None)
+        else:
+            entries = dict(_registry)
+            _registry.clear()
     _save()
     for aid, entry in entries.items():
         if entry:
