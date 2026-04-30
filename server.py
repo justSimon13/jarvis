@@ -238,6 +238,10 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
 
 
 def _build_dashboard_sync() -> dict:
+    try:
+        context.refresh_if_stale()
+    except Exception:
+        pass
     conn = context._get_db()
     todos = context._get_cached(conn, "todos") or []
     conn.close()
