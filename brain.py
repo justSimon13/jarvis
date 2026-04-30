@@ -124,7 +124,7 @@ def _seed_modules_cards():
     if not isinstance(modes, dict):
         return
     defaults = {
-        "assistent": ["transcript", "btc", "todos", "calendar"],
+        "assistent": ["transcript", "btc", "weather", "todos", "calendar"],
         "coach":     ["todos", "calendar"],
         "fokus":     [],
     }

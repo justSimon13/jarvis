@@ -85,6 +85,7 @@ _DEFAULT_QA_IDS = {
 _CARD_REGISTRY = {
     "transcript": {"id": "transcript", "type": "chat",   "title": "Letztes Gespräch"},
     "btc":        {"id": "btc",        "type": "metric", "title": "BTC"},
+    "weather":    {"id": "weather",    "type": "metric", "title": "Wetter"},
     "todos":      {"id": "todos",      "type": "list",   "title": "Todos heute"},
     "calendar":   {"id": "calendar",   "type": "agenda", "title": "Kalender heute"},
     "alarms":     {"id": "alarms",     "type": "list",   "title": "Wecker"},
@@ -93,7 +94,7 @@ _CARD_REGISTRY = {
 }
 
 _DEFAULT_CARD_IDS = {
-    "assistent": ["transcript", "btc", "todos", "calendar"],
+    "assistent": ["transcript", "btc", "weather", "todos", "calendar"],
     "coach":     ["todos", "calendar"],
     "fokus":     [],
 }
@@ -158,6 +159,12 @@ def _handle_data_request(resource: str):
         with history_lock:
             snapshot = [m for m in shared_history[-60:] if isinstance(m.get("content"), str)]
         return [{"role": m["role"], "text": m["content"]} for m in snapshot]
+    if resource == "weather":
+        try:
+            from services import weather as weather_service
+            return weather_service.get_weather()
+        except Exception:
+            return {}
     if resource == "clients":
         return manager.list_clients()
     if resource == "btc":
@@ -239,6 +246,12 @@ def _build_dashboard_sync() -> dict:
         btc_data = btc_service.get_price()
     except Exception:
         pass
+    weather_data: dict = {}
+    try:
+        from services import weather as weather_service
+        weather_data = weather_service.get_weather()
+    except Exception:
+        pass
     cal_events: list = []
     try:
         from services import calendar as cal_service
@@ -260,6 +273,7 @@ def _build_dashboard_sync() -> dict:
         "todos": todos,
         "calendar": cal_events,
         "btc": btc_data,
+        "weather": weather_data,
         "clients": manager.list_clients(),
         "alarms": alarms,
         "followups": followups,
