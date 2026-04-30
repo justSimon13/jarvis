@@ -9,6 +9,7 @@ class ClientManager:
         self._clients: dict[str, callable] = {}        # client_id → send_audio(pcm: bytes)
         self._event_handlers: dict[str, callable] = {} # client_id → send_event(dict)
         self._names: dict[str, str] = {}               # client_id → name
+        self._roles: dict[str, str] = {}               # client_id → role ("client"|"dashboard")
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._active: str | None = None
         self._lock = threading.Lock()
@@ -31,6 +32,26 @@ class ClientManager:
         with self._lock:
             return self._names.get(client_id)
 
+    def set_role(self, client_id: str, role: str):
+        with self._lock:
+            self._roles[client_id] = role
+
+    def get_role(self, client_id: str) -> str:
+        with self._lock:
+            return self._roles.get(client_id, "client")
+
+    def list_clients(self) -> list[dict]:
+        with self._lock:
+            active = self._active
+            return [
+                {
+                    "name": self._names.get(cid, cid),
+                    "role": self._roles.get(cid, "client"),
+                    "active": cid == active,
+                }
+                for cid in self._clients
+            ]
+
     def register_pipeline(self, client_id: str, pipeline):
         with self._lock:
             self._pipelines[client_id] = pipeline
@@ -44,6 +65,7 @@ class ClientManager:
             self._clients.pop(client_id, None)
             self._event_handlers.pop(client_id, None)
             self._names.pop(client_id, None)
+            self._roles.pop(client_id, None)
             self._pipelines.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)

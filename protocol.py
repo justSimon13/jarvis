@@ -40,3 +40,7 @@ CANCEL_ALARM = "cancel_alarm" # {"type": "cancel_alarm", "alarm_id": "..."|null}
 SNOOZE_ALARM = "snooze_alarm" # {"type": "snooze_alarm", "alarm_id": "..."|null, "minutes": N}
 PLAY_MUSIC   = "play_music"   # {"type": "play_music", "song": "query", "volume": 70}
 STOP_MUSIC   = "stop_music"   # {"type": "stop_music"}
+
+# ── Dashboard (Server → Dashboard-Client) ─────────────────────────────────────
+DASHBOARD_SYNC   = "dashboard_sync"   # {"type": "dashboard_sync", "todos": [...], "calendar": [...], "btc": {...}, "clients": [...]}
+DASHBOARD_UPDATE = "dashboard_update" # {"type": "dashboard_update", "key": "todos"|"calendar"|"clients", "data": {...}}
