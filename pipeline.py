@@ -51,12 +51,16 @@ class JarvisPipeline:
 
     def process_audio(self, wav_bytes: bytes):
         """WAV-Bytes → STT → process_text()"""
+        t_audio_recv = time.monotonic()
+        print(f"[pipeline] Audio empfangen: {len(wav_bytes)/1024:.1f}KB", flush=True)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(wav_bytes)
             wav_path = f.name
 
         self._emit(P.STATUS, text="Transkribiere…")
         user_text = stt.transcribe(wav_path)
+        t_stt_done = time.monotonic()
+        print(f"[pipeline] STT fertig: {t_stt_done - t_audio_recv:.2f}s gesamt seit Empfang", flush=True)
         try:
             os.unlink(wav_path)
         except OSError:
@@ -123,6 +127,8 @@ class JarvisPipeline:
 
             response_started = False
             first_chunk_sent = False
+            t_llm_start = time.monotonic()
+            t_first_token = None
 
             try:
                 with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS) as s:
@@ -130,6 +136,8 @@ class JarvisPipeline:
                         if not response_started:
                             self._emit(P.RESPONSE_START)
                             response_started = True
+                            t_first_token = time.monotonic()
+                            print(f"[pipeline] LLM erstes Token: {t_first_token - t_llm_start:.2f}s", flush=True)
 
                         buffer += chunk
                         turn_text += chunk
@@ -145,11 +153,13 @@ class JarvisPipeline:
                                         if not first_chunk_sent:
                                             first_chunk_sent = True
                                             self._emit(P.STATE, state="speaking")
+                                            print(f"[pipeline] TTS erster Satz gesendet: {time.monotonic() - t_llm_start:.2f}s seit LLM-Start", flush=True)
                                         tts_queue.put(send)
                                 else:
                                     break
 
                     final = s.get_final_message()
+                    print(f"[pipeline] LLM fertig: {time.monotonic() - t_llm_start:.2f}s, stop={final.stop_reason}", flush=True)
 
             except anthropic.APIStatusError as e:
                 if use_tts and self._on_audio:

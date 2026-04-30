@@ -2,6 +2,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import numpy as np
 import config
 
@@ -59,10 +60,15 @@ def speak_response(text_queue, done_event, audio_callback=None):
 
     if audio_callback:
         # Callback-Modus: ElevenLabs → callback(pcm_bytes)
+        sentence_idx = 0
         while True:
             text = text_queue.get()
             if text is None:
                 break
+            sentence_idx += 1
+            t0 = time.monotonic()
+            first_chunk = True
+            total_bytes = 0
             try:
                 audio_stream = client.text_to_speech.convert(
                     voice_id=config.ELEVENLABS_VOICE_ID,
@@ -73,9 +79,14 @@ def speak_response(text_queue, done_event, audio_callback=None):
                 )
                 for chunk in audio_stream:
                     if chunk:
+                        if first_chunk:
+                            print(f"[tts] Satz {sentence_idx} erster Chunk: {time.monotonic()-t0:.2f}s ({len(text)} Zeichen)", flush=True)
+                            first_chunk = False
+                        total_bytes += len(chunk)
                         audio_callback(chunk)
+                print(f"[tts] Satz {sentence_idx} fertig: {time.monotonic()-t0:.2f}s gesamt, {total_bytes/1024:.1f}KB", flush=True)
             except Exception as e:
-                print(f"[tts] Fehler: {e}")
+                print(f"[tts] Fehler: {e}", flush=True)
         done_event.set()
 
     else:

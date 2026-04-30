@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import scipy.io.wavfile as wav
 from elevenlabs.client import ElevenLabs
@@ -33,13 +34,17 @@ def transcribe(wav_path: str) -> str:
         pass
 
     try:
+        t0 = time.monotonic()
         with open(wav_path, "rb") as f:
             result = _get_client().speech_to_text.convert(
                 file=f,
                 model_id="scribe_v1",
                 language_code="de",
             )
-        return result.text.strip()
+        elapsed = time.monotonic() - t0
+        text = result.text.strip()
+        print(f"[stt] Scribe: {elapsed:.2f}s → {repr(text[:80])}", flush=True)
+        return text
     except Exception as e:
-        print(f"[stt] ElevenLabs Scribe Fehler: {e}")
+        print(f"[stt] ElevenLabs Scribe Fehler: {e}", flush=True)
         return ""
