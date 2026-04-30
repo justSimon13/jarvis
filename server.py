@@ -125,6 +125,10 @@ def _handle_data_request(resource: str):
             return brain.read("followups") or {}
         except Exception:
             return {}
+    if resource == "history":
+        with history_lock:
+            snapshot = [m for m in shared_history[-60:] if isinstance(m.get("content"), str)]
+        return [{"role": m["role"], "text": m["content"]} for m in snapshot]
     if resource == "clients":
         return manager.list_clients()
     if resource == "btc":
