@@ -10,6 +10,7 @@ import json
 import os
 import threading
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import websockets
 
@@ -34,6 +35,34 @@ manager = ClientManager()
 shared_history: list[dict] = []
 history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
+
+_HISTORY_FILE = Path.home() / ".jarvis" / "history.json"
+_HISTORY_KEEP = 100  # Nachrichten die persistent gespeichert werden
+
+
+def _save_history():
+    """Schreibt die letzten _HISTORY_KEEP Text-Nachrichten auf Disk."""
+    try:
+        with history_lock:
+            snapshot = [m for m in shared_history[-_HISTORY_KEEP:]
+                        if isinstance(m.get("content"), str)]
+        _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HISTORY_FILE.write_text(json.dumps(snapshot, ensure_ascii=False))
+    except Exception as e:
+        print(f"[server] History-Save Fehler: {e}", flush=True)
+
+
+def _load_history():
+    """Lädt gespeicherte History beim Start zurück in shared_history."""
+    try:
+        if not _HISTORY_FILE.exists():
+            return
+        data = json.loads(_HISTORY_FILE.read_text())
+        if isinstance(data, list):
+            shared_history.extend(data)
+            print(f"[server] History geladen: {len(data)} Nachrichten", flush=True)
+    except Exception as e:
+        print(f"[server] History-Load Fehler: {e}", flush=True)
 
 
 _QA_REGISTRY = {
@@ -349,6 +378,7 @@ async def handle_connection(websocket):
             if isinstance(message, bytes):
                 _activate_client(client_id)
                 await loop.run_in_executor(None, pipeline.process_audio, message)
+                _save_history()
                 asyncio.create_task(_push_dashboard_update())
             else:
                 data = json.loads(message)
@@ -358,6 +388,7 @@ async def handle_connection(websocket):
                     await loop.run_in_executor(
                         None, pipeline.process_text, data["text"], use_tts
                     )
+                    _save_history()
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
                     name = data.get("name", "")
@@ -411,6 +442,7 @@ async def handle_connection(websocket):
 
 async def main():
     brain.sync()
+    _load_history()
     context.refresh_if_stale()
     stt.load_model()
     alarm_service.init(manager)
