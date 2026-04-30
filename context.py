@@ -45,19 +45,30 @@ def _set_cached(conn: sqlite3.Connection, key: str, data):
 
 def _fetch_todos(notion: NotionClient, tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
     week_ago = (date.today() - timedelta(days=tage_zurueck)).isoformat()
+    today_iso = date.today().isoformat()
     try:
         response = notion.databases.query(
             database_id=config.NOTION_TODOS_DB_ID,
             filter={
-                "and": [
+                "or": [
                     {
-                        "or": [
-                            {"property": "Datum", "date": {"on_or_after": week_ago}},
-                            {"property": "Datum", "date": {"is_empty": True}},
+                        "and": [
+                            {
+                                "or": [
+                                    {"property": "Datum", "date": {"on_or_after": week_ago}},
+                                    {"property": "Datum", "date": {"is_empty": True}},
+                                ]
+                            },
+                            {"property": "Status", "status": {"does_not_equal": "Erledigt"}},
+                            {"property": "Status", "status": {"does_not_equal": "Archiviert"}},
                         ]
                     },
-                    {"property": "Status", "status": {"does_not_equal": "Erledigt"}},
-                    {"property": "Status", "status": {"does_not_equal": "Archiviert"}},
+                    {
+                        "and": [
+                            {"property": "Datum", "date": {"equals": today_iso}},
+                            {"property": "Status", "status": {"equals": "Erledigt"}},
+                        ]
+                    },
                 ]
             },
             sorts=[{"property": "Datum", "direction": "ascending"}],
@@ -74,7 +85,9 @@ def _fetch_todos(notion: NotionClient, tage_zurueck: int = 7, max_results: int =
             status = status_prop.get("name") if status_prop else None
             prio_prop = props.get("Priorität", {}).get("select")
             prioritaet = prio_prop.get("name") if prio_prop else None
-            results.append({"name": name, "datum": datum, "status": status, "prioritaet": prioritaet})
+            bereich_prop = props.get("Bereich", {}).get("select")
+            bereich = bereich_prop.get("name") if bereich_prop else None
+            results.append({"name": name, "datum": datum, "status": status, "prioritaet": prioritaet, "bereich": bereich})
         return results
     except Exception as e:
         print(f"[context] Todos-Fetch fehlgeschlagen: {e}")
@@ -218,6 +231,8 @@ def build_static_prompt(mode: str = "assistent") -> str:
             datum = t.get("datum")
             name = t.get("name")
             status = t.get("status") or ""
+            if status in ("Erledigt", "Archiviert"):
+                continue
             prio = t.get("prioritaet")
             prio_str = f", {prio}" if prio else ""
             if datum:
