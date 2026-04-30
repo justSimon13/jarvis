@@ -104,12 +104,14 @@ DEFINITIONS = [
     {
         "name": "brain_read",
         "description": (
-            "Liest einen Wert aus JARVIS's eigenem Gedächtnis (GitHub Brain). "
-            "Sections: 'profile' (Simons Profil), 'settings' (aktive Routinen & Präferenzen), "
-            "'memory' (was JARVIS über Simon gelernt hat), 'followups' (offene Follow-up Punkte), "
-            "'context_config' (was beim Start aus Notion geladen wird), "
-            "'schlaf' (Schlaf-Einstellungen: stunden, fallback), "
-            "'proaktiv' (proaktive Benachrichtigungen: kalender_minuten, kalender_aktiv, email_intervall, email_aktiv). "
+            "Liest einen Wert aus JARVIS's Gedächtnis. "
+            "Sections: 'profile' (Simons Profil, freie Key-Value-Felder), "
+            "'behavior' (Verhaltenspräferenzen), "
+            "'memory' (was JARVIS über Simon gelernt hat), "
+            "'followups' (offene Punkte für nächstes Gespräch), "
+            "'events' (Routinen, Features, Check-In-Regeln), "
+            "'modules' (Persönlichkeits-Prompt pro Modus), "
+            "'config' (technische Einstellungen, Notion-Config, Kontakte). "
             "key optional – ohne key wird die ganze Section zurückgegeben."
         ),
         "input_schema": {
@@ -117,12 +119,12 @@ DEFINITIONS = [
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups", "context_config", "schlaf", "proaktiv"],
+                    "enum": ["profile", "behavior", "memory", "followups", "events", "modules", "config"],
                     "description": "Welche Section lesen",
                 },
                 "key": {
                     "type": "string",
-                    "description": "Optionaler Key innerhalb der Section",
+                    "description": "Optionaler Key innerhalb der Section (Dot-Notation unterstützt)",
                 },
             },
             "required": ["section"],
@@ -131,34 +133,32 @@ DEFINITIONS = [
     {
         "name": "brain_write",
         "description": (
-            "Schreibt einen Wert in JARVIS's Gedächtnis (GitHub Brain) und committet automatisch. "
+            "Schreibt einen Wert in JARVIS's Gedächtnis. "
             "Verwenden wenn Simon sagt 'merk dir X', 'vergiss Y', 'von jetzt an Z'. "
-            "Sections: 'profile', 'settings', 'memory', 'followups', 'context_config', 'schlaf', 'proaktiv'. "
-            "followups: offene Punkte die beim nächsten Start angesprochen werden sollen. key=kurzer_schlüssel, value=Beschreibung (String) oder {\"text\": \"...\", \"due\": \"YYYY-MM-DD\"} für zeitgesteuertes Erinnern. null zum Löschen. "
-            "Routine-Tracking: routines.{name}.last_done = \"YYYY-MM-DD\" nach abgeschlossener Routine. routines.{name}.deferred_until = \"HH:MM\" wenn Simon verschiebt. "
-            "Settings sind nested – Dot-Notation verwenden: z.B. key='features.morning_checkin', key='contacts.email_vip'. "
-            "Für Pausen flache Keys nutzen: key='checkin_pausiert_bis', value='2026-05-01'. "
-            "Email-VIP manuell: section='settings', key='contacts.email_vip', value=[...bestehende Liste + X]. "
-            "Memory (section='memory'): value kann String oder Dict sein, wird als neuer Eintrag angehängt. "
-            "context_config: steuert was beim Start aus Notion geladen wird. Dot-Notation: "
-            "key='projekte.extra_felder', value=['typ'] – Projekttyp im Prompt anzeigen. "
-            "key='projekte.status_filter', value=['In Bearbeitung','Planung'] – welche Projekt-Status geladen werden. "
-            "key='todos.tage_zurueck', value=14 – Todos der letzten N Tage laden. "
-            "key='todos.max', value=30 – maximale Anzahl Todos. "
-            "key='konzepte.laden', value=false – Konzepte komplett ausblenden. "
-            "schlaf: Schlaf-Einstellungen. key='stunden' (Schlafdauer, default 8), key='fallback' (Schlafzeit ohne Wecker, default '23:30'). "
-            "proaktiv: Proaktive Benachrichtigungen. key='kalender_minuten' (Vorwarnzeit vor Terminen, default 15), "
-            "key='kalender_aktiv' (Kalender-Reminder ein/aus, default 'true'), "
-            "key='email_intervall' (VIP-Email-Check alle N Minuten, default 10), "
-            "key='email_aktiv' (VIP-Email-Push ein/aus, default 'true'). "
-            "Vor dem Schreiben von Listen erst brain_read aufrufen um bestehende Einträge nicht zu überschreiben."
+            "Sections und ihre Verwendung: "
+            "'profile': Simons persönliche Daten – freie Keys, z.B. key='interessen', key='btc_bestand'. "
+            "'behavior': Verhaltenspräferenzen – key='conversation_style', key='reminder_style'. "
+            "'memory': Was JARVIS gelernt hat – value String oder Dict, wird als neuer Eintrag angehängt. "
+            "'followups': Offene Punkte für nächstes Gespräch. value=String oder {\"text\":\"...\",\"due\":\"YYYY-MM-DD\"}. null zum Löschen. "
+            "'events': Routinen und Features. "
+            "Routine-Tracking: key='routines.{name}.last_done', value='YYYY-MM-DD'. "
+            "Routine verschieben: key='routines.{name}.deferred_until', value='HH:MM'. "
+            "Features: key='features.morning_checkin', value=true/false. "
+            "Pausen: key='{feature}_pausiert_bis', value='YYYY-MM-DD'. "
+            "'modules': Persönlichkeits-Prompt. key='base.identity' für Basis-Identität, key='modes.coach.prompt' für Coach-Modus. "
+            "'config': Technisches. "
+            "Notion-Config: key='notion.todos.max', key='notion.konzepte.laden'. "
+            "Kontakte: key='contacts.email_vip', value=[...Liste]. "
+            "Schlaf: key='schlaf.stunden', key='schlaf.fallback'. "
+            "Proaktiv: key='proaktiv.kalender_minuten', key='proaktiv.email_aktiv'. "
+            "Vor dem Schreiben von Listen erst brain_read aufrufen."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "section": {
                     "type": "string",
-                    "enum": ["profile", "settings", "memory", "followups", "context_config", "schlaf", "proaktiv"],
+                    "enum": ["profile", "behavior", "memory", "followups", "events", "modules", "config"],
                     "description": "Welche Section updaten",
                 },
                 "key": {
@@ -740,7 +740,7 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "sync_email_vip":
             emails = notion_service.sync_vip_emails()
-            brain.write(section="settings", key="contacts.email_vip", value=emails)
+            brain.write(section="config", key="contacts.email_vip", value=emails)
             return f"{len(emails)} VIP-Emails synchronisiert: {', '.join(emails) if emails else '–'}"
 
         if tool_name == "btc_price":

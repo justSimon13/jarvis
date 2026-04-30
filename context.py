@@ -142,7 +142,11 @@ def invalidate(key: str):
 def refresh_if_stale():
     if not config.NOTION_API_KEY:
         return
-    cc = brain.read("context_config") or {}
+    # Lese aus brain.config.notion (neu) mit Fallback auf context_config (alt)
+    brain_config = brain.read("config") or {}
+    cc = brain_config.get("notion", {}) if isinstance(brain_config, dict) else {}
+    if not cc:
+        cc = brain.read("context_config") or {}
     if not isinstance(cc, dict):
         cc = {}
     cc_todos = cc.get("todos", {})
@@ -175,11 +179,13 @@ _MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
            "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
 
-def build_static_prompt() -> str:
+def build_static_prompt(mode: str = "assistent") -> str:
     """Stabiler Teil — für Prompt Caching geeignet. Ändert sich höchstens alle 15 min."""
-    parts = [config.SYSTEM_PROMPT_BASE]
+    # Persönlichkeit: brain.modules wenn vorhanden, sonst config.SYSTEM_PROMPT_BASE
+    modules_prompt = brain.build_modules_prompt(mode)
+    parts = [modules_prompt if modules_prompt else config.SYSTEM_PROMPT_BASE]
 
-    brain_section = brain.build_prompt_section()
+    brain_section = brain.build_prompt_section(mode)
     if brain_section:
         parts.append(brain_section)
 

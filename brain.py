@@ -3,7 +3,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
-_SECTIONS = ["profile", "settings", "memory", "followups", "context_config"]
+_SECTIONS = ["profile", "behavior", "memory", "followups", "events", "modules", "config"]
 _DB_PATH = Path.home() / ".jarvis" / "brain.db"
 
 
@@ -46,16 +46,97 @@ def _write(section: str, data):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def sync():
-    """Beim Start: abgelaufene Pausen entfernen und verpasste Routinen flaggen."""
+    """Beim Start: Migration, abgelaufene Pausen entfernen, verpasste Routinen flaggen."""
+    migrate_sections()
     _check_expirations()
     check_missed_routines()
 
 
-def check_missed_routines():
-    settings = _read("settings")
-    if not isinstance(settings, dict):
+def migrate_sections():
+    """
+    Einmalige Migration von alten Sections (settings, context_config) zu neuen
+    (behavior, events, config, modules). Läuft idempotent via _migrated_v2-Flag.
+    """
+    existing_config = _read("config")
+    if isinstance(existing_config, dict) and existing_config.get("_migrated_v2"):
         return
-    routines = settings.get("routines", {})
+
+    config_data = dict(existing_config) if isinstance(existing_config, dict) else {}
+
+    # ── settings → behavior / events / config ─────────────────────────────────
+    settings = _read("settings")
+    if isinstance(settings, dict) and settings:
+
+        # behavior: settings.behavior + settings.special_handling
+        behavior_data = dict(settings.get("behavior", {}))
+        special_handling = settings.get("special_handling", {})
+        if isinstance(special_handling, dict) and special_handling:
+            behavior_data["special_handling"] = special_handling
+        if behavior_data:
+            _write("behavior", behavior_data)
+
+        # events: routines + features + checkin_rules + ongoing_reminders + pauses
+        events_data: dict = {}
+        for key in ("routines", "features", "checkin_rules", "ongoing_reminders"):
+            if settings.get(key):
+                events_data[key] = settings[key]
+        for key, value in settings.items():
+            if key.endswith("_pausiert_bis") and value:
+                events_data[key] = value
+        _write("events", events_data)
+
+        # config: contacts + remaining loose keys
+        if settings.get("contacts"):
+            config_data["contacts"] = settings["contacts"]
+        known_keys = {
+            "behavior", "routines", "features", "checkin_rules",
+            "ongoing_reminders", "special_handling", "contacts",
+        }
+        for key, value in settings.items():
+            if key not in known_keys and not key.endswith("_pausiert_bis") and value:
+                config_data[key] = value
+
+    # ── context_config → config.notion ────────────────────────────────────────
+    context_config = _read("context_config")
+    if isinstance(context_config, dict) and context_config:
+        config_data["notion"] = context_config
+
+    # ── Seed brain.modules with SYSTEM_PROMPT_BASE ────────────────────────────
+    modules = _read("modules")
+    if not isinstance(modules, dict) or not modules:
+        try:
+            from config import SYSTEM_PROMPT_BASE
+            _write("modules", {
+                "base": {"identity": SYSTEM_PROMPT_BASE, "rules": []},
+                "modes": {
+                    "assistent": {"description": "Standard-Assistent", "prompt": ""},
+                    "coach": {
+                        "description": "Performance-Coach",
+                        "prompt": "Du agierst als direkter Performance-Coach. Keine Ausreden, klare Fragen.",
+                    },
+                    "fokus": {
+                        "description": "Fokus-Modus",
+                        "prompt": "Minimalmodus. Kurze, direkte Antworten. Kein Smalltalk.",
+                    },
+                },
+            })
+        except ImportError:
+            pass
+
+    config_data["_migrated_v2"] = True
+    _write("config", config_data)
+    print("[brain] Migration v2 abgeschlossen.", flush=True)
+
+
+def check_missed_routines():
+    config_data = _read("config")
+    migration_done = isinstance(config_data, dict) and config_data.get("_migrated_v2")
+    source_section = "events" if migration_done else "settings"
+    source = _read(source_section)
+    if not isinstance(source, dict):
+        return
+
+    routines = source.get("routines", {})
     if not isinstance(routines, dict) or not routines:
         return
 
@@ -70,7 +151,7 @@ def check_missed_routines():
         followups = {}
 
     followups_changed = False
-    settings_changed = False
+    source_changed = False
 
     for rname, rcfg in routines.items():
         if not isinstance(rcfg, dict) or not rcfg.get("active", True):
@@ -92,7 +173,7 @@ def check_missed_routines():
             if now_time < deferred:
                 continue
             routines[rname].pop("deferred_until", None)
-            settings_changed = True
+            source_changed = True
 
         followup_key = f"missed_{rname}"
         if followup_key not in followups:
@@ -105,20 +186,25 @@ def check_missed_routines():
 
     if followups_changed:
         _write("followups", followups)
-    if settings_changed:
-        _write("settings", settings)
+    if source_changed:
+        _write(source_section, source)
 
 
 def _check_expirations():
-    settings = _read("settings")
-    if not isinstance(settings, dict):
-        return
-    today = date.today().isoformat()
-    expired = [k for k in settings if k.endswith("_pausiert_bis") and settings[k] <= today]
-    if expired:
-        for k in expired:
-            del settings[k]
-        _write("settings", settings)
+    config_data = _read("config")
+    migration_done = isinstance(config_data, dict) and config_data.get("_migrated_v2")
+
+    # Check new sections for pauses
+    for section in (["events"] if migration_done else ["settings"]):
+        data = _read(section)
+        if not isinstance(data, dict):
+            continue
+        today = date.today().isoformat()
+        expired = [k for k in data if k.endswith("_pausiert_bis") and data[k] <= today]
+        if expired:
+            for k in expired:
+                del data[k]
+            _write(section, data)
 
 
 def load() -> dict:
@@ -130,12 +216,16 @@ def read(section: str, key: str | None = None):
     if key is None:
         return data
     parts = key.split(".", 1)
-    if len(parts) == 2 and isinstance(data.get(parts[0]), dict):
+    if len(parts) == 2 and isinstance(data, dict) and isinstance(data.get(parts[0]), dict):
         return data[parts[0]].get(parts[1])
     return data.get(key) if isinstance(data, dict) else None
 
 
 def write(section: str, key: str, value) -> str:
+    # Redirect legacy section names to new ones
+    _REDIRECTS = {"context_config": "config"}
+    section = _REDIRECTS.get(section, section)
+
     data = _read(section)
 
     if section == "memory":
@@ -171,7 +261,7 @@ def write(section: str, key: str, value) -> str:
     return f"Gespeichert: {section} → {key} = {value}"
 
 
-# ── System Prompt Section ─────────────────────────────────────────────────────
+# ── System Prompt ─────────────────────────────────────────────────────────────
 
 def _format_month_day(value: str) -> str:
     try:
@@ -181,39 +271,49 @@ def _format_month_day(value: str) -> str:
         return value
 
 
-def build_prompt_section() -> str:
+def build_modules_prompt(mode: str = "assistent") -> str:
+    """Gibt den Persönlichkeits-/Identitäts-Teil aus brain.modules zurück."""
+    modules = _read("modules")
+    if not isinstance(modules, dict) or not modules:
+        return ""
+
+    parts = []
+    base = modules.get("base", {})
+    if isinstance(base, dict):
+        identity = base.get("identity", "")
+        rules = base.get("rules", [])
+        if identity:
+            parts.append(identity)
+        if isinstance(rules, list):
+            for r in rules:
+                if r:
+                    parts.append(f"- {r}")
+
+    modes = modules.get("modes", {})
+    if isinstance(modes, dict):
+        mode_cfg = modes.get(mode, {})
+        if isinstance(mode_cfg, dict) and mode_cfg.get("prompt"):
+            desc = mode_cfg.get("description", mode)
+            parts.append(f"\n## Modus: {desc}\n{mode_cfg['prompt']}")
+
+    return "\n".join(parts)
+
+
+def build_prompt_section(mode: str = "assistent") -> str:
+    """Gibt den Daten-Teil des System-Prompts zurück (Profile, Behavior, Followups, Events, Memory)."""
     data = load()
     parts = []
 
+    # ── Profile (vollständig dynamisch, kein hardcoded Schema) ────────────────
     profile = data.get("profile", {})
-    if profile:
-        ordered_keys = [
-            "name", "standort", "alter", "lebenssituation", "anstellung", "selbständig",
-            "arbeitsrhythmus", "daily_rhythmus", "freelancing_positionierung",
-            "freelancing_stack", "freelancing_zielkunden", "freelancing_rate",
-            "freelancing_kanaele", "langfristige_ziele", "btc_kontext",
-            "btc_bestand", "btc_investiert",
-        ]
-        label_map = {
-            "name": "Name", "standort": "Standort", "alter": "Alter",
-            "lebenssituation": "Lebenssituation", "anstellung": "Anstellung",
-            "selbständig": "Selbständigkeit", "arbeitsrhythmus": "Arbeitsrhythmus",
-            "daily_rhythmus": "Tagesrhythmus", "freelancing_positionierung": "Freelancing-Positionierung",
-            "freelancing_stack": "Freelancing-Stack", "freelancing_zielkunden": "Zielkunden",
-            "freelancing_rate": "Stundensatz", "freelancing_kanaele": "Akquise-Kanäle",
-            "langfristige_ziele": "Langfristige Ziele", "btc_kontext": "BTC-Kontext",
-            "btc_bestand": "BTC-Bestand", "btc_investiert": "In BTC investiert",
-        }
+    if isinstance(profile, dict) and profile:
         lines = ["## Wer Simon ist"]
-        for key in ordered_keys:
-            value = profile.get(key)
-            if value:
-                lines.append(f"- {label_map.get(key, key)}: {value}")
         for key, value in profile.items():
-            if key not in ordered_keys and value:
-                lines.append(f"- {key}: {value}")
+            if value:
+                lines.append(f"- {key.replace('_', ' ')}: {value}")
         parts.append("\n".join(lines))
 
+    # ── Followups ─────────────────────────────────────────────────────────────
     followups = data.get("followups", {})
     if isinstance(followups, dict) and followups:
         today_iso = date.today().isoformat()
@@ -244,69 +344,60 @@ def build_prompt_section() -> str:
                 lines.append(f"- {item}")
             parts.append("\n".join(lines))
 
-    settings = data.get("settings", {})
-    behavior = settings.get("behavior", {}) if isinstance(settings, dict) else {}
+    # ── Behavior ──────────────────────────────────────────────────────────────
+    behavior = data.get("behavior", {})
+    # Fallback: settings.behavior (vor Migration oder wenn behavior-Section leer)
+    if not isinstance(behavior, dict) or not behavior:
+        settings_fb = _read("settings")
+        behavior = settings_fb.get("behavior", {}) if isinstance(settings_fb, dict) else {}
     if behavior:
         lines = ["## Wie du dich verhalten sollst"]
-        label_map_b = {
-            "conversation_style": "Sprachstil",
-            "response_prioritization": "Priorisierung",
-            "reminder_style": "Erinnerungen",
-            "checkin_density": "Check-in-Stil",
-        }
         for k, v in behavior.items():
-            if v:
-                lines.append(f"- {label_map_b.get(k, k)}: {v}")
+            if k == "special_handling" and isinstance(v, dict):
+                for sk, sv in v.items():
+                    if sv:
+                        lines.append(f"- Sonderregel ({sk}): {sv}")
+            elif v:
+                lines.append(f"- {k.replace('_', ' ')}: {v}")
         parts.append("\n".join(lines))
 
-    features = settings.get("features", {}) if isinstance(settings, dict) else {}
-    checkin_rules = settings.get("checkin_rules", {}) if isinstance(settings, dict) else {}
-    ongoing_reminders = settings.get("ongoing_reminders", {}) if isinstance(settings, dict) else {}
-    special_handling = settings.get("special_handling", {}) if isinstance(settings, dict) else {}
-    contacts = settings.get("contacts", {}) if isinstance(settings, dict) else {}
+    # ── Events (Regeln, Routinen) ──────────────────────────────────────────────
+    events = data.get("events", {})
+    # Fallback: settings (vor Migration)
+    if not isinstance(events, dict) or not events:
+        events = _read("settings")
+        if not isinstance(events, dict):
+            events = {}
 
     active_rules = []
-    if features.get("morning_checkin"):
-        active_rules.append("- Morning Check-in ist aktiv.")
-    if features.get("evening_checkout"):
-        active_rules.append("- Evening Checkout ist aktiv.")
-    if features.get("daily_football_fact"):
-        active_rules.append("- Daily Football Fact ist aktiv.")
-    if checkin_rules.get("todos"):
-        active_rules.append(f"- Todo-Regel: {checkin_rules['todos']}")
-    if checkin_rules.get("projekte"):
-        active_rules.append(f"- Projekt-Regel: {checkin_rules['projekte']}")
-    if checkin_rules.get("btc"):
-        active_rules.append(f"- BTC-Regel: {checkin_rules['btc']}")
-    if checkin_rules.get("konzepte"):
-        active_rules.append(f"- Konzepte-Regel: {checkin_rules['konzepte']}")
-    if checkin_rules.get("abschluss"):
-        active_rules.append(f"- Abschluss-Regel: {checkin_rules['abschluss']}")
-    for k, v in ongoing_reminders.items():
-        if v:
-            active_rules.append(f"- Laufende Erinnerung: {v}")
-    for k, v in special_handling.items():
-        if v:
-            active_rules.append(f"- Regel ({k}): {v}")
-    if contacts.get("email_vip"):
-        vip_list = ", ".join(contacts["email_vip"])
-        active_rules.append(f"- VIP-E-Mail-Kontakte: {vip_list}")
+    features = events.get("features", {})
+    if isinstance(features, dict):
+        for k, v in features.items():
+            if v and v is not False:
+                active_rules.append(f"- {k.replace('_', ' ')}: aktiv")
 
-    known_sections = {"features", "behavior", "checkin_rules", "ongoing_reminders", "special_handling", "contacts"}
-    for k, v in (settings.items() if isinstance(settings, dict) else []):
-        if k in known_sections:
-            continue
+    checkin_rules = events.get("checkin_rules", {})
+    if isinstance(checkin_rules, dict):
+        for k, v in checkin_rules.items():
+            if v:
+                active_rules.append(f"- {k.replace('_', ' ')}-Regel: {v}")
+
+    ongoing_reminders = events.get("ongoing_reminders", {})
+    if isinstance(ongoing_reminders, dict):
+        for k, v in ongoing_reminders.items():
+            if v:
+                active_rules.append(f"- Laufende Erinnerung: {v}")
+
+    for k, v in events.items():
         if k.endswith("_pausiert_bis") and v:
             feature = k.replace("_pausiert_bis", "")
             active_rules.append(f"- {feature}: PAUSIERT bis {v} – nicht ansprechen bis dahin")
-        elif v and v is not False:
-            active_rules.append(f"- {k}: {v}")
 
     if active_rules:
         parts.append("## Aktive Verhaltensregeln\n" + "\n".join(active_rules))
 
-    routines = settings.get("routines", {}) if isinstance(settings, dict) else {}
-    if routines:
+    routines = events.get("routines", {})
+    if isinstance(routines, dict) and routines:
         today_iso = date.today().isoformat()
         routine_lines = []
         for rname, rcfg in routines.items():
@@ -317,7 +408,10 @@ def build_prompt_section() -> str:
             desc = rcfg.get("description", rname)
             window = rcfg.get("window", {})
             days_str = "/".join(window.get("days", [])) if window.get("days") else "täglich"
-            time_str = f"{window.get('from', '?')}–{window.get('to', '?')}" if window.get("from") else ""
+            time_str = (
+                f"{window.get('from', '?')}–{window.get('to', '?')}"
+                if window.get("from") else ""
+            )
             prio = rcfg.get("priority", 99)
             deferred = rcfg.get("deferred_until")
             line = f"- [{prio}] {desc}"
@@ -329,6 +423,20 @@ def build_prompt_section() -> str:
         if routine_lines:
             parts.append("## Aktive Routinen (nach Priorität)\n" + "\n".join(routine_lines))
 
+    # ── Config: Contacts ──────────────────────────────────────────────────────
+    config_section = data.get("config", {})
+    if not isinstance(config_section, dict):
+        config_section = {}
+    contacts = config_section.get("contacts", {})
+    # Fallback: settings.contacts
+    if not contacts:
+        settings_fb = _read("settings")
+        contacts = settings_fb.get("contacts", {}) if isinstance(settings_fb, dict) else {}
+    if isinstance(contacts, dict) and contacts.get("email_vip"):
+        vip_list = ", ".join(contacts["email_vip"])
+        parts.append(f"## Kontakte\n- VIP-E-Mail-Kontakte: {vip_list}")
+
+    # ── Memory ────────────────────────────────────────────────────────────────
     memory = data.get("memory", [])
     memory_lines = []
     if isinstance(memory, list):
