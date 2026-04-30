@@ -3,6 +3,7 @@ JarvisPipeline — Herzstück des JARVIS-Systems.
 Kapselt STT → LLM → TTS. Unabhängig von Transport (WebSocket, lokal, Text).
 Eine Instanz pro Client.
 """
+from __future__ import annotations
 import os
 import queue
 import re
