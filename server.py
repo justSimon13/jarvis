@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 import threading
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import websockets
 
@@ -127,6 +127,66 @@ def _handle_data_request(resource: str):
     return None
 
 
+def _build_overlay_events() -> list[dict]:
+    """Gibt das erste fällige Overlay-Event zurück (Routine im aktiven Zeitfenster)."""
+    try:
+        events_data = brain.read("events") or {}
+        routines = events_data.get("routines", {})
+        if not isinstance(routines, dict):
+            return []
+    except Exception:
+        return []
+
+    now = datetime.now()
+    today_iso = now.date().isoformat()
+    now_time = now.strftime("%H:%M")
+    _DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    today_day = _DAYS[now.weekday()]
+
+    for rname, rcfg in routines.items():
+        if not isinstance(rcfg, dict) or not rcfg.get("active", True):
+            continue
+        if rcfg.get("last_done") == today_iso:
+            continue
+        days = rcfg.get("window", {}).get("days", [])
+        if days and today_day not in days:
+            continue
+        window_from = rcfg.get("window", {}).get("from", "00:00")
+        window_to   = rcfg.get("window", {}).get("to",   "23:59")
+        if not (window_from <= now_time <= window_to):
+            continue
+        deferred = rcfg.get("deferred_until")
+        if deferred and now_time < deferred:
+            continue
+        return [{
+            "type": P.OVERLAY_EVENT,
+            "event_id": rname,
+            "title": rcfg.get("label", rname.replace("_", " ").title()),
+            "icon": rcfg.get("icon", "💬"),
+            "send": rcfg.get("send", "Mach einen Morgen Check-In."),
+            "snooze_minutes": int(rcfg.get("snooze_minutes", 10)),
+        }]
+    return []
+
+
+def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
+    """Aktualisiert brain.events nach Overlay-Dismiss (start/skip/snooze)."""
+    try:
+        events_data = brain.read("events") or {}
+        routines = events_data.get("routines", {})
+        if event_id not in routines:
+            return
+        if action in ("start", "skip"):
+            routines[event_id]["last_done"] = date.today().isoformat()
+            routines[event_id].pop("deferred_until", None)
+        elif action == "snooze":
+            until = (datetime.now() + timedelta(minutes=minutes)).strftime("%H:%M")
+            routines[event_id]["deferred_until"] = until
+        brain.write("events", "routines", routines)
+    except Exception as e:
+        print(f"[server] Overlay-Dismiss Fehler: {e}", flush=True)
+
+
 def _build_dashboard_sync() -> dict:
     conn = context._get_db()
     todos = context._get_cached(conn, "todos") or []
@@ -242,6 +302,8 @@ async def handle_connection(websocket):
         sync = _build_dashboard_sync()
         sync["layout_config"] = _build_layout_config(init_mode)
         send_json(sync)
+        for overlay in _build_overlay_events():
+            send_json(overlay)
         print("[server] Dashboard-Sync gesendet.", flush=True)
     else:
         # Begrüßung für Voice-Clients
@@ -315,6 +377,14 @@ async def handle_connection(websocket):
                 elif data.get("type") == P.ALARM_DISMISSED:
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.on_dismissed(data["alarm_id"], data.get("snooze_count", 0))
+                elif data.get("type") == P.OVERLAY_DISMISS:
+                    await loop.run_in_executor(
+                        None,
+                        _handle_overlay_dismiss,
+                        data.get("event_id", ""),
+                        data.get("action", "skip"),
+                        int(data.get("minutes", 10)),
+                    )
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:
