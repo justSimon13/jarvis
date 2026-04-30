@@ -53,43 +53,52 @@ _DEFAULT_QA_IDS = {
     "fokus":     ["timer", "naechstes_event"],
 }
 
+_CARD_REGISTRY = {
+    "transcript": {"id": "transcript", "type": "chat",   "title": "Letztes Gespräch"},
+    "btc":        {"id": "btc",        "type": "metric", "title": "BTC"},
+    "todos":      {"id": "todos",      "type": "list",   "title": "Todos heute"},
+    "calendar":   {"id": "calendar",   "type": "agenda", "title": "Kalender heute"},
+    "alarms":     {"id": "alarms",     "type": "list",   "title": "Wecker"},
+    "followups":  {"id": "followups",  "type": "list",   "title": "Offene Punkte"},
+    "clients":    {"id": "clients",    "type": "chips",  "title": "Clients"},
+}
+
+_DEFAULT_CARD_IDS = {
+    "assistent": ["transcript", "btc", "todos", "calendar"],
+    "coach":     ["todos", "calendar"],
+    "fokus":     [],
+}
+
 
 def _build_layout_config(mode: str = "assistent") -> dict:
     """Berechnet server-seitig welche Cards und Quick Actions für den Modus gezeigt werden."""
-    # Quick Actions: aus brain.modules lesen, Fallback auf defaults
     modules = brain.read("modules") or {}
-    mode_cfg = (modules.get("modes") or {}).get(mode, {})
+    mode_cfg = (modules.get("modes") or {}).get(mode, {}) or {}
+
+    # Quick Actions: aus brain.modules lesen, Fallback auf defaults
     action_ids = mode_cfg.get("quick_actions") or _DEFAULT_QA_IDS.get(mode, [])
     quick_actions = [_QA_REGISTRY[qid] for qid in action_ids if qid in _QA_REGISTRY]
 
-    # Cards: basierend auf aktuellem Datenstand
-    alarms = []
-    try:
-        alarms = alarm_service.list_alarms()
-    except Exception:
-        pass
-
-    followups_due = []
-    try:
-        followups_raw = brain.read("followups") or {}
-        if isinstance(followups_raw, dict):
-            today_iso = date.today().isoformat()
-            followups_due = [
-                k for k, v in followups_raw.items()
-                if v and (not isinstance(v, dict) or not v.get("due") or v.get("due") <= today_iso)
-            ]
-    except Exception:
-        pass
-
-    cards = [
-        {"id": "todos",    "type": "list",   "title": "Todos heute", "source": "todos_today"},
-        {"id": "calendar", "type": "agenda", "title": "Heute",       "source": "calendar_today"},
-        {"id": "btc",      "type": "metric", "title": "BTC",         "source": "btc"},
-    ]
-    if alarms:
-        cards.append({"id": "alarms", "type": "list", "title": "Wecker", "source": "alarms"})
-    if followups_due:
-        cards.append({"id": "followups", "type": "list", "title": "Offene Punkte", "source": "followups_due"})
+    # Cards: JARVIS hat explizit konfiguriert → exakt diese; sonst Defaults + dynamisch
+    if "cards" in mode_cfg:
+        cards = [_CARD_REGISTRY[cid] for cid in mode_cfg["cards"] if cid in _CARD_REGISTRY]
+    else:
+        cards = [_CARD_REGISTRY[cid] for cid in _DEFAULT_CARD_IDS.get(mode, []) if cid in _CARD_REGISTRY]
+        # Dynamisch: alarms/followups hinzufügen wenn Daten vorhanden
+        try:
+            if alarm_service.list_alarms():
+                cards.append(_CARD_REGISTRY["alarms"])
+        except Exception:
+            pass
+        try:
+            followups_raw = brain.read("followups") or {}
+            if isinstance(followups_raw, dict):
+                today_iso = date.today().isoformat()
+                if any(v and (not isinstance(v, dict) or not v.get("due") or v.get("due") <= today_iso)
+                       for v in followups_raw.values()):
+                    cards.append(_CARD_REGISTRY["followups"])
+        except Exception:
+            pass
 
     return {"cards": cards, "quick_actions": quick_actions}
 

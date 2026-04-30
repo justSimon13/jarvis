@@ -115,11 +115,35 @@ def _seed_modules_quick_actions():
         _write("modules", modules)
 
 
+def _seed_modules_cards():
+    """Setzt Standard-Card-IDs in brain.modules.modes wenn noch nicht vorhanden."""
+    modules = _read("modules")
+    if not isinstance(modules, dict):
+        return
+    modes = modules.get("modes", {})
+    if not isinstance(modes, dict):
+        return
+    defaults = {
+        "assistent": ["transcript", "btc", "todos", "calendar"],
+        "coach":     ["todos", "calendar"],
+        "fokus":     [],
+    }
+    changed = False
+    for mode_name, mode_cfg in modes.items():
+        if isinstance(mode_cfg, dict) and "cards" not in mode_cfg:
+            mode_cfg["cards"] = defaults.get(mode_name, ["todos", "calendar"])
+            changed = True
+    if changed:
+        modules["modes"] = modes
+        _write("modules", modules)
+
+
 def sync():
     """Beim Start: Migration, abgelaufene Pausen entfernen, verpasste Routinen flaggen."""
     migrate_sections()
     _seed_notion_config()
     _seed_modules_quick_actions()
+    _seed_modules_cards()
     _check_expirations()
     check_missed_routines()
 
