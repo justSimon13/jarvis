@@ -10,6 +10,7 @@ class ClientManager:
         self._event_handlers: dict[str, callable] = {} # client_id → send_event(dict)
         self._names: dict[str, str] = {}               # client_id → name
         self._roles: dict[str, str] = {}               # client_id → role ("client"|"dashboard")
+        self._modes: dict[str, str] = {}               # client_id → mode ("assistent"|"coach"|"fokus")
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._active: str | None = None
         self._lock = threading.Lock()
@@ -60,12 +61,21 @@ class ClientManager:
         with self._lock:
             return self._pipelines.get(self._active) if self._active else None
 
+    def set_mode(self, client_id: str, mode: str):
+        with self._lock:
+            self._modes[client_id] = mode
+
+    def get_mode(self, client_id: str) -> str:
+        with self._lock:
+            return self._modes.get(client_id, "assistent")
+
     def unregister(self, client_id: str):
         with self._lock:
             self._clients.pop(client_id, None)
             self._event_handlers.pop(client_id, None)
             self._names.pop(client_id, None)
             self._roles.pop(client_id, None)
+            self._modes.pop(client_id, None)
             self._pipelines.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
@@ -122,10 +132,11 @@ class ClientManager:
             except Exception:
                 pass
 
-    def get_dashboard_event_callbacks(self) -> list[callable]:
+    def get_dashboard_event_callbacks(self) -> list[tuple]:
+        """Gibt (callback, mode) Tupel für alle verbundenen Dashboard-Clients zurück."""
         with self._lock:
             return [
-                self._event_handlers[cid]
+                (self._event_handlers[cid], self._modes.get(cid, "assistent"))
                 for cid in self._clients
                 if self._roles.get(cid) == "dashboard" and cid in self._event_handlers
             ]

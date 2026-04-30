@@ -49,3 +49,4 @@ LAYOUT_CONFIG    = "layout_config"    # {"type": "layout_config", "cards": [...]
 # ── Drei-Layer-Protokoll (Client ↔ Server) ────────────────────────────────────
 DATA_REQUEST  = "data_request"   # {"type": "data_request", "resource": "todos"|"calendar"|"alarms"|"followups"|"clients"|"btc"}
 DATA_RESPONSE = "data_response"  # {"type": "data_response", "resource": "...", "data": ...}
+SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coach"|"fokus"}

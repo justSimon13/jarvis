@@ -36,8 +36,33 @@ history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
 
 
-def _build_layout_config() -> dict:
-    """Berechnet server-seitig welche Cards angezeigt werden sollen."""
+_QA_REGISTRY = {
+    "alarm":          {"id": "alarm",          "label": "Wecker",     "icon": "⏰", "input": {"type": "time_picker", "label": "Weckzeit"},              "send": "Stell einen Wecker für {value} Uhr."},
+    "todo_add":       {"id": "todo_add",       "label": "Todo +",     "icon": "📋", "input": {"type": "text", "placeholder": "Was muss erledigt werden?"}, "send": "Erstelle ein Todo: {value}"},
+    "checkin":        {"id": "checkin",        "label": "Check-In",   "icon": "💬", "input": None,                                                       "send": "Mach einen kurzen Morgen Check-In."},
+    "wochenreview":   {"id": "wochenreview",   "label": "Review",     "icon": "📊", "input": None,                                                       "send": "Gib mir eine Wochenübersicht."},
+    "fortschritt":    {"id": "fortschritt",    "label": "Fortschritt","icon": "📈", "input": None,                                                       "send": "Wie ist mein Fortschritt diese Woche?"},
+    "ziel_setzen":    {"id": "ziel_setzen",    "label": "Ziel setzen","icon": "🎯", "input": {"type": "text", "placeholder": "Was ist dein Ziel?"},      "send": "Setze ein neues Ziel: {value}"},
+    "timer":          {"id": "timer",          "label": "Timer",      "icon": "⏱", "input": None,                                                       "send": "Stell einen 25-Minuten-Timer."},
+    "naechstes_event":{"id": "naechstes_event","label": "Nächstes",   "icon": "📅", "input": None,                                                       "send": "Was ist das nächste Event heute?"},
+}
+
+_DEFAULT_QA_IDS = {
+    "assistent": ["alarm", "todo_add", "checkin"],
+    "coach":     ["wochenreview", "fortschritt", "ziel_setzen"],
+    "fokus":     ["timer", "naechstes_event"],
+}
+
+
+def _build_layout_config(mode: str = "assistent") -> dict:
+    """Berechnet server-seitig welche Cards und Quick Actions für den Modus gezeigt werden."""
+    # Quick Actions: aus brain.modules lesen, Fallback auf defaults
+    modules = brain.read("modules") or {}
+    mode_cfg = (modules.get("modes") or {}).get(mode, {})
+    action_ids = mode_cfg.get("quick_actions") or _DEFAULT_QA_IDS.get(mode, [])
+    quick_actions = [_QA_REGISTRY[qid] for qid in action_ids if qid in _QA_REGISTRY]
+
+    # Cards: basierend auf aktuellem Datenstand
     alarms = []
     try:
         alarms = alarm_service.list_alarms()
@@ -66,32 +91,7 @@ def _build_layout_config() -> dict:
     if followups_due:
         cards.append({"id": "followups", "type": "list", "title": "Offene Punkte", "source": "followups_due"})
 
-    return {
-        "cards": cards,
-        "quick_actions": [
-            {
-                "id": "alarm",
-                "label": "Wecker",
-                "icon": "⏰",
-                "input": {"type": "time_picker", "label": "Weckzeit"},
-                "send": "Stell einen Wecker für {value} Uhr.",
-            },
-            {
-                "id": "todo_add",
-                "label": "Todo +",
-                "icon": "📋",
-                "input": {"type": "text", "placeholder": "Was muss erledigt werden?"},
-                "send": "Erstelle ein Todo: {value}",
-            },
-            {
-                "id": "checkin",
-                "label": "Check-In",
-                "icon": "💬",
-                "input": None,
-                "send": "Mach einen kurzen Morgen Check-In.",
-            },
-        ],
-    }
+    return {"cards": cards, "quick_actions": quick_actions}
 
 
 def _handle_data_request(resource: str):
@@ -161,7 +161,6 @@ def _build_dashboard_sync() -> dict:
         "clients": manager.list_clients(),
         "alarms": alarms,
         "followups": followups,
-        "layout_config": _build_layout_config(),
     }
 
 
@@ -178,12 +177,11 @@ def _activate_client(client_id: str):
 async def _push_dashboard_update():
     loop = asyncio.get_event_loop()
     try:
-        payload = await loop.run_in_executor(None, _build_dashboard_sync)
-        payload["type"] = P.DASHBOARD_UPDATE
-        payload["layout_config"] = _build_layout_config()
-        for cb in manager.get_dashboard_event_callbacks():
+        base = await loop.run_in_executor(None, _build_dashboard_sync)
+        base["type"] = P.DASHBOARD_UPDATE
+        for cb, mode in manager.get_dashboard_event_callbacks():
             try:
-                cb(payload)
+                cb({**base, "layout_config": _build_layout_config(mode)})
             except Exception:
                 pass
     except Exception as e:
@@ -239,7 +237,11 @@ async def handle_connection(websocket):
         pass
 
     if role == "dashboard":
-        send_json(_build_dashboard_sync())
+        init_mode = "assistent"
+        manager.set_mode(client_id, init_mode)
+        sync = _build_dashboard_sync()
+        sync["layout_config"] = _build_layout_config(init_mode)
+        send_json(sync)
         print("[server] Dashboard-Sync gesendet.", flush=True)
     else:
         # Begrüßung für Voice-Clients
@@ -290,7 +292,15 @@ async def handle_connection(websocket):
                         manager.set_role(client_id, role)
                         print(f"[server] Client {addr} heißt jetzt: {name!r} (role={role})")
                     if role == "dashboard":
-                        send_json(_build_dashboard_sync())
+                        mode = data.get("mode", "assistent")
+                        manager.set_mode(client_id, mode)
+                        sync = _build_dashboard_sync()
+                        sync["layout_config"] = _build_layout_config(mode)
+                        send_json(sync)
+                elif data.get("type") == P.SET_MODE:
+                    new_mode = data.get("mode", "assistent")
+                    manager.set_mode(client_id, new_mode)
+                    send_json({"type": P.LAYOUT_CONFIG, **_build_layout_config(new_mode)})
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
                     result = await loop.run_in_executor(None, _handle_data_request, resource)
