@@ -138,9 +138,32 @@ def _seed_modules_cards():
         _write("modules", modules)
 
 
+def _migrate_modules_flat_keys():
+    """Migriert flache Punkt-Keys wie 'assistent.cards' in modes zu verschachtelten Dicts."""
+    modules = _read("modules")
+    if not isinstance(modules, dict):
+        return
+    modes = modules.get("modes", {})
+    if not isinstance(modes, dict):
+        return
+    flat_keys = {k: v for k, v in modes.items() if "." in k}
+    if not flat_keys:
+        return
+    new_modes = {k: v for k, v in modes.items() if "." not in k}
+    for flat_key, value in flat_keys.items():
+        mode_name, sub_key = flat_key.split(".", 1)
+        if not isinstance(new_modes.get(mode_name), dict):
+            new_modes[mode_name] = {}
+        new_modes[mode_name][sub_key] = value
+    modules["modes"] = new_modes
+    _write("modules", modules)
+    print("[brain] modules: Flat-Key-Migration durchgeführt.", flush=True)
+
+
 def sync():
     """Beim Start: Migration, abgelaufene Pausen entfernen, verpasste Routinen flaggen."""
     migrate_sections()
+    _migrate_modules_flat_keys()
     _seed_notion_config()
     _seed_modules_quick_actions()
     _seed_modules_cards()
@@ -311,10 +334,15 @@ def read(section: str, key: str | None = None):
     data = _read(section)
     if key is None:
         return data
-    parts = key.split(".", 1)
-    if len(parts) == 2 and isinstance(data, dict) and isinstance(data.get(parts[0]), dict):
-        return data[parts[0]].get(parts[1])
-    return data.get(key) if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    parts = key.split(".")
+    d = data
+    for part in parts:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(part)
+    return d
 
 
 def write(section: str, key: str, value) -> str:
@@ -337,19 +365,22 @@ def write(section: str, key: str, value) -> str:
     if not isinstance(data, dict):
         data = {}
 
-    parts = key.split(".", 1)
-    if len(parts) == 2:
-        if not isinstance(data.get(parts[0]), dict):
-            data[parts[0]] = {}
-        if value is None:
-            data[parts[0]].pop(parts[1], None)
-        else:
-            data[parts[0]][parts[1]] = value
-    else:
+    parts = key.split(".")
+    if len(parts) == 1:
         if value is None:
             data.pop(key, None)
         else:
             data[key] = value
+    else:
+        d = data
+        for part in parts[:-1]:
+            if not isinstance(d.get(part), dict):
+                d[part] = {}
+            d = d[part]
+        if value is None:
+            d.pop(parts[-1], None)
+        else:
+            d[parts[-1]] = value
 
     _write(section, data)
     if value is None:
