@@ -36,16 +36,30 @@ def _is_noise(text: str) -> bool:
 
 
 class JarvisPipeline:
-    def __init__(self, client_id: str, on_event, on_audio=None):
+    def __init__(self, client_id: str, on_event, on_audio=None,
+                 shared_history: list | None = None,
+                 history_lock: threading.Lock | None = None,
+                 llm_semaphore: threading.Semaphore | None = None,
+                 room: str | None = None):
         """
-        client_id : eindeutiger Name des Clients ("local", "ws-abc123", …)
-        on_event  : callable(event: dict) — empfängt alle JSON-Events
-        on_audio  : callable(pcm: bytes) | None — empfängt PCM-Chunks (None = kein TTS)
+        client_id      : eindeutiger Name des Clients
+        on_event       : callable(event: dict)
+        on_audio       : callable(pcm: bytes) | None
+        shared_history : geteilte History aller Clients (vom Server übergeben)
+        history_lock   : Lock für thread-sicheren History-Zugriff
+        llm_semaphore  : stellt sicher dass nur ein LLM-Call gleichzeitig läuft (FIFO)
+        room           : Raumname für Dynamic Prompt (= Client-Name)
         """
         self.client_id = client_id
         self._on_event = on_event
         self._on_audio = on_audio
-        self.history: list[dict] = []
+        self.history: list[dict] = shared_history if shared_history is not None else []
+        self._history_lock = history_lock or threading.Lock()
+        self._llm_semaphore = llm_semaphore or threading.Semaphore(1)
+        self._room = room or client_id
+
+    def set_room(self, room: str):
+        self._room = room
 
     # ── Öffentliche Methoden ──────────────────────────────────────────────────
 
@@ -74,27 +88,32 @@ class JarvisPipeline:
         self.process_text(user_text, use_tts=self._on_audio is not None)
 
     def process_text(self, text: str, use_tts: bool = True):
-        """Text → LLM → (TTS) → Events"""
-        self.history.append({"role": "user", "content": text})
-        # Nur beim ersten Turn einer Konversation refreshen — nicht nach jedem Turn.
-        # Sonst sieht JARVIS seine eigenen Notion-Updates als neue Info und wiederholt sie.
-        if len(self.history) == 1:
+        """Text → LLM → (TTS) → Events. Semaphore stellt FIFO sicher (kein paralleler LLM-Call)."""
+        with self._llm_semaphore:
+            with self._history_lock:
+                self.history.append({"role": "user", "content": text})
+                history_snapshot = list(self.history)
+
             context.refresh_if_stale()
-        system_static = context.build_static_prompt()
-        system_dynamic = context.build_dynamic_prompt()
+            system_static = context.build_static_prompt()
+            system_dynamic = context.build_dynamic_prompt(room=self._room)
 
-        self._emit(P.STATE, state="thinking")
-        response = self._run_llm(system_static, system_dynamic, self.history, use_tts=use_tts)
+            self._emit(P.STATE, state="thinking")
+            response = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
 
-        if response:
-            self.history.append({"role": "assistant", "content": response})
-            self.history = self.history[-20:]
+            if response:
+                with self._history_lock:
+                    self.history.append({"role": "assistant", "content": response})
+                    if len(self.history) > 20:
+                        del self.history[:-20]
 
-        self._emit(P.STATE, state="idle")
+            self._emit(P.STATE, state="idle")
 
     def save_session(self):
-        if self.history:
-            t = session_memory.save(list(self.history))
+        with self._history_lock:
+            snapshot = list(self.history)
+        if snapshot:
+            t = session_memory.save(snapshot)
             if t:
                 t.join(timeout=10)
 

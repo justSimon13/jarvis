@@ -274,8 +274,8 @@ def build_static_prompt(mode: str = "assistent") -> str:
     return "\n\n".join(parts)
 
 
-def build_dynamic_prompt() -> str:
-    """Volatiler Teil — Uhrzeit, BTC, Kalender. Nie gecacht."""
+def build_dynamic_prompt(room: str | None = None) -> str:
+    """Volatiler Teil — Uhrzeit, BTC, Kalender, Raum. Nie gecacht."""
     now = datetime.now()
     hour = now.hour
     today = now.date()
@@ -292,7 +292,10 @@ def build_dynamic_prompt() -> str:
     else:
         tageszeit = "Nacht"
 
-    parts = [f"Aktuelle Zeit: {today_str}, {now.strftime('%H:%M')} ({tageszeit})"]
+    time_line = f"Aktuelle Zeit: {today_str}, {now.strftime('%H:%M')} ({tageszeit})"
+    if room:
+        time_line += f"\nAktueller Raum: {room}"
+    parts = [time_line]
 
     cal = calendar_service.format_for_prompt()
     if cal:
