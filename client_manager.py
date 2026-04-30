@@ -122,6 +122,14 @@ class ClientManager:
             except Exception:
                 pass
 
+    def get_dashboard_event_callbacks(self) -> list[callable]:
+        with self._lock:
+            return [
+                self._event_handlers[cid]
+                for cid in self._clients
+                if self._roles.get(cid) == "dashboard" and cid in self._event_handlers
+            ]
+
     @property
     def connected(self) -> list[str]:
         with self._lock:

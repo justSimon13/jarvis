@@ -45,13 +45,39 @@ def _build_dashboard_sync() -> dict:
         cal_events = cal_service.query_cached(days_ahead=7)
     except Exception:
         pass
+    alarms: list = []
+    try:
+        alarms = alarm_service.list_alarms()
+    except Exception:
+        pass
+    followups: dict = {}
+    try:
+        followups = brain.read("followups") or {}
+    except Exception:
+        pass
     return {
         "type": P.DASHBOARD_SYNC,
         "todos": todos,
         "calendar": cal_events,
         "btc": btc_data,
         "clients": manager.list_clients(),
+        "alarms": alarms,
+        "followups": followups,
     }
+
+
+async def _push_dashboard_update():
+    loop = asyncio.get_event_loop()
+    try:
+        payload = await loop.run_in_executor(None, _build_dashboard_sync)
+        payload["type"] = P.DASHBOARD_UPDATE
+        for cb in manager.get_dashboard_event_callbacks():
+            try:
+                cb(payload)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[server] Dashboard-Update Fehler: {e}", flush=True)
 
 
 async def handle_connection(websocket):
@@ -132,6 +158,7 @@ async def handle_connection(websocket):
             if isinstance(message, bytes):
                 manager.set_active(client_id)
                 await loop.run_in_executor(None, pipeline.process_audio, message)
+                asyncio.create_task(_push_dashboard_update())
             else:
                 data = json.loads(message)
                 if data.get("type") == P.TEXT_INPUT:
@@ -140,6 +167,7 @@ async def handle_connection(websocket):
                     await loop.run_in_executor(
                         None, pipeline.process_text, data["text"], use_tts
                     )
+                    asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
                     name = data.get("name", "")
                     role = data.get("role", "client")
