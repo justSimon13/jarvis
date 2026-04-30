@@ -42,5 +42,10 @@ PLAY_MUSIC   = "play_music"   # {"type": "play_music", "song": "query", "volume"
 STOP_MUSIC   = "stop_music"   # {"type": "stop_music"}
 
 # ── Dashboard (Server → Dashboard-Client) ─────────────────────────────────────
-DASHBOARD_SYNC   = "dashboard_sync"   # {"type": "dashboard_sync", "todos": [...], "calendar": [...], "btc": {...}, "clients": [...]}
-DASHBOARD_UPDATE = "dashboard_update" # {"type": "dashboard_update", "key": "todos"|"calendar"|"clients", "data": {...}}
+DASHBOARD_SYNC   = "dashboard_sync"   # {"type": "dashboard_sync", "todos": [...], "calendar": [...], "btc": {...}, "clients": [...], "layout_config": {...}}
+DASHBOARD_UPDATE = "dashboard_update" # {"type": "dashboard_update", ..., "layout_config": {...}}
+LAYOUT_CONFIG    = "layout_config"    # {"type": "layout_config", "cards": [...], "quick_actions": [...]}
+
+# ── Drei-Layer-Protokoll (Client ↔ Server) ────────────────────────────────────
+DATA_REQUEST  = "data_request"   # {"type": "data_request", "resource": "todos"|"calendar"|"alarms"|"followups"|"clients"|"btc"}
+DATA_RESPONSE = "data_response"  # {"type": "data_response", "resource": "...", "data": ...}

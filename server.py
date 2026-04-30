@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import threading
+from datetime import date
 
 import websockets
 
@@ -33,6 +34,97 @@ manager = ClientManager()
 shared_history: list[dict] = []
 history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
+
+
+def _build_layout_config() -> dict:
+    """Berechnet server-seitig welche Cards angezeigt werden sollen."""
+    alarms = []
+    try:
+        alarms = alarm_service.list_alarms()
+    except Exception:
+        pass
+
+    followups_due = []
+    try:
+        followups_raw = brain.read("followups") or {}
+        if isinstance(followups_raw, dict):
+            today_iso = date.today().isoformat()
+            followups_due = [
+                k for k, v in followups_raw.items()
+                if v and (not isinstance(v, dict) or not v.get("due") or v.get("due") <= today_iso)
+            ]
+    except Exception:
+        pass
+
+    cards = [
+        {"id": "todos",    "type": "list",   "title": "Todos heute", "source": "todos_today"},
+        {"id": "calendar", "type": "agenda", "title": "Heute",       "source": "calendar_today"},
+        {"id": "btc",      "type": "metric", "title": "BTC",         "source": "btc"},
+    ]
+    if alarms:
+        cards.append({"id": "alarms", "type": "list", "title": "Wecker", "source": "alarms"})
+    if followups_due:
+        cards.append({"id": "followups", "type": "list", "title": "Offene Punkte", "source": "followups_due"})
+
+    return {
+        "cards": cards,
+        "quick_actions": [
+            {
+                "id": "alarm",
+                "label": "Wecker",
+                "icon": "⏰",
+                "input": {"type": "time_picker", "label": "Weckzeit"},
+                "send": "Stell einen Wecker für {value} Uhr.",
+            },
+            {
+                "id": "todo_add",
+                "label": "Todo +",
+                "icon": "📋",
+                "input": {"type": "text", "placeholder": "Was muss erledigt werden?"},
+                "send": "Erstelle ein Todo: {value}",
+            },
+            {
+                "id": "checkin",
+                "label": "Check-In",
+                "icon": "💬",
+                "input": None,
+                "send": "Mach einen kurzen Morgen Check-In.",
+            },
+        ],
+    }
+
+
+def _handle_data_request(resource: str):
+    if resource == "todos":
+        conn = context._get_db()
+        data = context._get_cached(conn, "todos") or []
+        conn.close()
+        return data
+    if resource == "calendar":
+        try:
+            from services import calendar as cal_service
+            return cal_service.query_cached(days_ahead=7)
+        except Exception:
+            return []
+    if resource == "alarms":
+        try:
+            return alarm_service.list_alarms()
+        except Exception:
+            return []
+    if resource == "followups":
+        try:
+            return brain.read("followups") or {}
+        except Exception:
+            return {}
+    if resource == "clients":
+        return manager.list_clients()
+    if resource == "btc":
+        try:
+            from services import btc as btc_service
+            return btc_service.get_price()
+        except Exception:
+            return {}
+    return None
 
 
 def _build_dashboard_sync() -> dict:
@@ -69,6 +161,7 @@ def _build_dashboard_sync() -> dict:
         "clients": manager.list_clients(),
         "alarms": alarms,
         "followups": followups,
+        "layout_config": _build_layout_config(),
     }
 
 
@@ -87,6 +180,7 @@ async def _push_dashboard_update():
     try:
         payload = await loop.run_in_executor(None, _build_dashboard_sync)
         payload["type"] = P.DASHBOARD_UPDATE
+        payload["layout_config"] = _build_layout_config()
         for cb in manager.get_dashboard_event_callbacks():
             try:
                 cb(payload)
@@ -197,6 +291,10 @@ async def handle_connection(websocket):
                         print(f"[server] Client {addr} heißt jetzt: {name!r} (role={role})")
                     if role == "dashboard":
                         send_json(_build_dashboard_sync())
+                elif data.get("type") == P.DATA_REQUEST:
+                    resource = data.get("resource", "")
+                    result = await loop.run_in_executor(None, _handle_data_request, resource)
+                    send_json({"type": P.DATA_RESPONSE, "resource": resource, "data": result})
                 elif data.get("type") == P.ALARM_SYNC:
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.sync_from_client(client_name, data.get("alarms", []))

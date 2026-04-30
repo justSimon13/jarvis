@@ -183,7 +183,7 @@ def build_static_prompt(mode: str = "assistent") -> str:
     """Stabiler Teil — für Prompt Caching geeignet. Ändert sich höchstens alle 15 min."""
     # Persönlichkeit: brain.modules wenn vorhanden, sonst config.SYSTEM_PROMPT_BASE
     modules_prompt = brain.build_modules_prompt(mode)
-    parts = [modules_prompt if modules_prompt else config.SYSTEM_PROMPT_BASE]
+    parts = [modules_prompt if modules_prompt else "Du bist J.A.R.V.I.S., der persönliche KI-Assistent von Simon Fischer. Antworte auf Deutsch."]
 
     brain_section = brain.build_prompt_section(mode)
     if brain_section:

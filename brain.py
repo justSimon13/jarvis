@@ -45,9 +45,57 @@ def _write(section: str, data):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def get_config(key: str, default=None):
+    """Liest einen Wert aus brain.config. Unterstützt dot-notation (z.B. 'notion.todos')."""
+    data = _read("config")
+    if not isinstance(data, dict):
+        return default
+    parts = key.split(".", 1)
+    if len(parts) == 2:
+        sub = data.get(parts[0])
+        if isinstance(sub, dict):
+            return sub.get(parts[1], default)
+        return default
+    return data.get(key, default)
+
+
+def _seed_notion_config():
+    """Schreibt Notion-IDs und Konfiguration aus Env-Vars in brain.config (idempotent)."""
+    import os
+    data = _read("config")
+    if not isinstance(data, dict):
+        data = {}
+
+    notion = data.get("notion", {})
+    if not isinstance(notion, dict):
+        notion = {}
+
+    changed = False
+    ids = {
+        "todos_db_id": os.getenv("NOTION_TODOS_DB_ID", "10ab63fa-fc26-80f5-9865-cf57555d8002"),
+        "projekte_db_id": os.getenv("NOTION_PROJEKTE_DB_ID", "194b63fa-fc26-80d1-9832-dceb4301afd3"),
+        "konzepte_db_id": os.getenv("NOTION_KONZEPTE_DB_ID", "19fb63fa-fc26-80d3-807c-ffba582e38c0"),
+        "kontakte_db_id": os.getenv("NOTION_KONTAKTE_DB_ID", "1a4b63fa-fc26-808c-ad83-e4973e38f570"),
+    }
+    for k, v in ids.items():
+        if k not in notion:
+            notion[k] = v
+            changed = True
+
+    weather_city = os.getenv("WEATHER_CITY", "Stuttgart")
+    if "weather_city" not in data:
+        data["weather_city"] = weather_city
+        changed = True
+
+    if changed:
+        data["notion"] = notion
+        _write("config", data)
+
+
 def sync():
     """Beim Start: Migration, abgelaufene Pausen entfernen, verpasste Routinen flaggen."""
     migrate_sections()
+    _seed_notion_config()
     _check_expirations()
     check_missed_routines()
 
