@@ -1,93 +1,67 @@
-# J.A.R.V.I.S. – Architektur
+# J.A.R.V.I.S. — Architektur
 
-## Vision
-Kein klassischer Assistent — ein aktives System das Simons Leben mitgestaltet.
-Zentrale Logik auf einem lokalen Server, Clients sind reine Ein-/Ausgabe-Geräte.
+Dieses Dokument ist die verbindliche Referenz für alle Implementierungsentscheidungen.
+Letzte Überarbeitung: 2026-04-30
+
+---
+
+## Kernprinzip
+
+**JARVIS ist ein System, nicht mehrere Assistenten.**
+
+- Eine History, ein Brain, ein Kontext — für alle Clients
+- Clients sind dumme I/O-Geräte: Audio rein, Audio raus, Events empfangen
+- Alle Entscheidungen (Kontext, Wissen, Verhalten) leben auf dem Server
+- Ausnahmen nur wo physisch nötig: Alarm-Klingel lokal, Audio-I/O lokal
+
+---
+
+## Physische Topologie
+
+```
+HP EliteDesk (24/7, Linux)
+├── server.py            ← WebSocket-Server :8765
+├── ~/.jarvis/brain.db   ← Brain-Datenbank
+├── ~/.jarvis/sessions.db
+└── alarm_registry.json
+
+Lenovo (Wohnzimmer, Linux)
+└── jarvis-satellite/    ← Audio I/O + Alarm-Klingel, verbindet zu HP
+
+iPad (Browser/PWA)
+└── jarvis-dashboard/    ← Vue PWA, verbindet zu HP
+
+Mac (Entwicklung)
+└── main.py              ← Standalone-Modus (CLI, kein Server)
+```
 
 ---
 
 ## Repos
 
-| Repo | URL | Beschreibung |
-|---|---|---|
-| `jarvis` | github.com/justSimon13/jarvis | Server — läuft 24/7 auf HP EliteDesk |
-| `jarvis-app` | github.com/justSimon13/jarvis-app | Mac + Windows Client mit GUI |
-| `jarvis-satellite` | github.com/justSimon13/jarvis-satellite | Headless Audio Client (Laptop, Raspberry Pi) |
-| `jarvis-dashboard` | — | Wall Tablet PWA (React) — später |
+| Repo | Beschreibung |
+|------|-------------|
+| `jarvis` | Server — läuft 24/7 auf HP EliteDesk |
+| `jarvis-satellite` | Headless Audio Client (Lenovo, Raspberry Pi) |
+| `jarvis-dashboard` | iPad PWA |
 
 ---
 
-## Hardware
+## Pipeline
 
-| Gerät | Rolle | Status |
-|---|---|---|
-| HP EliteDesk (Ubuntu Server) | Zentrales Gehirn, 24/7 | ⏳ Netzteil fehlt noch |
-| MacBook | Client 1 — GUI + Audio | ✅ läuft (standalone / server) |
-| Alter Laptop (Ubuntu) | Client 2 — Headless Audio | 🔧 einrichten |
-| Raspberry Pi pro Raum | Client 3+ — Headless Audio | später |
-| iPad / Android Tablet | Dashboard PWA | später |
-
-Netzwerk: LAN/WLAN im Heimnetz. Remote-Zugriff via Tailscale (später).
-
----
-
-## Wie alles zusammenhängt
+Eine `JarvisPipeline`-Instanz pro Client — aber **eine geteilte History und ein geteilter Kontext**.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   JARVIS Server                     │
-│  server.py  →  pipeline.py  →  llm / tts / stt     │
-│  Läuft auf: Mac (jetzt) → HP EliteDesk (später)     │
-└──────────────┬──────────────────────────────────────┘
-               │ WebSocket (ws://192.168.x.x:8765)
-       ┌───────┴────────┐
-       │                │
-  jarvis-app       jarvis-satellite
-  (Mac GUI)        (Ubuntu Laptop, headless)
-  Mikrofon → WAV   Mikrofon → WAV
-  PCM → Speaker    PCM → Speaker
+Client A ──→ JarvisPipeline A ──┐
+                                 ├──→ shared_history  (in-memory, Server)
+Client B ──→ JarvisPipeline B ──┘     shared_context  (brain.db)
 ```
 
-**Wichtig:** Clients haben keine Logik, keine API Keys (außer JARVIS_SERVER).
-Alles — Claude, ElevenLabs, Notion, Brain — läuft auf dem Server.
+**Gleichzeitiger Input:** FIFO-Queue — immer nur eine Pipeline schreibt gleichzeitig in die History.
 
----
-
-## Modi
-
-| Modus | Beschreibung |
-|---|---|
-| **Standalone** | `python3 main.py` auf dem Mac. Kein Server nötig, alles lokal. Für Entwicklung. |
-| **Server** | `python3 server.py` — startet WebSocket Server, Clients verbinden sich. |
-| **Client** | `python3 client.py` (satellite) oder `python3 app.py` (GUI). Braucht laufenden Server. |
-
----
-
-## Server-Dateien (`jarvis`)
-
-```
-server.py           ← WebSocket Server, eine Pipeline pro Client
-pipeline.py         ← STT → LLM → TTS, callback-basiert
-client_manager.py   ← Client-Registry, Audio-Routing
-protocol.py         ← Nachrichten-Typen + PCM-Format
-main.py             ← Standalone-Modus (kein WebSocket, Entwicklung)
-llm.py              ← Claude (austauschbar gegen Ollama etc.)
-stt.py              ← ElevenLabs Scribe (austauschbar)
-tts.py              ← ElevenLabs TTS (austauschbar)
-audio.py            ← Wake Word + VAD — nur im Standalone-Modus
-tools.py            ← Tool-Definitionen + execute()
-context.py          ← System Prompt Builder
-brain.py            ← Langzeit-Speicher (SQLite)
-session_memory.py   ← Session History (SQLite)
-config.py           ← Konfiguration aus .env
-```
-
-### Datenbanken (lokal auf Server)
-```
-~/.jarvis/brain.db          ← Profil, Einstellungen, Memory, Follow-ups
-~/.jarvis/sessions.db       ← Session History (Zusammenfassungen)
-~/.jarvis/notion_cache.db   ← Notion API Cache
-```
+Pipeline pro Client bleibt wegen:
+- PCM-Routing ist Client-spezifisch (Audio geht an den Client der gesprochen hat)
+- TTS-State ist Client-spezifisch
 
 ---
 
@@ -95,193 +69,308 @@ config.py           ← Konfiguration aus .env
 
 ```
 Mikrofon (Client)
+    │ lokal auf Client
+Wake Word Detection   (openWakeWord)
+    │ lokal auf Client
+VAD Recording         (Silero VAD)
+    │ WAV via WebSocket → Server
+STT                   (ElevenLabs Scribe)
     │
-    ▼  lokal auf Client
-Wake Word Detection     OpenWakeWord — hey_jarvis
-    │
-    ▼  lokal auf Client
-VAD Recording           Silero VAD — stoppt bei Redepause
-    │  WAV via WebSocket → Server
-    ▼  auf Server
-STT                     ElevenLabs Scribe
-    │
-    ▼  auf Server
-LLM                     Claude claude-sonnet-4-6, streaming
-    │  ├── Tool Call → execute() → weiter
-    │  PCM via WebSocket → Client
-    ▼  auf Server
-TTS                     ElevenLabs (entfällt bei tts=false)
-    │
-    ▼  auf Client
+LLM                   (Claude Sonnet, streaming)
+    │ ├── Tool Call → execute() → weiter
+    │ PCM via WebSocket → Client
+TTS                   (ElevenLabs, entfällt bei tts=false)
+    │ auf Client
 Lautsprecher
 ```
 
----
-
-## WebSocket Protokoll
-
-**Binary:** Client → Server: WAV | Server → Client: PCM (24kHz, mono, int16)
-
-**JSON Server → Client:**
-```
-state            idle | listening | thinking | speaking | tool_running
-transcript       Erkannter Text
-response_chunk   Streaming-Chunk
-response_done    Antwort fertig
-tool             Tool-Name
-error            Fehlermeldung
-```
-
-**JSON Client → Server:**
-```
-text_input    {"type": "text_input", "text": "...", "tts": true/false}
-              tts=false → kein Audio, nur Text (Text-Mode)
-```
+TTS läuft parallel zum LLM-Streaming (sobald ein Satz erkannt wird → sofort an ElevenLabs).
 
 ---
 
-## Setup-Guide
+## Brain DB — Sections
 
-### Situation A — Standalone (Mac, kein Server)
-Für Entwicklung und solange kein Server läuft.
-```bash
-cd jarvis
-python3 main.py
-```
-Fertig. Alles läuft lokal auf dem Mac.
+`~/.jarvis/brain.db`, alle Sections als JSON-Blob.
 
----
+| Section     | Inhalt                                                                  |
+|-------------|-------------------------------------------------------------------------|
+| `profile`   | Wer Simon ist — freies Key-Value, kein festes Schema                   |
+| `behavior`  | Wie JARVIS sich verhalten soll (Tonalität, Priorisierung, Stil)        |
+| `memory`    | Was JARVIS über Simon gelernt hat (Liste von Einträgen)                |
+| `followups` | Offene Punkte für nächstes Gespräch (mit optionalem `due`-Datum)      |
+| `events`    | Routinen: Check-In, Check-Out, Sport, sonstige Zeitfenster             |
+| `modules`   | Prompt-Inhalte — Basis-Identität + pro Modus (assistent/coach/fokus)  |
+| `config`    | Technisches: Notion-Config, Proaktiv-Einstellungen, Wetter-City etc.   |
 
-### Situation B — Mac als Server + Ubuntu Laptop als Client (aktuell)
-
-#### Schritt 1: Mac-IP herausfinden
-```bash
-# auf dem Mac:
-ipconfig getifaddr en0        # WLAN
-ipconfig getifaddr en1        # LAN (falls per Kabel)
-# Ergebnis z.B. 192.168.1.42
-```
-
-#### Schritt 2: Server auf dem Mac starten
-```bash
-cd /path/to/jarvis
-python3 server.py
-# → [server] J.A.R.V.I.S. bereit — ws://0.0.0.0:8765
-```
-Der Server läuft jetzt und wartet auf Clients.
-
-#### Schritt 3: Ubuntu Laptop einrichten
-```bash
-# System-Abhängigkeiten
-sudo apt update
-sudo apt install -y python3 python3-pip python3-venv git portaudio19-dev
-
-# Repo klonen
-git clone https://github.com/justSimon13/jarvis-satellite
-cd jarvis-satellite
-
-# Python-Umgebung
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Konfiguration
-cp .env.example .env
-nano .env
-```
-
-In der `.env` eintragen:
-```
-JARVIS_SERVER=ws://192.168.1.42:8765   ← Mac-IP von Schritt 1
-MANUAL_MODE=false
-AUDIO_INPUT_DEVICE=                     ← leer lassen, auto-detect
-```
-
-#### Schritt 4: Client starten
-```bash
-source .venv/bin/activate
-python3 client.py
-# → [client] Verbinde mit ws://192.168.1.42:8765…
-# → [client] Verbunden!
-# → [client] Warte auf Wake Word…
-```
-Sag "Hey JARVIS" — der Mac verarbeitet, der Laptop spricht.
+> **Migration von alten Sections:**
+> `settings` → aufgeteilt in `behavior` + `events` + `config`
+> `context_config` → `config`
 
 ---
 
-### Situation C — HP EliteDesk als Server (sobald Netzteil da)
+### brain.modules — Format
 
-#### Schritt 1: Ubuntu Server installieren
-Minimal-Installation, kein Desktop.
-
-#### Schritt 2: Server einrichten
-```bash
-git clone https://github.com/justSimon13/jarvis
-cd jarvis
-bash install_server.sh
-```
-
-#### Schritt 3: API Keys eintragen
-```bash
-nano .env
-```
-Eintragen: `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`,
-`NOTION_API_KEY`, `EMAIL_ADDRESS`, `EMAIL_PASSWORD` etc.
-`SUPABASE_URL` und `SUPABASE_KEY` weglassen — nicht mehr nötig.
-
-#### Schritt 4: Brain-Daten kopieren (vom Mac)
-```bash
-# auf dem Mac:
-SERVER_IP=192.168.1.xxx   # IP des HP EliteDesk
-scp ~/.jarvis/brain.db simon@$SERVER_IP:~/.jarvis/brain.db
-scp ~/.jarvis/sessions.db simon@$SERVER_IP:~/.jarvis/sessions.db
-```
-
-#### Schritt 5: Server starten
-```bash
-sudo systemctl start jarvis
-sudo systemctl status jarvis
-journalctl -u jarvis -f        # Live-Logs
-```
-
-#### Schritt 6: Feste IP im Router
-Im Router-Interface (meistens fritz.box oder 192.168.1.1):
-DHCP-Reservierung für den HP EliteDesk einrichten.
-Damit bekommt er immer dieselbe IP — einmal konfigurieren, nie wieder ändern.
-
-#### Schritt 7: Clients auf neue Server-IP umstellen
-In `.env` jedes Clients:
-```
-JARVIS_SERVER=ws://192.168.1.xxx:8765   ← IP des HP EliteDesk
+```json
+{
+  "base": {
+    "identity": "Du bist J.A.R.V.I.S., persönlicher Assistent von Simon Fischer.",
+    "rules": [
+      "Antworte immer auf Deutsch.",
+      "Sei direkt und präzise, kein Fülltext."
+    ]
+  },
+  "modes": {
+    "assistent": {
+      "description": "Standard-Modus: Alltag, Produktivität, Planung",
+      "prompt": "Fokus auf Todos, Termine und Projekte. Aktiv auf offene Punkte hinweisen."
+    },
+    "coach": {
+      "description": "Performance-Coach: Ziele, Habits, Wochenbilanz",
+      "prompt": "Direkter Coach-Stil. Hinterfragen. Klare Fragen stellen. Keine Ausreden."
+    },
+    "fokus": {
+      "description": "Minimal-Modus: keine Ablenkung",
+      "prompt": "Kurze, präzise Antworten. Kein Smalltalk. Nur das Wesentliche."
+    }
+  }
+}
 ```
 
 ---
 
-## Remote-Zugriff (Tailscale) — später
+### brain.profile — Format
 
-Tailscale steckt alle Geräte in ein privates VPN — erreichbar von überall.
-**Solange du nur zuhause bist: nicht nötig.**
+Freies Key-Value-Dict, **kein festes Schema**. JARVIS schreibt/liest beliebige Keys.
+Alle Keys erscheinen automatisch im Prompt — kein `ordered_keys`, kein `label_map`.
 
-Einrichten wenn gewünscht:
-1. `tailscale.com` → auf Server, Mac und Laptop installieren
-2. Alle mit demselben Account einloggen
-3. `tailscale ip` auf dem Server → gibt die Tailscale-IP zurück
-4. `JARVIS_SERVER=ws://<tailscale-ip>:8765` in alle Clients eintragen
+```json
+{
+  "name": "Simon Fischer",
+  "standort": "München",
+  "alter": "28",
+  "interessen": "Züge, Bitcoin, Freelancing",
+  "btc_bestand": "...",
+  "langfristige_ziele": "..."
+}
+```
 
 ---
 
-## Offene Punkte
+## Config-Split: .env vs brain.config
 
-- [x] SQLite Brain + Sessions (brain.py, session_memory.py)
-- [x] Migration Supabase → SQLite (migrate.py)
-- [x] pipeline.py + client_manager.py implementieren
-- [x] server.py auf Pipeline umgestellt
-- [x] jarvis-app Repo angelegt (github.com/justSimon13/jarvis-app)
-- [x] jarvis-satellite Repo angelegt (github.com/justSimon13/jarvis-satellite)
-- [ ] HP EliteDesk: Ubuntu Server, systemd Service, feste IP
-- [ ] Ubuntu Laptop als Client 2 einrichten (jarvis-satellite)
-- [ ] Tailscale auf Server + Clients einrichten
-- [ ] Abstraktionsschicht LLM (Claude → Ollama)
-- [ ] Abstraktionsschicht TTS/STT
-- [ ] Background Task System
-- [ ] Wall Tablet PWA (jarvis-dashboard)
+**`.env` enthält nur Secrets:**
+- API Keys (Anthropic, ElevenLabs, Notion, Google, etc.)
+- SMTP/IMAP Credentials
+- Alles was ein Token, Key oder Passwort ist
+
+**`brain.config` enthält alles andere:**
+- `weather_city`
+- Notion-Datenbank-IDs und Lade-Parameter
+- Proaktiv-Service-Einstellungen
+- Server-Port (optional)
+
+Regel: Kann JARVIS es sinnvoll lesen oder ändern? → `brain.config`. Ist es ein Secret? → `.env`.
+
+---
+
+## System-Prompt — Zwei-Schichten-Modell
+
+```
+Static Prompt  (Anthropic Prompt Cache, 5 min TTL)
+├── brain.modules.base           ← Identität + Grundregeln
+├── brain.modules.modes[aktiv]   ← Modus-spezifischer Abschnitt
+├── brain.profile                ← Wer Simon ist (alle Keys)
+├── brain.behavior               ← Verhaltensregeln
+├── brain.events                 ← Aktive Routinen
+├── brain.followups              ← Fällige offene Punkte
+├── brain.memory                 ← Gelerntes
+├── session_memory               ← Letzte 3 Tage Sessions
+└── context (Notion-Cache)       ← Todos, Projekte, Konzepte
+
+Dynamic Prompt  (kein Cache, immer frisch)
+├── Aktuelle Uhrzeit + Wochentag + Tageszeit
+├── Google Calendar (nächste Events)
+└── BTC-Preis
+```
+
+**Aktiver Modus:** Kommt vom Client per `CLIENT_HELLO` (`mode`-Feld) oder per `set_mode`-Event.
+Server wählt `brain.modules.modes[modus]` für den Static Prompt.
+
+---
+
+## WebSocket-Protokoll — Drei Layer
+
+### Layer 1: DATA (kein LLM, keine Token)
+
+Direkte Datenanfragen. Sofortige Antwort vom Server.
+
+```jsonc
+// Request:
+{"type": "data_request", "resource": "todos"}
+
+// Response:
+{"type": "data_response", "resource": "todos", "data": [...]}
+```
+
+Verfügbare Resources: `todos`, `calendar`, `alarms`, `followups`, `clients`, `btc`
+
+### Layer 2: ACTION (durch JARVIS)
+
+User wählt Eingabe → Frontend baut Text aus Template → JARVIS verarbeitet mit vollem Kontext.
+
+```jsonc
+{"type": "text_input", "text": "Stell einen Wecker für 07:30 Uhr.", "tts": false}
+// → normaler JARVIS-Response-Flow
+```
+
+Quick Actions im Dashboard liefern das Text-Template mit `{value}`.
+JARVIS bleibt im Loop — kennt Kontext, prüft Konflikte, schreibt History.
+
+### Layer 3: CONVERSATION (freier Chat)
+
+```jsonc
+{"type": "text_input", "text": "...", "tts": true}
+// oder Audio-Bytes für Voice-Input
+```
+
+---
+
+## Dashboard — Server-Driven UI
+
+Der Server definiert was gezeigt wird. Das Frontend ist ein generischer Renderer.
+
+### layout_config
+
+Beim Connect geschickt (zusammen mit Datenpaketen). Nach jeder JARVIS-Antwort neu berechnet und als `dashboard_update` gepushed.
+
+```json
+{
+  "type": "layout_config",
+  "cards": [
+    {"id": "todos",     "type": "list",   "title": "Todos heute",   "source": "todos_today"},
+    {"id": "calendar",  "type": "agenda", "title": "Heute",         "source": "calendar_today"},
+    {"id": "btc",       "type": "metric", "title": "BTC",           "source": "btc"},
+    {"id": "followups", "type": "list",   "title": "Offene Punkte", "source": "followups_due"},
+    {"id": "alarms",    "type": "list",   "title": "Wecker",        "source": "alarms"}
+  ],
+  "quick_actions": [
+    {
+      "id": "alarm",
+      "label": "Wecker",
+      "icon": "⏰",
+      "input": {"type": "time_picker", "label": "Weckzeit"},
+      "send": "Stell einen Wecker für {value} Uhr."
+    },
+    {
+      "id": "todo_add",
+      "label": "Todo +",
+      "icon": "📋",
+      "input": {"type": "text", "placeholder": "Was muss erledigt werden?"},
+      "send": "Erstelle ein Todo: {value}"
+    },
+    {
+      "id": "checkin",
+      "label": "Check-In",
+      "icon": "💬",
+      "input": null,
+      "send": "Mach einen kurzen Morgen Check-In."
+    }
+  ]
+}
+```
+
+**Cards sind server-computed:** Alarm-Karte erscheint wenn `alarm_service.list_alarms()` nicht leer.
+Followup-Karte wenn fällige Einträge in `brain.followups` vorhanden. Karten verschwinden wenn Datenquelle leer.
+
+JARVIS steuert das Dashboard **indirekt**: Er schreibt in `brain.followups`, setzt Alarme, erstellt Todos → Server leitet daraus die Layout-Config ab.
+
+### Reaktive Updates
+
+Nach jeder JARVIS-Antwort:
+1. Server baut `layout_config` + alle Datenpakete neu
+2. Pusht `dashboard_update` an alle verbundenen Dashboard-Clients
+
+### Frontend-Mapping
+
+```
+source           → store state
+─────────────────────────────────
+todos_today      → store.todosToday
+calendar_today   → store.calendarToday
+btc              → store.btc
+followups_due    → store.followupsDue
+alarms           → store.alarms
+clients          → store.clients
+```
+
+```
+card type  → Vue-Komponente
+────────────────────────────
+list       → ListCard.vue
+agenda     → AgendaCard.vue
+metric     → MetricCard.vue
+```
+
+```
+input type   → Modal-Komponente
+───────────────────────────────
+time_picker  → TimePickerModal.vue
+text         → TextInputModal.vue
+null         → direkt senden
+```
+
+---
+
+## Satellite — Was bleibt, was geht
+
+**Bleibt lokal (physisch nötig):**
+- Audio I/O: Wake-Word, VAD, Aufnahme, Wiedergabe
+- Alarm-Klingel-Logik (muss offline funktionieren)
+- Minimale Config: Server-URL, Audio-Device-Name, Client-Name
+
+**Fliegt raus:**
+- `SYSTEM_PROMPT_BASE` — hat im Client nichts zu suchen
+- Jede Logik die besser auf dem Server aufgehoben ist
+
+---
+
+## Implementierungs-Reihenfolge
+
+1. **Brain-Migration** — neue Sections (`behavior`, `events`, `modules`, `config`), alte Daten migrieren, `brain.py` generisch machen (`ordered_keys`/`label_map` raus)
+2. **SYSTEM_PROMPT_BASE → brain.modules** — `config.py` auf Secrets reduzieren
+3. **Shared History** — Pipeline-Refactor: eine geteilte History, FIFO-Queue
+4. **Drei-Layer-Protokoll** — `data_request`/`data_response` im Server implementieren
+5. **layout_config** — Server berechnet und pusht die Config, Karten server-computed
+6. **Dashboard-Refactor** — generischer Renderer, Time Picker Modal, `layout_config` verarbeiten
+7. **Satellite-Cleanup** — `SYSTEM_PROMPT_BASE` raus, auf Minimum trimmen
+
+---
+
+## Verzeichnisstruktur (Ziel)
+
+```
+server.py              ← WebSocket-Server
+pipeline.py            ← STT → LLM → TTS
+client_manager.py      ← Client-Registry + Dashboard-Routing
+protocol.py            ← Event-Typen
+brain.py               ← Brain DB (generisch, kein hardcoded Schema)
+context.py             ← System-Prompt Builder
+llm.py                 ← Anthropic Streaming + Prompt Caching
+stt.py                 ← ElevenLabs Scribe
+tts.py                 ← ElevenLabs TTS
+tools.py               ← Tool-Definitionen + execute()
+session_memory.py      ← Session-Zusammenfassungen (Haiku)
+config.py              ← nur Secrets aus .env
+main.py                ← Standalone CLI (unverändert)
+services/
+  alarm.py             ← Wecker-Registry + Sleep-Log
+  calendar.py          ← Google Calendar (cached)
+  btc.py               ← CoinGecko (cached)
+  notion.py            ← Notion API
+  email.py             ← IMAP/SMTP
+  proactive.py         ← Kalender-Reminder + VIP-Email-Push
+  timer.py             ← Software-Timer
+  search.py            ← DuckDuckGo
+  sleep_coach.py       ← Schlaferinnerungen
+  client_music.py      ← Musik-Routing an Satellite
+```
