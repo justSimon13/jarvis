@@ -39,7 +39,7 @@ display_history: list[dict] = []
 history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
 
-SESSION_TIMEOUT = 300   # Sekunden Inaktivität → neue Session
+SESSION_TIMEOUT = 900   # Sekunden Inaktivität → neue Session (15 Min)
 _last_activity_ts: float = 0.0
 
 _HISTORY_FILE = Path.home() / ".jarvis" / "history.json"
