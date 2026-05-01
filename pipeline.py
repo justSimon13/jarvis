@@ -100,10 +100,16 @@ class JarvisPipeline:
             system_dynamic = context.build_dynamic_prompt(room=self._room)
 
             self._emit(P.STATE, state="thinking")
-            response = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
+            response, final_messages = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
 
-            if response:
-                with self._history_lock:
+            with self._history_lock:
+                if final_messages:
+                    # Vollständige History inkl. Tool-Calls sichern — verhindert Doppel-Reads
+                    del self.history[:]
+                    self.history.extend(final_messages)
+                    if len(self.history) > 40:
+                        del self.history[:-40]
+                elif response:
                     self.history.append({"role": "assistant", "content": response})
                     if len(self.history) > 20:
                         del self.history[:-20]
@@ -126,7 +132,7 @@ class JarvisPipeline:
         system_dynamic: str,
         messages: list[dict],
         use_tts: bool = True,
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
         client_messages = messages.copy()
         full_response = ""
 
@@ -189,12 +195,12 @@ class JarvisPipeline:
                     time.sleep(5)
                 else:
                     self._emit(P.ERROR, message=f"API-Fehler: {e}")
-                return ""
+                return "", []
             except Exception as e:
                 if use_tts and self._on_audio:
                     tts_queue.put(None)
                 self._emit(P.ERROR, message=f"Fehler: {e}")
-                return ""
+                return "", []
 
             if use_tts and self._on_audio:
                 if buffer.strip():
@@ -206,6 +212,8 @@ class JarvisPipeline:
 
             if final.stop_reason == "end_turn":
                 full_response = turn_text
+                if turn_text:
+                    client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
                 break
 
             if final.stop_reason == "tool_use":
@@ -225,7 +233,7 @@ class JarvisPipeline:
                 client_messages = llm.compress_tool_history(client_messages)
                 self._emit(P.STATE, state="thinking")
 
-        return full_response
+        return full_response, client_messages
 
     # ── Intern ────────────────────────────────────────────────────────────────
 
