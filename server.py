@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -31,38 +32,85 @@ PORT = int(os.getenv("JARVIS_PORT", "8765"))
 
 manager = ClientManager()
 
-# Geteilte History + Synchronisations-Primitive für alle Clients
-shared_history: list[dict] = []
+# api_history: aktuelle Session → geht an Claude API, wird bei Inaktivität geleert
+# display_history: vollständiges Protokoll → für Transcript-Ansicht im Dashboard
+api_history: list[dict] = []
+display_history: list[dict] = []
 history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
 
+SESSION_TIMEOUT = 300   # Sekunden Inaktivität → neue Session
+_last_activity_ts: float = 0.0
+
 _HISTORY_FILE = Path.home() / ".jarvis" / "history.json"
-_HISTORY_KEEP = 100  # Nachrichten die persistent gespeichert werden
+_HISTORY_KEEP = 200
 
 
 def _save_history():
-    """Schreibt die letzten _HISTORY_KEEP Text-Nachrichten auf Disk."""
+    """Schreibt die letzten _HISTORY_KEEP Einträge (inkl. session_break) auf Disk."""
     try:
+        to_save = []
         with history_lock:
-            snapshot = [m for m in shared_history[-_HISTORY_KEEP:]
-                        if isinstance(m.get("content"), str)]
+            for m in display_history[-_HISTORY_KEEP:]:
+                if m.get("content") == "session_break" or isinstance(m.get("content"), str):
+                    to_save.append(m)
         _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _HISTORY_FILE.write_text(json.dumps(snapshot, ensure_ascii=False))
+        _HISTORY_FILE.write_text(json.dumps(to_save, ensure_ascii=False))
     except Exception as e:
         print(f"[server] History-Save Fehler: {e}", flush=True)
 
 
 def _load_history():
-    """Lädt gespeicherte History beim Start zurück in shared_history."""
+    """Lädt gespeicherte History beim Start in display_history. Fügt Session-Break ein."""
     try:
         if not _HISTORY_FILE.exists():
             return
         data = json.loads(_HISTORY_FILE.read_text())
-        if isinstance(data, list):
-            shared_history.extend(data)
-            print(f"[server] History geladen: {len(data)} Nachrichten", flush=True)
+        if not isinstance(data, list) or not data:
+            return
+        display_history.extend(data)
+        # Session-Break nach Neustart einfügen (außer wenn bereits letzter Eintrag ein Break ist)
+        last = display_history[-1] if display_history else None
+        if not (last and last.get("content") == "session_break"):
+            display_history.append({
+                "content": "session_break",
+                "role": "system",
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            })
+        print(f"[server] History geladen: {len(data)} Einträge", flush=True)
     except Exception as e:
         print(f"[server] History-Load Fehler: {e}", flush=True)
+
+
+def _maybe_start_new_session() -> bool:
+    """Prüft ob >SESSION_TIMEOUT Inaktivität. Falls ja: api_history leeren + Break einfügen.
+    Gibt True zurück wenn eine neue Session gestartet wurde."""
+    global _last_activity_ts
+    now = time.time()
+    started_new = False
+    if _last_activity_ts > 0 and (now - _last_activity_ts) > SESSION_TIMEOUT:
+        with history_lock:
+            api_history.clear()
+            last = display_history[-1] if display_history else None
+            if not (last and last.get("content") == "session_break"):
+                display_history.append({
+                    "content": "session_break",
+                    "role": "system",
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                })
+        started_new = True
+        print(f"[server] Neue Session nach {(now - _last_activity_ts)/60:.1f} Min Inaktivität", flush=True)
+    _last_activity_ts = now
+    return started_new
+
+
+def _push_session_break_to_dashboards():
+    """Sendet session_break Event an alle verbundenen Dashboard-Clients."""
+    for cb, _ in manager.get_dashboard_event_callbacks():
+        try:
+            cb({"type": P.SESSION_BREAK})
+        except Exception:
+            pass
 
 
 _QA_REGISTRY = {
@@ -158,8 +206,14 @@ def _handle_data_request(resource: str):
             return {}
     if resource == "history":
         with history_lock:
-            snapshot = [m for m in shared_history[-60:] if isinstance(m.get("content"), str)]
-        return [{"role": m["role"], "text": m["content"]} for m in snapshot]
+            snapshot = list(display_history[-120:])
+        result = []
+        for m in snapshot:
+            if m.get("content") == "session_break":
+                result.append({"role": "system", "type": "session_break", "timestamp": m.get("timestamp", "")})
+            elif isinstance(m.get("content"), str):
+                result.append({"role": m["role"], "text": m["content"]})
+        return result
     if resource == "weather":
         try:
             from services import weather as weather_service
@@ -315,7 +369,17 @@ async def handle_connection(websocket):
     addr = websocket.remote_address
     print(f"[server] Client verbunden: {addr} ({client_id})")
 
+    _capture = [False]  # Wird nach Greeting/Dashboard-Init auf True gesetzt
+
     def send_json(event: dict):
+        if _capture[0]:
+            etype = event.get("type")
+            if etype == P.TRANSCRIPT and event.get("text"):
+                with history_lock:
+                    display_history.append({"role": "user", "content": event["text"]})
+            elif etype == P.RESPONSE_DONE and event.get("text"):
+                with history_lock:
+                    display_history.append({"role": "assistant", "content": event["text"]})
         asyncio.run_coroutine_threadsafe(
             websocket.send(json.dumps(event, ensure_ascii=False)), loop
         )
@@ -327,7 +391,7 @@ async def handle_connection(websocket):
         client_id=client_id,
         on_event=send_json,
         on_audio=send_audio,
-        shared_history=shared_history,
+        shared_history=api_history,
         history_lock=history_lock,
         llm_semaphore=llm_semaphore,
     )
@@ -367,13 +431,15 @@ async def handle_connection(websocket):
             send_json(overlay)
         print("[server] Dashboard-Sync gesendet.", flush=True)
     else:
-        # Begrüßung für Voice-Clients
+        # Begrüßung für Voice-Clients (nicht in display_history aufnehmen)
         print("[server] Starte Greeting…", flush=True)
         try:
             await loop.run_in_executor(None, pipeline.process_text, "Sag nur: Bereit.", True)
             print("[server] Greeting fertig.", flush=True)
         except Exception as e:
             print(f"[server] Greeting Fehler: {e}", flush=True)
+
+    _capture[0] = True  # Ab jetzt Gespräche in display_history aufnehmen
 
     try:
         # Ausstehende Nachrichten (falls CLIENT_HELLO noch nicht verarbeitet) zuerst
@@ -396,6 +462,8 @@ async def handle_connection(websocket):
         async for message in websocket:
             if isinstance(message, bytes):
                 _activate_client(client_id)
+                if _maybe_start_new_session():
+                    _push_session_break_to_dashboards()
                 await loop.run_in_executor(None, pipeline.process_audio, message)
                 _save_history()
                 asyncio.create_task(_push_dashboard_update())
@@ -404,9 +472,12 @@ async def handle_connection(websocket):
                 if data.get("type") == P.TEXT_INPUT:
                     _activate_client(client_id)
                     use_tts = data.get("tts", True)
-                    await loop.run_in_executor(
-                        None, pipeline.process_text, data["text"], use_tts
-                    )
+                    text = data["text"]
+                    if _maybe_start_new_session():
+                        _push_session_break_to_dashboards()
+                    with history_lock:
+                        display_history.append({"role": "user", "content": text})
+                    await loop.run_in_executor(None, pipeline.process_text, text, use_tts)
                     _save_history()
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
