@@ -465,6 +465,7 @@ async def handle_connection(websocket):
                 if _maybe_start_new_session():
                     _push_session_break_to_dashboards()
                 await loop.run_in_executor(None, pipeline.process_audio, message)
+                _last_activity_ts = time.time()  # Timer ab Ende der Antwort messen
                 _save_history()
                 asyncio.create_task(_push_dashboard_update())
             else:
@@ -478,6 +479,7 @@ async def handle_connection(websocket):
                     with history_lock:
                         display_history.append({"role": "user", "content": text})
                     await loop.run_in_executor(None, pipeline.process_text, text, use_tts)
+                    _last_activity_ts = time.time()  # Timer ab Ende der Antwort messen
                     _save_history()
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
