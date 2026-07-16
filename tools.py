@@ -701,10 +701,12 @@ DEFINITIONS = [
         "name": "write_knowledge",
         "description": (
             "Schreibt oder aktualisiert eine Datei in der Wissensdatenbank. "
-            "Verwenden für: Pläne, Erkenntnisse, Kontext, Ansätze — KEINE Zahlen/Ziele (→ set_goal). "
-            "Aufrufen wenn Simon etwas plant, lernt oder entscheidet das dauerhaft relevant ist. "
-            "Existierende Datei wird überschrieben — vorher read_knowledge aufrufen wenn Inhalte erhalten werden sollen. "
-            "Für neue Abschnitte in bestehender Datei: append_section statt write_knowledge bevorzugen (nicht implementiert als Tool — vollständigen neuen Inhalt übergeben)."
+            "SOFORT AUFRUFEN — ohne explizite Aufforderung — wenn Simon etwas mitteilt das dauerhaft relevant ist. "
+            "Konkrete Trigger: Simon nennt einen Plan, eine Entscheidung, eine Erkenntnis, eine Präferenz, eine Routine, "
+            "eine Gewohnheit, eine Meinung über eine Person, ein Projekt, ein Ziel (als Prose), eine Erfahrung. "
+            "Auch aufrufen wenn Simon sagt 'merk dir', 'denk dran', 'ich will', 'ich habe entschieden', 'ab jetzt'. "
+            "NUR Prose/Kontext hier — KEINE reinen Zahlenwerte (→ set_goal oder log_entry). "
+            "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben."
         ),
         "input_schema": {
             "type": "object",
@@ -725,9 +727,9 @@ DEFINITIONS = [
         "name": "search_knowledge",
         "description": (
             "Durchsucht den Wissens-Index nach relevanten Dateien. "
-            "Aufrufen bevor read_knowledge um zu prüfen ob Wissen zu einem Thema existiert. "
-            "Gibt Pfad + kurze Zusammenfassung zurück — kein vollständiger Inhalt. "
-            "Dann read_knowledge für die relevante Datei aufrufen."
+            "PROAKTIV aufrufen wenn ein Thema aufkommt und du nicht sicher bist ob Wissen dazu existiert. "
+            "Immer aufrufen bevor write_knowledge — prüfen ob die Datei schon existiert. "
+            "Gibt Pfad + kurze Zusammenfassung zurück. Dann read_knowledge für den vollen Inhalt."
         ),
         "input_schema": {
             "type": "object",
@@ -763,10 +765,13 @@ DEFINITIONS = [
         "name": "log_entry",
         "description": (
             "Schreibt einen Log-Eintrag in tracking.db. "
-            "Für Zeitreihen-Daten: Training absolviert, Gewicht gemessen, Kalorien getrackt. "
-            "Kein LLM-Overhead — direkt schreiben wenn Simon etwas berichtet. "
-            "Beispiele: Simon sagt 'Training gemacht' → log_entry('sport', 'training', text_value='Pull-Day'). "
-            "Simon nennt sein Gewicht → log_entry('sport', 'gewicht', value=82.5, unit='kg')."
+            "SOFORT AUFRUFEN wenn Simon etwas Messbares berichtet — ohne Aufforderung. "
+            "Trigger: Training erwähnt, Gewicht genannt, Kalorien/Mahlzeit beschrieben, Schlafdauer, "
+            "gelesene Seiten, erledigte Aufgaben, Ausgaben, Einnahmen. "
+            "Parallel zur Antwort aufrufen — Simon nicht fragen ob er es geloggt haben will. "
+            "Beispiele: 'Training gemacht' → log_entry('sport', 'training', text_value='Pull-Day'). "
+            "'Ich wiege heute 82kg' → log_entry('sport', 'gewicht', value=82.0, unit='kg'). "
+            "'Hatte heute 2800 kcal' → log_entry('ernaehrung', 'kalorien', value=2800, unit='kcal')."
         ),
         "input_schema": {
             "type": "object",
