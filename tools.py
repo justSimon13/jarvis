@@ -1,5 +1,7 @@
 import json
 import brain
+import knowledge
+import tracking
 from services import notion as notion_service
 from services import calendar as calendar_service
 from services import email as email_service
@@ -673,6 +675,129 @@ DEFINITIONS = [
             },
         },
     },
+
+    # ── Wissensdatenbank ──────────────────────────────────────────────────────
+    {
+        "name": "read_knowledge",
+        "description": (
+            "Liest eine Datei aus der persönlichen Wissensdatenbank. "
+            "PROAKTIV AUFRUFEN wenn das Gesprächsthema zu einem bekannten Topic passt — "
+            "ohne dass Simon explizit darum bittet. "
+            "Beispiele: Simon fragt nach Sport/Training → read_knowledge('sport', 'fitnessplan'). "
+            "Simon plant eine App → read_knowledge('programmierung', 'security'). "
+            "Simon fragt was geplant war → zuerst search_knowledge, dann read_knowledge. "
+            "Verfügbare Topics und Dateien via search_knowledge('') ermitteln."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic-Ordner, z.B. 'sport', 'programmierung', 'simon'"},
+                "file":  {"type": "string", "description": "Dateiname ohne .md, z.B. 'fitnessplan', '_core'"},
+            },
+            "required": ["topic", "file"],
+        },
+    },
+    {
+        "name": "write_knowledge",
+        "description": (
+            "Schreibt oder aktualisiert eine Datei in der Wissensdatenbank. "
+            "Verwenden für: Pläne, Erkenntnisse, Kontext, Ansätze — KEINE Zahlen/Ziele (→ set_goal). "
+            "Aufrufen wenn Simon etwas plant, lernt oder entscheidet das dauerhaft relevant ist. "
+            "Existierende Datei wird überschrieben — vorher read_knowledge aufrufen wenn Inhalte erhalten werden sollen. "
+            "Für neue Abschnitte in bestehender Datei: append_section statt write_knowledge bevorzugen (nicht implementiert als Tool — vollständigen neuen Inhalt übergeben)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic":   {"type": "string", "description": "Topic-Ordner, z.B. 'sport'"},
+                "file":    {"type": "string", "description": "Dateiname ohne .md"},
+                "content": {"type": "string", "description": "Vollständiger Markdown-Inhalt der Datei"},
+                "tags":    {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags für den Index, z.B. ['training', 'krafttraining']",
+                },
+            },
+            "required": ["topic", "file", "content"],
+        },
+    },
+    {
+        "name": "search_knowledge",
+        "description": (
+            "Durchsucht den Wissens-Index nach relevanten Dateien. "
+            "Aufrufen bevor read_knowledge um zu prüfen ob Wissen zu einem Thema existiert. "
+            "Gibt Pfad + kurze Zusammenfassung zurück — kein vollständiger Inhalt. "
+            "Dann read_knowledge für die relevante Datei aufrufen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Suchbegriff, z.B. 'fitness', 'security', 'ernährung'"},
+            },
+            "required": ["query"],
+        },
+    },
+
+    # ── Tracking ──────────────────────────────────────────────────────────────
+    {
+        "name": "set_goal",
+        "description": (
+            "Setzt oder aktualisiert ein strukturiertes Ziel in tracking.db. "
+            "NUR für konkrete Zielwerte mit Einheit — KEINE Prose (→ write_knowledge). "
+            "Beispiele: Kalorienziel, Gewichtsziel, Trainingshäufigkeit, Monatsbudget. "
+            "topic+key ist der eindeutige Schlüssel, z.B. topic='sport', key='kalorien_ziel'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Themenbereich, z.B. 'sport', 'finanzen'"},
+                "key":   {"type": "string", "description": "Schlüssel, z.B. 'kalorien_ziel', 'gewicht_ziel'"},
+                "value": {"type": "number", "description": "Zielwert"},
+                "unit":  {"type": "string", "description": "Einheit, z.B. 'kcal', 'kg', 'x/Woche'"},
+                "label": {"type": "string", "description": "Lesbare Beschreibung, z.B. 'Tägliches Kalorienziel'"},
+            },
+            "required": ["topic", "key", "value"],
+        },
+    },
+    {
+        "name": "log_entry",
+        "description": (
+            "Schreibt einen Log-Eintrag in tracking.db. "
+            "Für Zeitreihen-Daten: Training absolviert, Gewicht gemessen, Kalorien getrackt. "
+            "Kein LLM-Overhead — direkt schreiben wenn Simon etwas berichtet. "
+            "Beispiele: Simon sagt 'Training gemacht' → log_entry('sport', 'training', text_value='Pull-Day'). "
+            "Simon nennt sein Gewicht → log_entry('sport', 'gewicht', value=82.5, unit='kg')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic":      {"type": "string", "description": "Themenbereich"},
+                "key":        {"type": "string", "description": "Schlüssel, z.B. 'training', 'gewicht', 'kalorien'"},
+                "value":      {"type": "number", "description": "Numerischer Wert (optional)"},
+                "text_value": {"type": "string", "description": "Textwert, z.B. 'Pull-Day abgeschlossen' (optional)"},
+                "unit":       {"type": "string", "description": "Einheit (optional)"},
+                "notes":      {"type": "string", "description": "Zusatzinfos (optional)"},
+                "date":       {"type": "string", "description": "Datum YYYY-MM-DD (Standard: heute)"},
+            },
+            "required": ["topic", "key"],
+        },
+    },
+    {
+        "name": "get_progress",
+        "description": (
+            "Zeigt Ziele + letzten Log-Wert + Trend für ein Topic. "
+            "PROAKTIV AUFRUFEN wenn Simon über Fortschritt, Statistiken oder Verlauf fragt. "
+            "Gibt Übersicht ohne vollständige Logs — für Details get_logs nicht vorhanden, "
+            "stattdessen konkrete Zahlen aus get_progress verwenden."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Themenbereich, z.B. 'sport'"},
+            },
+            "required": ["topic"],
+        },
+    },
 ]
 
 
@@ -908,6 +1033,54 @@ def execute(tool_name: str, tool_input: dict) -> str:
             else:
                 ok = timer_service.cancel_by_label(tool_input.get("label", ""))
             return "Timer abgebrochen." if ok else "Kein passender Timer gefunden."
+
+        # ── Wissensdatenbank ──────────────────────────────────────────────────
+        if tool_name == "read_knowledge":
+            content = knowledge.read(tool_input["topic"], tool_input["file"])
+            if not content:
+                return f"Keine Datei gefunden: {tool_input['topic']}/{tool_input['file']}.md"
+            return content
+
+        if tool_name == "write_knowledge":
+            knowledge.write(
+                topic=tool_input["topic"],
+                file=tool_input["file"],
+                content=tool_input["content"],
+                tags=tool_input.get("tags"),
+            )
+            return f"Gespeichert: {tool_input['topic']}/{tool_input['file']}.md"
+
+        if tool_name == "search_knowledge":
+            results = knowledge.search(tool_input["query"])
+            if not results:
+                return "Keine passenden Einträge in der Wissensdatenbank gefunden."
+            return json.dumps(results, ensure_ascii=False)
+
+        # ── Tracking ──────────────────────────────────────────────────────────
+        if tool_name == "set_goal":
+            return tracking.set_goal(
+                topic=tool_input["topic"],
+                key=tool_input["key"],
+                value=tool_input["value"],
+                unit=tool_input.get("unit", ""),
+                label=tool_input.get("label", ""),
+            )
+
+        if tool_name == "log_entry":
+            entry_id = tracking.add_log(
+                topic=tool_input["topic"],
+                key=tool_input["key"],
+                value=tool_input.get("value"),
+                text_value=tool_input.get("text_value"),
+                unit=tool_input.get("unit", ""),
+                notes=tool_input.get("notes", ""),
+                log_date=tool_input.get("date"),
+            )
+            return f"Geloggt (ID: {entry_id})"
+
+        if tool_name == "get_progress":
+            result = tracking.get_progress(tool_input["topic"])
+            return json.dumps(result, ensure_ascii=False)
 
         return f"Unbekanntes Tool: {tool_name}"
     except Exception as e:

@@ -132,6 +132,11 @@ class ClientManager:
             except Exception:
                 pass
 
+    def get_event_callback(self, client_id: str) -> callable | None:
+        """Gibt den Event-Callback für einen spezifischen Client zurück."""
+        with self._lock:
+            return self._event_handlers.get(client_id)
+
     def get_dashboard_event_callbacks(self) -> list[tuple]:
         """Gibt (callback, mode) Tupel für alle verbundenen Dashboard-Clients zurück."""
         with self._lock:

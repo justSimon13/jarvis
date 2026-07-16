@@ -25,7 +25,10 @@ GITHUB_REPO = "justSimon13/jarvis"
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)
 
-NOTION_CACHE_DB = JARVIS_DIR / "notion_cache.db"
+NOTION_CACHE_DB   = JARVIS_DIR / "notion_cache.db"
+KNOWLEDGE_DIR     = JARVIS_DIR / "knowledge"
+KNOWLEDGE_INDEX_DB = JARVIS_DIR / "knowledge_index.db"
+TRACKING_DB       = JARVIS_DIR / "tracking.db"
 
 NOTION_TODOS_DB_ID = os.getenv("NOTION_TODOS_DB_ID", "10ab63fa-fc26-80f5-9865-cf57555d8002")
 NOTION_PROJEKTE_DB_ID = os.getenv("NOTION_PROJEKTE_DB_ID", "194b63fa-fc26-80d1-9832-dceb4301afd3")

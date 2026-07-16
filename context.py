@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from notion_client import Client as NotionClient
 import config
 import brain
+import knowledge
 from services import btc
 from services import calendar as calendar_service
 import session_memory
@@ -181,11 +182,90 @@ _MONATE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
            "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
 
-def build_static_prompt(mode: str = "assistent") -> str:
-    """Stabiler Teil — für Prompt Caching geeignet. Ändert sich höchstens alle 15 min."""
-    # Persönlichkeit: brain.modules wenn vorhanden, sonst config.SYSTEM_PROMPT_BASE
+# ── Context Modularisierung ───────────────────────────────────────────────────
+
+# Keywords → Modul
+_KEYWORD_MAP: dict[str, str] = {
+    "todo": "todos",        "aufgabe": "todos",      "erledigt": "todos",
+    "task": "todos",        "offen": "todos",
+
+    "termin": "calendar",   "kalender": "calendar",  "wann": "calendar",
+    "meeting": "calendar",  "heute": "calendar",     "morgen": "calendar",
+    "appointment": "calendar",
+
+    "projekt": "projects",  "freelancing": "projects", "kunde": "projects",
+    "auftrag": "projects",  "arbeit": "projects",
+
+    "bitcoin": "btc",       "btc": "btc",            "kurs": "btc",
+    "crypto": "btc",        "preis": "btc",          "portfolio": "btc",
+
+    "idee": "concepts",     "konzept": "concepts",   "plan": "concepts",
+    "vorhaben": "concepts",
+}
+
+_CHECKIN_KEYWORDS = {"check-in", "checkin", "guten morgen", "morgen check",
+                     "morning", "check in", "tagesstart"}
+
+# Welche Module jeder Modus standardmäßig lädt (ohne Keyword-Trigger)
+_MODE_DEFAULT_MODULES: dict[str, set[str]] = {
+    "assistent": {"todos", "calendar", "btc"},
+    "coach":     {"todos", "calendar"},
+    "fokus":     set(),
+}
+
+
+def detect_modules(first_message: str, mode: str = "assistent") -> set[str]:
+    """
+    Erkennt welche Kontext-Module für diese Session geladen werden sollen.
+    Basis: Mode-Defaults + Keyword-Erkennung auf der ersten User-Message.
+    Fallback auf vollständigen Kontext wenn Message sehr kurz/unklar ist.
+    """
+    # Kurze/unklare Message → vollständiger Kontext als Fallback
+    if len(first_message.strip()) < 8:
+        return {"todos", "calendar", "btc", "projects", "concepts"}
+
+    modules: set[str] = set(_MODE_DEFAULT_MODULES.get(mode, {"todos", "calendar", "btc"}))
+
+    text_lower = first_message.lower()
+
+    # Check-in → alles laden
+    if any(kw in text_lower for kw in _CHECKIN_KEYWORDS):
+        return {"todos", "calendar", "btc", "projects", "concepts"}
+
+    # Keyword-basiert zusätzliche Module laden
+    for keyword, module in _KEYWORD_MAP.items():
+        if keyword in text_lower:
+            modules.add(module)
+
+    return modules
+
+
+def build_static_prompt(mode: str = "assistent", active_modules: set[str] | None = None) -> str:
+    """
+    Stabiler Teil — für Prompt Caching geeignet. Ändert sich höchstens alle 15 min.
+    active_modules steuert welche Kontext-Sektionen geladen werden.
+    None = alles laden (Fallback/Rückwärtskompatibilität).
+    """
+    load_all = active_modules is None
+    modules = active_modules or {"todos", "calendar", "btc", "projects", "concepts"}
+
     modules_prompt = brain.build_modules_prompt(mode)
     parts = [modules_prompt if modules_prompt else "Du bist J.A.R.V.I.S., der persönliche KI-Assistent von Simon Fischer. Antworte auf Deutsch."]
+
+    # ── Knowledge: simon/_core.md — immer laden ───────────────────────────────
+    core = knowledge.read("simon", "_core")
+    if core:
+        parts.append(core)
+
+    # ── Knowledge: Topic-Summary für aktiven Modus ────────────────────────────
+    modules_data = brain.read("modules") or {}
+    modes_data   = modules_data.get("modes", {}) if isinstance(modules_data, dict) else {}
+    mode_cfg     = modes_data.get(mode, {}) if isinstance(modes_data, dict) else {}
+    topic_names  = mode_cfg.get("knowledge_topics", []) if isinstance(mode_cfg, dict) else []
+    for topic in topic_names:
+        summary = knowledge.read_summary(topic)
+        if summary:
+            parts.append(summary)
 
     brain_section = brain.build_prompt_section(mode)
     if brain_section:
@@ -206,13 +286,12 @@ def build_static_prompt(mode: str = "assistent") -> str:
     proj_extra = cc_proj.get("extra_felder", [])
 
     conn = _get_db()
-    todos = _get_cached(conn, "todos") or []
-    projekte = _get_cached(conn, "projekte") or []
-    konzepte = _get_cached(conn, "konzepte") or [] if cc_konz.get("laden", True) else []
+    todos     = _get_cached(conn, "todos")    or [] if "todos"    in modules else []
+    projekte  = _get_cached(conn, "projekte") or [] if "projects" in modules else []
+    konzepte  = _get_cached(conn, "konzepte") or [] if "concepts" in modules and cc_konz.get("laden", True) else []
     conn.close()
 
     today = date.today()
-    week_start = today - timedelta(days=today.weekday())
 
     if todos:
         overdue, today_todos, future_todos, undated = [], [], [], []
@@ -275,11 +354,16 @@ def build_static_prompt(mode: str = "assistent") -> str:
             lines.append(line)
         parts.append("\n".join(lines))
 
+    loaded = sorted(modules & {"todos", "calendar", "btc", "projects", "concepts"})
+    print(f"[context] Module geladen: {loaded}", flush=True)
+
     return "\n\n".join(parts)
 
 
-def build_dynamic_prompt(room: str | None = None) -> str:
+def build_dynamic_prompt(room: str | None = None, active_modules: set[str] | None = None) -> str:
     """Volatiler Teil — Uhrzeit, BTC, Kalender, Raum. Nie gecacht."""
+    modules = active_modules or {"calendar", "btc"}
+
     now = datetime.now()
     hour = now.hour
     today = now.date()
@@ -301,12 +385,14 @@ def build_dynamic_prompt(room: str | None = None) -> str:
         time_line += f"\nAktueller Raum: {room}"
     parts = [time_line]
 
-    cal = calendar_service.format_for_prompt()
-    if cal:
-        parts.append(cal)
+    if "calendar" in modules:
+        cal = calendar_service.format_for_prompt()
+        if cal:
+            parts.append(cal)
 
-    btc_str = btc.format_for_prompt()
-    if btc_str:
-        parts.append(btc_str)
+    if "btc" in modules:
+        btc_str = btc.format_for_prompt()
+        if btc_str:
+            parts.append(btc_str)
 
     return "\n\n".join(parts)

@@ -1,7 +1,7 @@
 # J.A.R.V.I.S. — Architektur
 
 Dieses Dokument ist die verbindliche Referenz für alle Implementierungsentscheidungen.
-Letzte Überarbeitung: 2026-04-30
+Letzte Überarbeitung: 2026-05-04
 
 ---
 
@@ -19,20 +19,22 @@ Letzte Überarbeitung: 2026-04-30
 ## Physische Topologie
 
 ```
-HP EliteDesk (24/7, Linux)
+HP EliteDesk (24/7, Linux) — ws://192.168.0.158:8765
 ├── server.py            ← WebSocket-Server :8765
+├── jarvis-satellite/    ← Wohnzimmer-Client (läuft auch auf HP EliteDesk)
+├── jarvis-dashboard/    ← Vite Dev Server :5173 (systemd user service)
 ├── ~/.jarvis/brain.db   ← Brain-Datenbank
 ├── ~/.jarvis/sessions.db
-└── alarm_registry.json
-
-Lenovo (Wohnzimmer, Linux)
-└── jarvis-satellite/    ← Audio I/O + Alarm-Klingel, verbindet zu HP
+└── ~/.jarvis/alarm_registry.json
 
 iPad (Browser/PWA)
-└── jarvis-dashboard/    ← Vue PWA, verbindet zu HP
+└── jarvis-dashboard/    ← Vue PWA (Home Screen App), verbindet zu HP
 
 Mac (Entwicklung)
 └── main.py              ← Standalone-Modus (CLI, kein Server)
+
+Schlafzimmer-Client (geplant)
+└── jarvis-satellite/    ← Orange Pi / RPi, gleiches Script
 ```
 
 ---
@@ -72,7 +74,7 @@ Mikrofon (Client)
     │ lokal auf Client
 Wake Word Detection   (openWakeWord)
     │ lokal auf Client
-VAD Recording         (Silero VAD)
+VAD Recording         (RMS-basiert, kein ML — Silero entfernt)
     │ WAV via WebSocket → Server
 STT                   (ElevenLabs Scribe)
     │
@@ -334,15 +336,23 @@ null         → direkt senden
 
 ---
 
-## Implementierungs-Reihenfolge
+## Implementierungsstand (Mai 2026)
 
-1. **Brain-Migration** — neue Sections (`behavior`, `events`, `modules`, `config`), alte Daten migrieren, `brain.py` generisch machen (`ordered_keys`/`label_map` raus)
-2. **SYSTEM_PROMPT_BASE → brain.modules** — `config.py` auf Secrets reduzieren
-3. **Shared History** — Pipeline-Refactor: eine geteilte History, FIFO-Queue
-4. **Drei-Layer-Protokoll** — `data_request`/`data_response` im Server implementieren
-5. **layout_config** — Server berechnet und pusht die Config, Karten server-computed
-6. **Dashboard-Refactor** — generischer Renderer, Time Picker Modal, `layout_config` verarbeiten
-7. **Satellite-Cleanup** — `SYSTEM_PROMPT_BASE` raus, auf Minimum trimmen
+Alle initialen Aufgaben sind abgeschlossen:
+
+- ✅ Brain-Migration — neue Sections, `brain.py` generisch
+- ✅ SYSTEM_PROMPT_BASE → brain.modules, config.py auf Secrets reduziert
+- ✅ Shared History — `api_history` + `display_history`, Session-Timeout 15 Min
+- ✅ Drei-Layer-Protokoll — `data_request`/`data_response` im Server
+- ✅ layout_config — Server berechnet Cards + Quick Actions pro Modus
+- ✅ Dashboard — generischer Renderer, Vue 3 PWA, deployed auf HP + iPad
+- ✅ Satellite-Cleanup — minimaler Client, RMS-VAD, kein Prompt-Code
+- ✅ Proactive Service — Kalender-Reminder + VIP-E-Mail-Push (proactive.py)
+- ✅ Overlay Events — Routinen mit Zeitfenster (Check-In/Out), Snooze/Skip
+- ✅ Session-Break — Marker in History nach Inaktivität, Dashboard-Push
+- ✅ Wetter-Card — weather.py + Dashboard-Integration
+
+**Nächste Schritte → siehe ROADMAP.md**
 
 ---
 

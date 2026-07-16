@@ -1,6 +1,7 @@
 import json
 import sqlite3
-from datetime import date, datetime
+import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _SECTIONS = ["profile", "behavior", "memory", "followups", "events", "modules", "config"]
@@ -160,14 +161,201 @@ def _migrate_modules_flat_keys():
     print("[brain] modules: Flat-Key-Migration durchgeführt.", flush=True)
 
 
+# ── Memory API ───────────────────────────────────────────────────────────────
+
+_MEMORY_MAX = 100
+_VALID_CATEGORIES = {"ziele", "abmachungen", "vorlieben", "kontext", "followup", "wissen"}
+
+
+def remember(text: str, category: str = "kontext", source: str = "gespräch") -> str:
+    """
+    Schreibt einen neuen Memory-Eintrag mit vollständigem Schema.
+    Prüft zuerst auf Duplikat (Substring-Match gleicher Kategorie).
+    Gibt die entry_id zurück.
+    """
+    if category not in _VALID_CATEGORIES:
+        category = "kontext"
+
+    entries = _read("memory")
+    if not isinstance(entries, list):
+        entries = []
+
+    # Dedup: ähnlicher Text + gleiche Kategorie → Update statt Insert
+    text_lower = text.lower()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("category") == category:
+            existing = entry.get("text", "").lower()
+            if text_lower in existing or existing in text_lower:
+                entry["text"] = text
+                entry["ts_iso"] = date.today().isoformat()
+                entry["weight"] = 1.0
+                _write("memory", entries)
+                return entry["id"]
+
+    new_entry = {
+        "id":       str(uuid.uuid4()),
+        "text":     text,
+        "ts_iso":   date.today().isoformat(),
+        "category": category,
+        "weight":   1.0,
+        "source":   source,
+    }
+    entries.append(new_entry)
+
+    # Pruning: über 100 Einträge → niedrigstes weight raus (außer nutzer-explicit)
+    if len(entries) > _MEMORY_MAX:
+        prunable = [e for e in entries if isinstance(e, dict) and e.get("source") != "nutzer-explicit"]
+        prunable.sort(key=lambda e: e.get("weight", 1.0))
+        if prunable:
+            entries.remove(prunable[0])
+
+    _write("memory", entries)
+    return new_entry["id"]
+
+
+def forget(entry_id: str) -> bool:
+    """Löscht einen Memory-Eintrag per ID. Gibt True zurück wenn gefunden."""
+    entries = _read("memory")
+    if not isinstance(entries, list):
+        return False
+    new_entries = [e for e in entries if not (isinstance(e, dict) and e.get("id") == entry_id)]
+    if len(new_entries) == len(entries):
+        return False
+    _write("memory", new_entries)
+    return True
+
+
+def get_memory(top_k: int = 20, min_weight: float = 0.1) -> list[dict]:
+    """Gibt die top_k Memory-Einträge sortiert nach weight zurück (für Prompt-Build)."""
+    entries = _read("memory")
+    if not isinstance(entries, list):
+        return []
+    valid = [e for e in entries if isinstance(e, dict) and e.get("weight", 1.0) >= min_weight]
+    valid.sort(key=lambda e: e.get("weight", 1.0), reverse=True)
+    return valid[:top_k]
+
+
+def apply_aging() -> None:
+    """
+    Aktualisiert weights basierend auf Alter. Täglich aufrufen (beim Start).
+    nutzer-explicit Einträge sind vom Aging ausgenommen.
+    """
+    entries = _read("memory")
+    if not isinstance(entries, list):
+        return
+
+    today = date.today()
+    changed = False
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("source") == "nutzer-explicit":
+            continue
+
+        ts_str = entry.get("ts_iso")
+        if not ts_str:
+            continue
+
+        try:
+            entry_date = date.fromisoformat(ts_str)
+        except ValueError:
+            continue
+
+        age_days = (today - entry_date).days
+
+        if age_days <= 30:
+            new_weight = 1.0
+        elif age_days <= 90:
+            new_weight = 0.5
+        else:
+            new_weight = 0.1
+
+        if abs(entry.get("weight", 1.0) - new_weight) > 0.01:
+            entry["weight"] = new_weight
+            changed = True
+
+    if changed:
+        _write("memory", entries)
+
+
+def _migrate_memory_schema() -> None:
+    """
+    Einmalig: bestehende Memory-Einträge ohne Schema auf neues Format heben.
+    Läuft idempotent — Einträge die bereits eine 'id' haben werden übersprungen.
+    """
+    entries = _read("memory")
+    if not isinstance(entries, list) or not entries:
+        return
+
+    changed = False
+    today_iso = date.today().isoformat()
+
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            entries[i] = {
+                "id":       str(uuid.uuid4()),
+                "text":     str(entry),
+                "ts_iso":   today_iso,
+                "category": "kontext",
+                "weight":   1.0,
+                "source":   "gespräch",
+            }
+            changed = True
+            continue
+
+        if "id" not in entry:
+            entry.setdefault("id",       str(uuid.uuid4()))
+            entry.setdefault("ts_iso",   today_iso)
+            entry.setdefault("category", "kontext")
+            entry.setdefault("weight",   1.0)
+            entry.setdefault("source",   "gespräch")
+            changed = True
+
+    if changed:
+        _write("memory", entries)
+        print(f"[brain] Memory-Schema-Migration: {len(entries)} Einträge aktualisiert.", flush=True)
+
+
+def _migrate_profile_to_knowledge():
+    """
+    Einmalig: brain.profile → knowledge/simon/_core.md.
+    Läuft idempotent — wenn _core.md schon existiert, wird nichts getan.
+    """
+    from pathlib import Path
+    core_path = Path.home() / ".jarvis" / "knowledge" / "simon" / "_core.md"
+    if core_path.exists():
+        return
+
+    profile = _read("profile")
+    if not isinstance(profile, dict) or not profile:
+        # Kein Profil vorhanden — leere _core.md anlegen damit context.py nichts lädt
+        return
+
+    import knowledge as knowledge_module
+    lines = ["# Simon Fischer — Kern-Profil\n"]
+    for key, value in profile.items():
+        if value:
+            lines.append(f"- **{key.replace('_', ' ').capitalize()}:** {value}")
+
+    content = "\n".join(lines)
+    knowledge_module.write("simon", "_core", content, tags=["profil", "kern"])
+    print("[brain] brain.profile → knowledge/simon/_core.md migriert.", flush=True)
+
+
 def sync():
     """Beim Start: Migration, abgelaufene Pausen entfernen, verpasste Routinen flaggen."""
     migrate_sections()
     _migrate_modules_flat_keys()
+    _migrate_memory_schema()
+    _migrate_profile_to_knowledge()
     _seed_notion_config()
     _seed_modules_quick_actions()
     _seed_modules_cards()
     _check_expirations()
+    apply_aging()
     check_missed_routines()
 
 
@@ -431,14 +619,18 @@ def build_prompt_section(mode: str = "assistent") -> str:
     data = load()
     parts = []
 
-    # ── Profile (vollständig dynamisch, kein hardcoded Schema) ────────────────
-    profile = data.get("profile", {})
-    if isinstance(profile, dict) and profile:
-        lines = ["## Wer Simon ist"]
-        for key, value in profile.items():
-            if value:
-                lines.append(f"- {key.replace('_', ' ')}: {value}")
-        parts.append("\n".join(lines))
+    # ── Profile — wird nach Migration in knowledge/simon/_core.md geladen ────
+    # Nur noch anzeigen wenn _core.md noch nicht existiert (Übergangszustand)
+    from pathlib import Path as _Path
+    _core_exists = (_Path.home() / ".jarvis" / "knowledge" / "simon" / "_core.md").exists()
+    if not _core_exists:
+        profile = data.get("profile", {})
+        if isinstance(profile, dict) and profile:
+            lines = ["## Wer Simon ist"]
+            for key, value in profile.items():
+                if value:
+                    lines.append(f"- {key.replace('_', ' ')}: {value}")
+            parts.append("\n".join(lines))
 
     # ── Followups ─────────────────────────────────────────────────────────────
     followups = data.get("followups", {})
@@ -563,34 +755,27 @@ def build_prompt_section(mode: str = "assistent") -> str:
         vip_list = ", ".join(contacts["email_vip"])
         parts.append(f"## Kontakte\n- VIP-E-Mail-Kontakte: {vip_list}")
 
-    # ── Memory ────────────────────────────────────────────────────────────────
-    memory = data.get("memory", [])
+    # ── Memory (via get_memory() — gewichtet, max 20 Einträge) ──────────────────
+    memory_entries = get_memory(top_k=20, min_weight=0.1)
     memory_lines = []
-    if isinstance(memory, list):
-        for entry in memory:
-            if not isinstance(entry, dict):
-                memory_lines.append(f"- {entry}")
-                continue
-            if entry.get("type") == "birthday":
-                name = entry.get("name", "Unbekannt")
-                ctx = entry.get("context")
-                date_val = entry.get("date")
-                repeat = entry.get("repeat")
-                line = f"- {name}"
-                if ctx:
-                    line += f" ({ctx})"
-                if date_val:
-                    line += f" hat am {_format_month_day(date_val)} Geburtstag"
-                if repeat == "yearly":
-                    line += ", jährlich erinnern"
-                line += "."
-                memory_lines.append(line)
-            else:
-                text = entry.get("text") or entry.get("note") or str(entry)
-                memory_lines.append(f"- {text}")
-    elif isinstance(memory, dict):
-        for v in memory.values():
-            memory_lines.append(f"- {v}")
+    for entry in memory_entries:
+        if entry.get("type") == "birthday":
+            name = entry.get("name", "Unbekannt")
+            ctx = entry.get("context")
+            date_val = entry.get("date")
+            repeat = entry.get("repeat")
+            line = f"- {name}"
+            if ctx:
+                line += f" ({ctx})"
+            if date_val:
+                line += f" hat am {_format_month_day(date_val)} Geburtstag"
+            if repeat == "yearly":
+                line += ", jährlich erinnern"
+            line += "."
+            memory_lines.append(line)
+        else:
+            text = entry.get("text") or entry.get("note") or str(entry)
+            memory_lines.append(f"- {text}")
     if memory_lines:
         parts.append("## Wichtige Erinnerungen\n" + "\n".join(memory_lines))
 

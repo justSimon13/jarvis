@@ -50,59 +50,82 @@ def _summarize(history: list[dict]) -> dict | None:
     if not turns:
         return None
 
-    try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            system="Du analysierst Gespräche zwischen Simon und seinem KI-Assistenten JARVIS. Antworte nur mit validem JSON, kein Markdown.",
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Analysiere dieses Gespräch und gib JSON zurück:\n"
-                    '{"summary": "2-3 Sätze: Was wurde besprochen, entschieden, getan?", '
-                    '"context": ["Max 3 kurze Hinweise zu Simons Stimmung/Zustand/Situation"], '
-                    '"follow_ups": ["Max 3 offene Punkte die beim nächsten Gespräch relevant sein könnten"]}\n\n'
-                    f"Gespräch:\n{chr(10).join(turns)}"
+    prompt_text = (
+        "Analysiere dieses Gespräch und gib exakt dieses JSON zurück (kein Markdown, kein Text davor/danach):\n"
+        '{"summary": "2-3 Sätze: Was wurde besprochen, entschieden, getan?", '
+        '"context": ["Max 3 kurze Hinweise zu Simons Stimmung/Zustand/Situation"], '
+        '"follow_ups": ["Max 3 offene Punkte die beim nächsten Gespräch relevant sein könnten"]}\n\n'
+        f"Gespräch:\n{chr(10).join(turns)}"
+    )
+
+    last_error = None
+    for attempt in range(3):
+        try:
+            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                system=(
+                    "Du analysierst Gespräche zwischen Simon und seinem KI-Assistenten JARVIS. "
+                    "Antworte NUR mit validem JSON. Kein Markdown, kein Text vor oder nach dem JSON."
                 ),
-            }],
-        )
-        raw = response.content[0].text.strip()
-        if not raw:
-            return None
-        # Claude gibt manchmal ```json ... ``` zurück trotz Anweisung
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        return json.loads(raw)
-    except Exception as e:
-        print(f"[session] Zusammenfassung fehlgeschlagen: {e}")
-        return None
+                messages=[{"role": "user", "content": prompt_text}],
+            )
+            raw = response.content[0].text.strip()
+            if not raw:
+                continue
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            return json.loads(raw)
+        except Exception as e:
+            last_error = e
+            print(f"[session] Versuch {attempt + 1}/3 fehlgeschlagen: {e}", flush=True)
+
+    print(f"[session] Alle Versuche fehlgeschlagen: {last_error}", flush=True)
+    return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def save(history: list[dict]) -> threading.Thread:
-    """Session asynchron zusammenfassen und in SQLite speichern."""
+    """Session asynchron zusammenfassen, speichern und Lernextraktion starten."""
     def _do_save():
-        summary_data = _summarize(history)
-        if not summary_data:
-            return
         now = datetime.now()
+        summary_data = _summarize(history)
+
+        if summary_data:
+            summary_text   = summary_data.get("summary", "")
+            context_json   = json.dumps(summary_data.get("context", []), ensure_ascii=False)
+            follow_ups_json = json.dumps(summary_data.get("follow_ups", []), ensure_ascii=False)
+        else:
+            # Fallback: Raw-Transcript der letzten 10 Turns speichern
+            raw_turns = []
+            for msg in history[-10:]:
+                role = "Simon" if msg["role"] == "user" else "JARVIS"
+                content = msg["content"]
+                if isinstance(content, str):
+                    raw_turns.append(f"{role}: {content[:150]}")
+            summary_text    = "[Zusammenfassung fehlgeschlagen] " + " | ".join(raw_turns)
+            context_json    = "[]"
+            follow_ups_json = "[]"
+            print("[session] Fallback: Raw-Transcript gespeichert.", flush=True)
+
         with _get_db() as conn:
             conn.execute(
                 "INSERT INTO sessions (date, time, summary, context, follow_ups) VALUES (?, ?, ?, ?, ?)",
-                (
-                    now.date().isoformat(),
-                    now.strftime("%H:%M"),
-                    summary_data.get("summary", ""),
-                    json.dumps(summary_data.get("context", []), ensure_ascii=False),
-                    json.dumps(summary_data.get("follow_ups", []), ensure_ascii=False),
-                )
+                (now.date().isoformat(), now.strftime("%H:%M"), summary_text, context_json, follow_ups_json)
             )
-        print(f"[session] Gespeichert: {summary_data.get('summary', '')[:60]}...")
+        print(f"[session] Gespeichert: {summary_text[:60]}…", flush=True)
+
+        # Lernextraktion im Hintergrund starten (daemon=True — blockiert kein Shutdown)
+        try:
+            import learning
+            learning.process_session(history)
+        except Exception as e:
+            print(f"[session] Learning-Start Fehler: {e}", flush=True)
 
     t = threading.Thread(target=_do_save, daemon=False)
     t.start()

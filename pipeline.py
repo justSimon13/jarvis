@@ -58,9 +58,18 @@ class JarvisPipeline:
         self._history_lock = history_lock or threading.Lock()
         self._llm_semaphore = llm_semaphore or threading.Semaphore(1)
         self._room = room or client_id
+        self._mode = "assistent"
+        # Idempotenz: tool_use_ids die bereits in dieser Session ausgeführt wurden
+        self._executed_tool_ids: dict[str, str] = {}  # call_id → result
+        # Context-Module: beim ersten Turn erkannt, für die Session gespeichert
+        self._active_modules: set[str] | None = None
 
     def set_room(self, room: str):
         self._room = room
+
+    def set_mode(self, mode: str):
+        self._mode = mode
+        self._active_modules = None  # Neue Session bei Modus-Wechsel
 
     # ── Öffentliche Methoden ──────────────────────────────────────────────────
 
@@ -95,9 +104,13 @@ class JarvisPipeline:
                 self.history.append({"role": "user", "content": text})
                 history_snapshot = list(self.history)
 
+            # Beim ersten Turn der Session: Module erkennen
+            if self._active_modules is None:
+                self._active_modules = context.detect_modules(text, self._mode)
+
             context.refresh_if_stale()
-            system_static = context.build_static_prompt()
-            system_dynamic = context.build_dynamic_prompt(room=self._room)
+            system_static = context.build_static_prompt(mode=self._mode, active_modules=self._active_modules)
+            system_dynamic = context.build_dynamic_prompt(room=self._room, active_modules=self._active_modules)
 
             self._emit(P.STATE, state="thinking")
             response, final_messages = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
@@ -223,10 +236,17 @@ class JarvisPipeline:
                     if block.type == "tool_use":
                         self._emit(P.STATE, state="tool_running")
                         self._emit(P.TOOL, name=block.name)
-                        result = tools.execute(block.name, block.input)
+                        call_id = block.id
+                        if call_id in self._executed_tool_ids:
+                            # Duplikat-Call in dieser Session — gecachtes Ergebnis zurückgeben
+                            result = self._executed_tool_ids[call_id]
+                            print(f"[pipeline] Tool-Dedup: {block.name} ({call_id})", flush=True)
+                        else:
+                            result = tools.execute(block.name, block.input)
+                            self._executed_tool_ids[call_id] = result
                         tool_results.append({
                             "type": "tool_result",
-                            "tool_use_id": block.id,
+                            "tool_use_id": call_id,
                             "content": result,
                         })
                 client_messages = client_messages + [{"role": "user", "content": tool_results}]
