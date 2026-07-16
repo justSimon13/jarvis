@@ -57,3 +57,13 @@ OVERLAY_DISMISS = "overlay_dismiss" # {"type": "overlay_dismiss", "event_id": ".
 
 # ── Session-Verwaltung (Server → Dashboard) ───────────────────────────────────
 SESSION_BREAK = "session_break"    # {"type": "session_break"} — neue Gesprächssession nach Inaktivität
+
+# ── Push Notifications (Server → Client, Client → Server) ─────────────────────
+NOTIFICATION_PUSH = "notification_push"  # {"type": "notification_push", "id": "...", "text": "...", "priority": "normal", "expires": "..."}
+NOTIFICATION_ACK  = "notification_ack"   # {"type": "notification_ack", "id": "..."} — Client bestätigt Empfang
+
+# ── Wissensdatenbank (Server → Client, Client → Server) ───────────────────────
+KNOWLEDGE_SUGGESTION = "knowledge_suggestion"  # {"type": "knowledge_suggestion", "id": "...", "topic": "...", "file": "...", "preview": "..."} — JARVIS schlägt vor zu speichern
+KNOWLEDGE_CONFIRM    = "knowledge_confirm"     # {"type": "knowledge_confirm", "id": "...", "confirmed": bool} — Nutzer bestätigt/lehnt ab
+KNOWLEDGE_WRITE      = "knowledge_write"       # {"type": "knowledge_write", "topic": "...", "file": "...", "content": "..."} — Web App schreibt direkt
+KNOWLEDGE_WRITE_ACK  = "knowledge_write_ack"  # {"type": "knowledge_write_ack", "ok": bool, "topic": "...", "file": "...", "error": "..."}

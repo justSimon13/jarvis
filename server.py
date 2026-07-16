@@ -18,6 +18,8 @@ import websockets
 import brain
 import config
 import context
+import knowledge
+import learning
 import protocol as P
 import stt
 from client_manager import ClientManager
@@ -26,11 +28,13 @@ from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import sleep_coach
 from services import proactive as proactive_service
+from services.notification_dispatcher import NotificationDispatcher
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
 
 manager = ClientManager()
+dispatcher = NotificationDispatcher(manager)
 
 # api_history: aktuelle Session → geht an Claude API, wird bei Inaktivität geleert
 # display_history: vollständiges Protokoll → für Transcript-Ansicht im Dashboard
@@ -182,7 +186,23 @@ def _build_layout_config(mode: str = "assistent") -> dict:
     return {"cards": cards, "quick_actions": quick_actions}
 
 
-def _handle_data_request(resource: str):
+def _handle_data_request(resource: str, req_data: dict | None = None):
+    req_data = req_data or {}
+    if resource == "knowledge_index":
+        try:
+            return knowledge.list_available()
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "knowledge_file":
+        topic = req_data.get("topic", "")
+        file  = req_data.get("file", "")
+        if not topic or not file:
+            return {"error": "topic und file erforderlich"}
+        try:
+            content = knowledge.read(topic, file)
+            return {"content": content or "", "topic": topic, "file": file}
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "todos":
         conn = context._get_db()
         data = context._get_cached(conn, "todos") or []
@@ -429,6 +449,8 @@ async def handle_connection(websocket):
         send_json(sync)
         for overlay in _build_overlay_events():
             send_json(overlay)
+        dispatcher.deliver_pending(client_id)
+        learning.deliver_pending(client_id)
         print("[server] Dashboard-Sync gesendet.", flush=True)
     else:
         # Begrüßung für Voice-Clients (nicht in display_history aufnehmen)
@@ -495,14 +517,28 @@ async def handle_connection(websocket):
                         sync = _build_dashboard_sync()
                         sync["layout_config"] = _build_layout_config(mode)
                         send_json(sync)
+                        await loop.run_in_executor(None, learning.deliver_pending, client_id)
                 elif data.get("type") == P.SET_MODE:
                     new_mode = data.get("mode", "assistent")
                     manager.set_mode(client_id, new_mode)
+                    pipeline.set_mode(new_mode)
                     send_json({"type": P.LAYOUT_CONFIG, **_build_layout_config(new_mode)})
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
-                    result = await loop.run_in_executor(None, _handle_data_request, resource)
+                    result = await loop.run_in_executor(None, _handle_data_request, resource, data)
                     send_json({"type": P.DATA_RESPONSE, "resource": resource, "data": result})
+                elif data.get("type") == P.KNOWLEDGE_WRITE:
+                    topic   = data.get("topic", "")
+                    file    = data.get("file", "")
+                    content = data.get("content", "")
+                    if topic and file and content:
+                        try:
+                            await loop.run_in_executor(None, knowledge.write, topic, file, content)
+                            send_json({"type": P.KNOWLEDGE_WRITE_ACK, "ok": True, "topic": topic, "file": file})
+                        except Exception as e:
+                            send_json({"type": P.KNOWLEDGE_WRITE_ACK, "ok": False, "error": str(e)})
+                    else:
+                        send_json({"type": P.KNOWLEDGE_WRITE_ACK, "ok": False, "error": "topic, file und content erforderlich"})
                 elif data.get("type") == P.ALARM_SYNC:
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.sync_from_client(client_name, data.get("alarms", []))
@@ -521,6 +557,13 @@ async def handle_connection(websocket):
                         data.get("action", "skip"),
                         int(data.get("minutes", 10)),
                     )
+                elif data.get("type") == P.NOTIFICATION_ACK:
+                    dispatcher.mark_delivered(data["id"])
+                elif data.get("type") == P.KNOWLEDGE_CONFIRM:
+                    if data.get("confirmed"):
+                        learning.apply_suggestion(data["id"])
+                    else:
+                        learning.reject_suggestion(data["id"])
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:
@@ -534,13 +577,15 @@ async def handle_connection(websocket):
 
 async def main():
     brain.sync()
+    knowledge.rebuild_index()
     _load_history()
     context.refresh_if_stale()
     stt.load_model()
     alarm_service.init(manager)
     client_music_service.init(manager)
     sleep_coach.init(manager, alarm_service)
-    proactive_service.init(manager, alarm_service)
+    proactive_service.init(manager, alarm_service, dispatcher)
+    learning.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
     async with websockets.serve(
         handle_connection, HOST, PORT,
