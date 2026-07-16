@@ -5,6 +5,7 @@ Gesichert via Tailscale (kein eigenes Auth nötig).
 
 Start: python3 server.py
 """
+from __future__ import annotations
 import asyncio
 import json
 import os

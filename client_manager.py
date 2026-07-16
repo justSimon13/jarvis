@@ -1,6 +1,7 @@
 """
 ClientManager — verwaltet verbundene Clients, aktiven Client und Audio-Routing.
 """
+from __future__ import annotations
 import threading
 
 
