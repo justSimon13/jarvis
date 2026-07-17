@@ -704,6 +704,8 @@ DEFINITIONS = [
             "SOFORT AUFRUFEN — ohne explizite Aufforderung — wenn Simon etwas mitteilt das dauerhaft relevant ist. "
             "Konkrete Trigger: Simon nennt einen Plan, eine Entscheidung, eine Erkenntnis, eine Präferenz, eine Routine, "
             "eine Gewohnheit, eine Meinung über eine Person, ein Projekt, ein Ziel (als Prose), eine Erfahrung. "
+            "AUCH aufrufen wenn Simon aktiv nach einem Thema fragt oder Interesse zeigt — dann NICHT die allgemeinen Fakten speichern, "
+            "sondern das Interesse selbst: z.B. 'Simon interessiert sich für Bitcoin / fragt aktiv nach den Grundlagen' unter finanzen/interessen.md. "
             "Auch aufrufen wenn Simon sagt 'merk dir', 'denk dran', 'ich will', 'ich habe entschieden', 'ab jetzt'. "
             "NUR Prose/Kontext hier — KEINE reinen Zahlenwerte (→ set_goal oder log_entry). "
             "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben."
