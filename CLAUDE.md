@@ -47,7 +47,7 @@ Kein Chatbot. Ein **persönliches Betriebssystem** für Simons Alltag — lokal 
 ## System-Topologie
 
 ```
-JARVIS Server (server.py) — HP EliteDesk, ws://192.168.0.158:8765
+JARVIS Server (server.py) — HP EliteDesk, ws://192.168.0.155:8765
   ├─ Brain (SQLite ~/.jarvis/brain.db) — 7 Sections
   ├─ Shared History (api_history + display_history)
   ├─ LLM Pipeline (Claude Sonnet 4.6 + Prompt-Caching)
@@ -164,7 +164,7 @@ Cards und Quick-Actions können per `brain.modules.modes.<modus>` überschrieben
 - **Server:** `python3 server.py` als systemd system service auf HP EliteDesk
 - **Dashboard:** `npm run dev` als systemd user service, `:5173`
 - **Satellite:** `python3 client.py` als systemd system service, `Group=audio`
-- **Verbindung:** `ws://192.168.0.158:8765` intern, Tailscale für Remote
+- **Verbindung:** `ws://192.168.0.155:8765` intern, Tailscale für Remote
 
 ---
 

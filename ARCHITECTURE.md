@@ -19,7 +19,7 @@ Letzte Überarbeitung: 2026-05-04
 ## Physische Topologie
 
 ```
-HP EliteDesk (24/7, Linux) — ws://192.168.0.158:8765
+HP EliteDesk (24/7, Linux) — ws://192.168.0.155:8765
 ├── server.py            ← WebSocket-Server :8765
 ├── jarvis-satellite/    ← Wohnzimmer-Client (läuft auch auf HP EliteDesk)
 ├── jarvis-dashboard/    ← Vite Dev Server :5173 (systemd user service)
