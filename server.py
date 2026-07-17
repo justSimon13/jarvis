@@ -45,8 +45,9 @@ display_history: list[dict] = []
 history_lock = threading.Lock()
 llm_semaphore = threading.Semaphore(1)
 
-SESSION_TIMEOUT = 900   # Sekunden Inaktivität → neue Session (15 Min)
+SATELLITE_TIMEOUT = 28800  # 8h Inaktivität → neue Session (nur Voice-Clients)
 _last_activity_ts: float = 0.0
+_ROLLING_WINDOW = 60       # Max. Nachrichten in api_history
 
 _HISTORY_FILE = Path.home() / ".jarvis" / "history.json"
 _HISTORY_KEEP = 200
@@ -88,14 +89,14 @@ def _load_history():
         print(f"[server] History-Load Fehler: {e}", flush=True)
 
 
-def _maybe_start_new_session() -> bool:
-    """Prüft ob >SESSION_TIMEOUT Inaktivität. Falls ja: api_history leeren + Break einfügen.
+def _check_satellite_timeout() -> bool:
+    """Nur für Voice-Clients: 8h Inaktivität → api_history leeren.
     Gibt True zurück wenn eine neue Session gestartet wurde."""
     global _last_activity_ts
     now = time.time()
-    started_new = False
-    if _last_activity_ts > 0 and (now - _last_activity_ts) > SESSION_TIMEOUT:
+    if _last_activity_ts > 0 and (now - _last_activity_ts) > SATELLITE_TIMEOUT:
         with history_lock:
+            old = list(api_history)
             api_history.clear()
             last = display_history[-1] if display_history else None
             if not (last and last.get("content") == "session_break"):
@@ -104,10 +105,21 @@ def _maybe_start_new_session() -> bool:
                     "role": "system",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
-        started_new = True
-        print(f"[server] Neue Session nach {(now - _last_activity_ts)/60:.1f} Min Inaktivität", flush=True)
+        if old:
+            session_memory.save(old)
+        hours = (now - _last_activity_ts) / 3600
+        print(f"[server] Neue Session nach {hours:.1f}h Inaktivität (Satellite)", flush=True)
+        _last_activity_ts = now
+        return True
     _last_activity_ts = now
-    return started_new
+    return False
+
+
+def _trim_api_history():
+    """Rolling Window: api_history auf _ROLLING_WINDOW Nachrichten kürzen."""
+    with history_lock:
+        if len(api_history) > _ROLLING_WINDOW:
+            del api_history[:len(api_history) - _ROLLING_WINDOW]
 
 
 def _push_session_break_to_dashboards():
@@ -486,10 +498,11 @@ async def handle_connection(websocket):
         async for message in websocket:
             if isinstance(message, bytes):
                 _activate_client(client_id)
-                if _maybe_start_new_session():
+                if role != "dashboard" and _check_satellite_timeout():
                     _push_session_break_to_dashboards()
                 await loop.run_in_executor(None, pipeline.process_audio, message)
-                _last_activity_ts = time.time()  # Timer ab Ende der Antwort messen
+                _last_activity_ts = time.time()
+                _trim_api_history()
                 _save_history()
                 asyncio.create_task(_push_dashboard_update())
             else:
@@ -498,12 +511,13 @@ async def handle_connection(websocket):
                     _activate_client(client_id)
                     use_tts = data.get("tts", True)
                     text = data["text"]
-                    if _maybe_start_new_session():
+                    if role != "dashboard" and _check_satellite_timeout():
                         _push_session_break_to_dashboards()
                     with history_lock:
                         display_history.append({"role": "user", "content": text})
                     await loop.run_in_executor(None, pipeline.process_text, text, use_tts)
-                    _last_activity_ts = time.time()  # Timer ab Ende der Antwort messen
+                    _last_activity_ts = time.time()
+                    _trim_api_history()
                     _save_history()
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
@@ -584,6 +598,27 @@ async def handle_connection(websocket):
                 elif data.get("type") == P.SESSION_LIST_REQUEST:
                     sessions = await loop.run_in_executor(None, session_memory.list_sessions, 30)
                     send_json({"type": P.SESSION_LIST_RESPONSE, "sessions": sessions})
+                elif data.get("type") == P.SESSION_DELETE:
+                    sid = data.get("session_id")
+                    ok = await loop.run_in_executor(None, session_memory.delete, sid)
+                    send_json({"type": P.SESSION_DELETE_ACK, "session_id": sid, "ok": ok})
+                elif data.get("type") == P.SESSION_LOAD:
+                    sid = data.get("session_id")
+                    # Aktuelle Session speichern falls nicht leer
+                    with history_lock:
+                        old = list(api_history)
+                    if old:
+                        await loop.run_in_executor(None, session_memory.save, old)
+                    # Transcript laden und als neue api_history setzen
+                    transcript = await loop.run_in_executor(None, session_memory.get_transcript, sid)
+                    with history_lock:
+                        api_history.clear()
+                        for msg in transcript:
+                            api_history.append({"role": msg["role"], "content": msg["text"]})
+                        # Rolling Window anwenden
+                        if len(api_history) > _ROLLING_WINDOW:
+                            del api_history[:len(api_history) - _ROLLING_WINDOW]
+                    send_json({"type": P.SESSION_LOAD_ACK, "messages": transcript})
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:

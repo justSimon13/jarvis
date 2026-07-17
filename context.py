@@ -272,10 +272,6 @@ def build_static_prompt(mode: str = "assistent", active_modules: set[str] | None
     if brain_section:
         parts.append(brain_section)
 
-    session_section = session_memory.load_for_prompt(days=3)
-    if session_section:
-        parts.append(session_section)
-
     if not config.NOTION_API_KEY:
         return "\n\n".join(parts)
 
