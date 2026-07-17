@@ -565,6 +565,24 @@ async def handle_connection(websocket):
                         learning.apply_suggestion(data["id"])
                     else:
                         learning.reject_suggestion(data["id"])
+                elif data.get("type") == P.SESSION_RESET:
+                    with history_lock:
+                        old_history = list(api_history)
+                        api_history.clear()
+                        last = display_history[-1] if display_history else None
+                        if not (last and last.get("content") == "session_break"):
+                            display_history.append({
+                                "content": "session_break",
+                                "role": "system",
+                                "timestamp": datetime.utcnow().isoformat() + "Z",
+                            })
+                    _push_session_break_to_dashboards()
+                    if old_history:
+                        await loop.run_in_executor(None, session_memory.save, old_history)
+                    print("[server] Session manuell zurückgesetzt.", flush=True)
+                elif data.get("type") == P.SESSION_LIST_REQUEST:
+                    sessions = await loop.run_in_executor(None, session_memory.list_sessions, 30)
+                    send_json({"type": P.SESSION_LIST_RESPONSE, "sessions": sessions})
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:

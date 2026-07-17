@@ -56,7 +56,10 @@ OVERLAY_EVENT   = "overlay_event"   # {"type": "overlay_event", "event_id": "...
 OVERLAY_DISMISS = "overlay_dismiss" # {"type": "overlay_dismiss", "event_id": "...", "action": "start"|"skip"|"snooze", "minutes": 10}
 
 # ── Session-Verwaltung (Server → Dashboard) ───────────────────────────────────
-SESSION_BREAK = "session_break"    # {"type": "session_break"} — neue Gesprächssession nach Inaktivität
+SESSION_BREAK         = "session_break"          # {"type": "session_break"} — neue Gesprächssession nach Inaktivität
+SESSION_RESET         = "session_reset"          # Client → Server: sofort neue Session starten
+SESSION_LIST_REQUEST  = "session_list_request"   # Client → Server: Liste vergangener Sessions anfragen
+SESSION_LIST_RESPONSE = "session_list_response"  # Server → Client: {"type": ..., "sessions": [{id, date, time, summary, follow_ups}]}
 
 # ── Push Notifications (Server → Client, Client → Server) ─────────────────────
 NOTIFICATION_PUSH = "notification_push"  # {"type": "notification_push", "id": "...", "text": "...", "priority": "normal", "expires": "..."}

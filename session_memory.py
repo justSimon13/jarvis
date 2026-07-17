@@ -164,3 +164,33 @@ def load_for_prompt(days: int = 3) -> str:
         lines.append(line)
 
     return "\n".join(lines)
+
+
+def list_sessions(limit: int = 30) -> list[dict]:
+    """Gibt eine Liste vergangener Sessions für die UI zurück."""
+    try:
+        with _get_db() as conn:
+            rows = conn.execute(
+                """SELECT id, date, time, summary, follow_ups
+                   FROM sessions
+                   ORDER BY date DESC, time DESC
+                   LIMIT ?""",
+                (limit,)
+            ).fetchall()
+    except Exception:
+        return []
+
+    result = []
+    for row in rows:
+        sid, date_str, time_str, summary, follow_ups_json = row
+        follow_ups = json.loads(follow_ups_json or "[]")
+        result.append({
+            "id": sid,
+            "date": date_str,
+            "time": time_str,
+            "summary": summary or "",
+            "follow_ups": follow_ups,
+        })
+    return result
+
+    return "\n".join(lines)
