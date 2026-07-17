@@ -58,6 +58,7 @@ _WORK_TOPICS = {"programmierung", "digital35"}
 
 try:
     from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
 except ImportError:
     print("mcp package fehlt — installiere: pip install mcp", file=sys.stderr)
     sys.exit(1)
@@ -71,6 +72,10 @@ mcp = FastMCP(
            else "Work-Scope: nur knowledge/programmierung/ und knowledge/digital35/\n")
         + "Nutze jarvis_write_knowledge() wenn etwas Wichtiges gelernt oder entschieden wurde."
     ),
+    # FastMCP aktiviert DNS-Rebinding-Schutz standardmäßig nur für localhost — bei SSE über
+    # die LAN-IP (DHCP, ändert sich gelegentlich) würde jede Verbindung mit "Invalid Host
+    # header" abgelehnt. Server ist nur im lokalen Netz erreichbar, daher hier bewusst aus.
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 
