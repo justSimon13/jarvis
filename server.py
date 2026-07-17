@@ -22,6 +22,7 @@ import context
 import knowledge
 import learning
 import protocol as P
+import session_memory
 import stt
 from client_manager import ClientManager
 from pipeline import JarvisPipeline
