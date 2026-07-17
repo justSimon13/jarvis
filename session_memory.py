@@ -192,5 +192,3 @@ def list_sessions(limit: int = 30) -> list[dict]:
             "follow_ups": follow_ups,
         })
     return result
-
-    return "\n".join(lines)
