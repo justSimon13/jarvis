@@ -25,11 +25,11 @@ ERROR = "error"               # {"type": "error", "message": "..."}
 PONG = "pong"                 # {"type": "pong"}
 
 # ── Client → Server ───────────────────────────────────────────────────────────
-TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": bool}
+TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": bool, "attachments": [{"filename": "...", "mime_type": "...", "data_base64": "..."}] (optional)}
                               #   tts=True  → LLM + TTS (Voice-Mode, Default)
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
-CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer"}
+CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer", "role": "...", "tab_id": "..." (nur role=dashboard — stabile Tab-Identität aus sessionStorage, isoliert die Web-Chat-History pro Tab)}
 ALARM_SYNC    = "alarm_sync"    # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
 ALARM_RINGING = "alarm_ringing" # {"type": "alarm_ringing", "alarm_id": "...", "label": "..."} — Client → Server wenn Wecker klingelt
 ALARM_DISMISSED = "alarm_dismissed" # {"type": "alarm_dismissed", "alarm_id": "...", "snooze_count": N} — Client → Server wenn Wecker aus
@@ -74,3 +74,12 @@ KNOWLEDGE_SUGGESTION = "knowledge_suggestion"  # {"type": "knowledge_suggestion"
 KNOWLEDGE_CONFIRM    = "knowledge_confirm"     # {"type": "knowledge_confirm", "id": "...", "confirmed": bool} — Nutzer bestätigt/lehnt ab
 KNOWLEDGE_WRITE      = "knowledge_write"       # {"type": "knowledge_write", "topic": "...", "file": "...", "content": "..."} — Web App schreibt direkt
 KNOWLEDGE_WRITE_ACK  = "knowledge_write_ack"  # {"type": "knowledge_write_ack", "ok": bool, "topic": "...", "file": "...", "error": "..."}
+
+# ── Coding Engine (Server → Client, Client → Server) ──────────────────────────
+CODING_APPROVAL_REQUEST  = "coding_approval_request"   # {"type": "coding_approval_request", "id": "...", "text": "..."} — JARVIS fragt vor riskanter Aktion nach
+CODING_APPROVAL_RESPONSE = "coding_approval_response"  # {"type": "coding_approval_response", "id": "...", "approved": bool} — Nutzer entscheidet
+CODING_TASK_STATUS = "coding_task_status"  # {"type": "coding_task_status", "active": bool, "branch": "...", "model": "...", "instruction": "...", "started_at": "...", "last_action": "..."} — Live-Fortschritt, kein Rate-Limit (anders als notification_push)
+
+# ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
+ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
+ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "..."}

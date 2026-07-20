@@ -36,6 +36,16 @@ def _get_db() -> sqlite3.Connection:
         conn.commit()
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN clients TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN category TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -53,8 +63,13 @@ def _first_user_message(history: list[dict]) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def save(history: list[dict]) -> threading.Thread:
-    """Speichert die Session mit vollständigem Transcript. Kein LLM-Call."""
+def save(history: list[dict], clients: list[str] | None = None, category: str | None = None) -> threading.Thread:
+    """Speichert die Session mit vollständigem Transcript. Kein LLM-Call.
+
+    clients: Namen der Clients, die zu dieser Session beigetragen haben —
+    nur für Anzeige/Filterung in jarvis-web, keine Auswirkung auf den Inhalt.
+    category: "voice" oder "web" — welche History-Kategorie das war.
+    """
     def _do_save():
         if not history:
             return
@@ -80,11 +95,12 @@ def save(history: list[dict]) -> threading.Thread:
             return
 
         transcript_json = json.dumps(transcript_msgs, ensure_ascii=False)
+        clients_json = json.dumps(sorted(set(clients or [])), ensure_ascii=False)
 
         with _get_db() as conn:
             conn.execute(
-                "INSERT INTO sessions (date, time, title, transcript) VALUES (?, ?, ?, ?)",
-                (now.date().isoformat(), now.strftime("%H:%M"), title, transcript_json)
+                "INSERT INTO sessions (date, time, title, transcript, clients, category) VALUES (?, ?, ?, ?, ?, ?)",
+                (now.date().isoformat(), now.strftime("%H:%M"), title, transcript_json, clients_json, category)
             )
         print(f"[session] Gespeichert: {title} ({len(transcript_msgs)} Nachrichten)", flush=True)
 
@@ -105,7 +121,7 @@ def list_sessions(limit: int = 30) -> list[dict]:
     try:
         with _get_db() as conn:
             rows = conn.execute(
-                """SELECT id, date, time, title
+                """SELECT id, date, time, title, clients, category
                    FROM sessions
                    ORDER BY date DESC, time DESC
                    LIMIT ?""",
@@ -114,10 +130,17 @@ def list_sessions(limit: int = 30) -> list[dict]:
     except Exception:
         return []
 
-    return [
-        {"id": row[0], "date": row[1], "time": row[2], "title": row[3] or "Gespräch"}
-        for row in rows
-    ]
+    result = []
+    for row in rows:
+        try:
+            clients = json.loads(row[4]) if row[4] else []
+        except Exception:
+            clients = []
+        result.append({
+            "id": row[0], "date": row[1], "time": row[2], "title": row[3] or "Gespräch",
+            "clients": clients, "category": row[5],
+        })
+    return result
 
 
 def get_transcript(session_id: int) -> list[dict]:

@@ -1,6 +1,6 @@
 # J.A.R.V.I.S.
 
-Persönlicher KI-Sprachassistent für macOS. Wake Word, Sprache, Chat-Fenster, Kalender, E-Mail, Notion, Timer, Wecker und mehr.
+Persönlicher KI-Sprachassistent für macOS. Wake Word, Sprache, Chat-Fenster, Kalender, E-Mail, Todos/Projekte, Timer, Wecker und mehr.
 
 ---
 
@@ -37,7 +37,6 @@ Beim ersten Start öffnet sich automatisch der **Setup Wizard** — API Keys, Go
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) | Ja |
 | `ELEVENLABS_API_KEY` | [elevenlabs.io](https://elevenlabs.io) | Ja |
 | `ELEVENLABS_VOICE_ID` | ElevenLabs → Voices → Voice ID kopieren | Ja |
-| `NOTION_API_KEY` | [notion.so/my-integrations](https://www.notion.so/my-integrations) → New Integration | Nein |
 | `EMAIL_ADDRESS` | Deine E-Mail-Adresse | Nein |
 | `WEATHER_CITY` | Stadtname für Wetter, z.B. `München` | Nein |
 
@@ -58,13 +57,6 @@ Im Setup Wizard oder in den Einstellungen (⚙):
 ### 5. Apple Reminders freischalten (für Wecker)
 
 Systemeinstellungen → Datenschutz & Sicherheit → Automatisierung → JARVIS.app → **Erinnerungen** aktivieren
-
----
-
-### 6. Notion-Integration verbinden (optional)
-
-In jeder genutzten Notion-Datenbank (Todos, Projekte, Konzepte):  
-Datenbank öffnen → `...` → **Verbindungen** → deine JARVIS-Integration hinzufügen
 
 ---
 
@@ -93,7 +85,7 @@ Mitten im Satz pausieren ist okay — JARVIS wartet bis du fertig bist (bis zu 1
 | Bitcoin | "Was ist der aktuelle BTC-Kurs?" |
 | Websuche | "Suche nach den neuesten Nachrichten zu..." |
 | Musik | "Spiel Lo-Fi" / "Nächster Song" / "Lauter" |
-| Notion-Seiten | "Erstell eine Seite mit Checkliste für den Umzug" |
+| Todos/Projekte | "Leg ein Todo an: Umzug organisieren" |
 
 ---
 
@@ -115,7 +107,7 @@ In der App oben rechts auf **⚙** klicken:
 ```
 Mikrofon → Silero VAD → Whisper (lokal) → Claude API → ElevenLabs TTS → Lautsprecher
                                                     ↕
-                              Notion / Google Calendar / E-Mail / Brain
+                         Todos/Projekte (lokal) / Google Calendar / E-Mail / Brain
 ```
 
 Brain (Profil, Gedächtnis, Einstellungen) wird in Supabase gespeichert — geräteübergreifend synchronisiert, kein GitHub nötig.

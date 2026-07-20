@@ -19,6 +19,7 @@ import protocol as P
 import session_memory
 import stt
 import tools
+import tracking
 import tts
 
 SENTENCE_END = re.compile(r'([^.!?\n]{15,}[.!?\n]+)')
@@ -34,6 +35,32 @@ def _is_noise(text: str) -> bool:
         return True
     cleaned = _STRIP_PARENS.sub('', text).strip()
     return len(_NON_ALPHA.sub('', cleaned)) < _MIN_MEANINGFUL
+
+
+_TEXT_MIME_PREFIXES = ("text/",)
+
+
+def _attachment_to_block(att: dict) -> dict:
+    """Wandelt einen Chat-Anhang (jarvis-web) in einen Claude-Content-Block um.
+    Bilder/PDFs gehen als base64 direkt an die API; Text-Dateien werden serverseitig
+    dekodiert und inline als Text eingefügt (robuster als sich auf Claudes
+    Text-Dokument-Unterstützung zu verlassen)."""
+    import base64
+    filename = att.get("filename", "Datei")
+    mime_type = att.get("mime_type", "application/octet-stream")
+    data_b64 = att.get("data_base64", "")
+
+    if mime_type.startswith("image/"):
+        return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": data_b64}}
+    if mime_type == "application/pdf":
+        return {"type": "document", "source": {"type": "base64", "media_type": mime_type, "data": data_b64}}
+    if mime_type.startswith(_TEXT_MIME_PREFIXES):
+        try:
+            text = base64.b64decode(data_b64).decode("utf-8", errors="replace")
+        except Exception:
+            text = "(Datei konnte nicht gelesen werden)"
+        return {"type": "text", "text": f"[Datei: {filename}]\n{text}"}
+    return {"type": "text", "text": f"[Datei: {filename} — Dateityp {mime_type!r} wird nicht unterstützt]"}
 
 
 class JarvisPipeline:
@@ -71,6 +98,32 @@ class JarvisPipeline:
         self._mode = mode
         self._active_modules = None  # Neue Session bei Modus-Wechsel
 
+    def greet(self, text: str = "Bereit."):
+        """Begrüßung beim Connect eines Sprach-Clients — bewusst OHNE LLM-Call.
+        Reiner Verbindungs-Bestätigungston, braucht keine Intelligenz. Über die
+        normale Pipeline gejagt hätte das den vollen System-Prompt + alle
+        Tool-Definitionen gekostet — bei kaltem/abgelaufenem Cache (z.B. direkt
+        nach einem Server-Neustart) ein voller Cache-Neuschreib nur für ein Wort.
+        Fasst History nicht an (war ohnehin nie 'echter' Gesprächsinhalt)."""
+        self._emit(P.RESPONSE_START)
+        self._emit(P.RESPONSE_CHUNK, text=text)
+        self._emit(P.RESPONSE_DONE, text=text)
+
+        if self._on_audio:
+            self._emit(P.STATE, state="speaking")
+            tts_queue: queue.Queue = queue.Queue()
+            tts_done = threading.Event()
+            threading.Thread(
+                target=tts.speak_response,
+                args=(tts_queue, tts_done, self._on_audio),
+                daemon=True,
+            ).start()
+            tts_queue.put(text)
+            tts_queue.put(None)
+            tts_done.wait()
+
+        self._emit(P.STATE, state="idle")
+
     # ── Öffentliche Methoden ──────────────────────────────────────────────────
 
     def process_audio(self, wav_bytes: bytes):
@@ -97,27 +150,35 @@ class JarvisPipeline:
         self._emit(P.TRANSCRIPT, text=user_text)
         self.process_text(user_text, use_tts=self._on_audio is not None)
 
-    def process_text(self, text: str, use_tts: bool = True):
-        """Text → LLM → (TTS) → Events. Semaphore stellt FIFO sicher (kein paralleler LLM-Call)."""
+    def process_text(self, text: str, use_tts: bool = True, attachments: list[dict] | None = None):
+        """Text (+ optionale Datei-Anhänge) → LLM → (TTS) → Events. Semaphore stellt FIFO sicher (kein paralleler LLM-Call)."""
         with self._llm_semaphore:
+            if attachments:
+                content = ([{"type": "text", "text": text}] if text else []) + [
+                    _attachment_to_block(a) for a in attachments
+                ]
+            else:
+                content = text
             with self._history_lock:
-                self.history.append({"role": "user", "content": text})
+                self.history.append({"role": "user", "content": content})
                 history_snapshot = list(self.history)
 
             # Beim ersten Turn der Session: Module erkennen
             if self._active_modules is None:
                 self._active_modules = context.detect_modules(text, self._mode)
 
-            context.refresh_if_stale()
             system_static = context.build_static_prompt(mode=self._mode, active_modules=self._active_modules)
             system_dynamic = context.build_dynamic_prompt(room=self._room, active_modules=self._active_modules)
 
             self._emit(P.STATE, state="thinking")
-            response, final_messages = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
+            response, final_messages, turn_cost = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
 
             with self._history_lock:
                 if final_messages:
                     # Vollständige History inkl. Tool-Calls sichern — verhindert Doppel-Reads
+                    # Alte Anhänge (Bilder/PDFs) komprimieren — sonst wird bei jedem
+                    # weiteren Turn wieder das komplette Base64 mitgeschickt.
+                    final_messages = llm.compress_attachment_history(final_messages)
                     del self.history[:]
                     self.history.extend(final_messages)
                     if len(self.history) > 40:
@@ -126,6 +187,12 @@ class JarvisPipeline:
                     self.history.append({"role": "assistant", "content": response})
                     if len(self.history) > 20:
                         del self.history[:-20]
+
+            if turn_cost:
+                try:
+                    tracking.add_log("chat", key="cost_usd", value=round(turn_cost, 6), unit="usd")
+                except Exception as e:
+                    print(f"[pipeline] Kosten-Log Fehler: {e}", flush=True)
 
             self._emit(P.STATE, state="idle")
 
@@ -145,9 +212,10 @@ class JarvisPipeline:
         system_dynamic: str,
         messages: list[dict],
         use_tts: bool = True,
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[str, list[dict], float]:
         client_messages = messages.copy()
         full_response = ""
+        total_cost = 0.0
 
         while True:
             tts_queue: queue.Queue = queue.Queue()
@@ -198,6 +266,7 @@ class JarvisPipeline:
                                     break
 
                     final = s.get_final_message()
+                    total_cost += llm.compute_cost(final.usage)
                     print(f"[pipeline] LLM fertig: {time.monotonic() - t_llm_start:.2f}s, stop={final.stop_reason}", flush=True)
 
             except anthropic.APIStatusError as e:
@@ -208,12 +277,12 @@ class JarvisPipeline:
                     time.sleep(5)
                 else:
                     self._emit(P.ERROR, message=f"API-Fehler: {e}")
-                return "", []
+                return "", [], total_cost
             except Exception as e:
                 if use_tts and self._on_audio:
                     tts_queue.put(None)
                 self._emit(P.ERROR, message=f"Fehler: {e}")
-                return "", []
+                return "", [], total_cost
 
             if use_tts and self._on_audio:
                 if buffer.strip():
@@ -253,7 +322,7 @@ class JarvisPipeline:
                 client_messages = llm.compress_tool_history(client_messages)
                 self._emit(P.STATE, state="thinking")
 
-        return full_response, client_messages
+        return full_response, client_messages, total_cost
 
     # ── Intern ────────────────────────────────────────────────────────────────
 

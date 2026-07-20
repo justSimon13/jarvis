@@ -1,6 +1,7 @@
 """
 J.A.R.V.I.S. WebSocket-Server — läuft auf dem HP EliteDesk (Linux, 24/7).
-Eine geteilte History für alle Clients — JARVIS kennt Gespräche raumübergreifend.
+Sprach-/Raum-Clients teilen sich eine gemeinsame, raumübergreifende Historie;
+jeder Web-Tab (jarvis-web) führt seine eigene, isolierte Konversation.
 Gesichert via Tailscale (kein eigenes Auth nötig).
 
 Start: python3 server.py
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -24,13 +26,16 @@ import learning
 import protocol as P
 import session_memory
 import stt
+import tracking
 from client_manager import ClientManager
 from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
+from services import coding_engine
 from services import sleep_coach
 from services import proactive as proactive_service
 from services.notification_dispatcher import NotificationDispatcher
+import local_data
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
@@ -40,10 +45,65 @@ dispatcher = NotificationDispatcher(manager)
 
 # api_history: aktuelle Session → geht an Claude API, wird bei Inaktivität geleert
 # display_history: vollständiges Protokoll → für Transcript-Ansicht im Dashboard
-api_history: list[dict] = []
-display_history: list[dict] = []
-history_lock = threading.Lock()
+#
+# "voice" (alle Sprach-/Raum-Clients wie der Wohnzimmer-Satellite) teilen sich
+# weiterhin EINE gemeinsame Historie — das ist für Ambient-Nutzung gewollt.
+# "web" (Dashboard-Rolle, z.B. jarvis-web) ist PRO TAB isoliert: jede Verbindung
+# bekommt ihre eigene Historie, keyed über eine stabile tab_id (vom Client in
+# client_hello mitgeschickt, in dessen sessionStorage — überlebt Reload/kurze
+# Reconnects im selben Tab, aber ein neuer Tab bekommt eine neue ID). Vorher
+# teilten sich ALLE Web-Tabs eine einzige Historie: "+ Neuer Chat" in Tab A hat
+# dann Tab B's laufendes Gespräch mit gelöscht (2026-07-20 entdeckt — zwei
+# gleichzeitig offene jarvis-web-Tabs, einer hat die Session des anderen
+# weggerissen).
+api_histories: dict[str, list[dict] | dict[str, list[dict]]] = {"voice": [], "web": {}}
+display_histories: dict[str, list[dict] | dict[str, list[dict]]] = {"voice": [], "web": {}}
+history_lock = threading.Lock()  # ein Lock für alles reicht bei dieser Nutzungsgröße
 llm_semaphore = threading.Semaphore(1)
+
+
+def _category_for_role(role: str) -> str:
+    return "web" if role == "dashboard" else "voice"
+
+
+def _get_api_history(category: str, tab_id: str) -> list[dict]:
+    if category == "voice":
+        return api_histories["voice"]
+    return api_histories["web"].setdefault(tab_id, [])
+
+
+def _get_display_history(category: str, tab_id: str) -> list[dict]:
+    if category == "voice":
+        return display_histories["voice"]
+    return display_histories["web"].setdefault(tab_id, [])
+
+
+def _clear_api_history(category: str, tab_id: str) -> None:
+    # WICHTIG: in-place .clear(), nicht durch eine neue Liste ersetzen — die
+    # Pipeline hält eine Referenz auf das Original-Objekt (shared_history bei
+    # der Konstruktion), ein Ersatz-Objekt würde die Pipeline von zukünftigen
+    # Lookups über _get_api_history() abkoppeln (stille Divergenz → Datenverlust).
+    _get_api_history(category, tab_id).clear()
+
+
+# Welche Clients haben zur aktuellen Session beigetragen — nur für die Session-
+# Liste in jarvis-web (Filterung), NICHT Teil von api_history (das geht 1:1 als
+# Messages an die Anthropic API, keine Extra-Keys dort). Für "web" pro tab_id.
+_session_clients: dict[str, set[str] | dict[str, set[str]]] = {"voice": set(), "web": {}}
+
+
+def _get_session_clients(category: str, tab_id: str) -> set[str]:
+    if category == "voice":
+        return _session_clients["voice"]
+    return _session_clients["web"].setdefault(tab_id, set())
+
+
+def _reset_session_clients(category: str, tab_id: str) -> None:
+    if category == "voice":
+        _session_clients["voice"] = set()
+    else:
+        _session_clients["web"][tab_id] = set()
+
 
 SATELLITE_TIMEOUT = 28800  # 8h Inaktivität → neue Session (nur Voice-Clients)
 _last_activity_ts: float = 0.0
@@ -54,13 +114,17 @@ _HISTORY_KEEP = 200
 
 
 def _save_history():
-    """Schreibt die letzten _HISTORY_KEEP Einträge (inkl. session_break) auf Disk."""
+    """Schreibt die letzten _HISTORY_KEEP Einträge der voice-History (inkl. session_break)
+    auf Disk. "web" wird bewusst NICHT persistiert — die ist jetzt pro Tab isoliert und hat
+    keine stabile Identität über einen Neustart hinweg (jede Verbindung neu ist ein neuer
+    Tab aus Server-Sicht); das archivierte Web-Gespräch landet stattdessen in sessions.db
+    (siehe _save_all_sessions_on_shutdown)."""
     try:
-        to_save = []
         with history_lock:
-            for m in display_history[-_HISTORY_KEEP:]:
-                if m.get("content") == "session_break" or isinstance(m.get("content"), str):
-                    to_save.append(m)
+            to_save = {"voice": [
+                m for m in display_histories["voice"][-_HISTORY_KEEP:]
+                if m.get("content") == "session_break" or isinstance(m.get("content"), str)
+            ]}
         _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         _HISTORY_FILE.write_text(json.dumps(to_save, ensure_ascii=False))
     except Exception as e:
@@ -68,45 +132,49 @@ def _save_history():
 
 
 def _load_history():
-    """Lädt gespeicherte History beim Start in display_history. Fügt Session-Break ein."""
+    """Lädt gespeicherte voice-History beim Start in display_histories["voice"] und fügt
+    einen Session-Break ein. "web" wird nicht geladen (siehe _save_history)."""
     try:
         if not _HISTORY_FILE.exists():
             return
         data = json.loads(_HISTORY_FILE.read_text())
-        if not isinstance(data, list) or not data:
+        if not isinstance(data, dict):
             return
-        display_history.extend(data)
-        # Session-Break nach Neustart einfügen (außer wenn bereits letzter Eintrag ein Break ist)
-        last = display_history[-1] if display_history else None
-        if not (last and last.get("content") == "session_break"):
-            display_history.append({
+        entries = data.get("voice")
+        if not isinstance(entries, list) or not entries:
+            return
+        display_histories["voice"].extend(entries)
+        last = display_histories["voice"][-1]
+        if last.get("content") != "session_break":
+            display_histories["voice"].append({
                 "content": "session_break",
                 "role": "system",
                 "timestamp": datetime.utcnow().isoformat() + "Z",
             })
-        print(f"[server] History geladen: {len(data)} Einträge", flush=True)
+        print(f"[server] History geladen: {len(entries)} Einträge", flush=True)
     except Exception as e:
         print(f"[server] History-Load Fehler: {e}", flush=True)
 
 
 def _check_satellite_timeout() -> bool:
-    """Nur für Voice-Clients: 8h Inaktivität → api_history leeren.
+    """Nur für Voice-Clients: 8h Inaktivität → api_history (Kategorie 'voice') leeren.
     Gibt True zurück wenn eine neue Session gestartet wurde."""
     global _last_activity_ts
     now = time.time()
     if _last_activity_ts > 0 and (now - _last_activity_ts) > SATELLITE_TIMEOUT:
         with history_lock:
-            old = list(api_history)
-            api_history.clear()
-            last = display_history[-1] if display_history else None
+            old = list(api_histories["voice"])
+            api_histories["voice"].clear()
+            last = display_histories["voice"][-1] if display_histories["voice"] else None
             if not (last and last.get("content") == "session_break"):
-                display_history.append({
+                display_histories["voice"].append({
                     "content": "session_break",
                     "role": "system",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
         if old:
-            session_memory.save(old)
+            session_memory.save(old, clients=sorted(_session_clients["voice"]), category="voice")
+        _session_clients["voice"] = set()
         hours = (now - _last_activity_ts) / 3600
         print(f"[server] Neue Session nach {hours:.1f}h Inaktivität (Satellite)", flush=True)
         _last_activity_ts = now
@@ -115,20 +183,12 @@ def _check_satellite_timeout() -> bool:
     return False
 
 
-def _trim_api_history():
-    """Rolling Window: api_history auf _ROLLING_WINDOW Nachrichten kürzen."""
+def _trim_api_history(category: str, tab_id: str):
+    """Rolling Window: History auf _ROLLING_WINDOW Nachrichten kürzen."""
     with history_lock:
-        if len(api_history) > _ROLLING_WINDOW:
-            del api_history[:len(api_history) - _ROLLING_WINDOW]
-
-
-def _push_session_break_to_dashboards():
-    """Sendet session_break Event an alle verbundenen Dashboard-Clients."""
-    for cb, _ in manager.get_dashboard_event_callbacks():
-        try:
-            cb({"type": P.SESSION_BREAK})
-        except Exception:
-            pass
+        hist = _get_api_history(category, tab_id)
+        if len(hist) > _ROLLING_WINDOW:
+            del hist[:len(hist) - _ROLLING_WINDOW]
 
 
 _QA_REGISTRY = {
@@ -200,7 +260,7 @@ def _build_layout_config(mode: str = "assistent") -> dict:
     return {"cards": cards, "quick_actions": quick_actions}
 
 
-def _handle_data_request(resource: str, req_data: dict | None = None):
+def _handle_data_request(resource: str, req_data: dict | None = None, category: str = "web", tab_id: str = ""):
     req_data = req_data or {}
     if resource == "knowledge_index":
         try:
@@ -218,10 +278,21 @@ def _handle_data_request(resource: str, req_data: dict | None = None):
         except Exception as e:
             return {"error": str(e)}
     if resource == "todos":
-        conn = context._get_db()
-        data = context._get_cached(conn, "todos") or []
-        conn.close()
-        return data
+        return local_data.list_todos()
+    if resource == "projekte":
+        return local_data.list_projekte()
+    if resource == "kontakte":
+        return local_data.list_kontakte()
+    if resource == "seite":
+        typ = req_data.get("typ", "")
+        item_id = req_data.get("id")
+        if not typ or item_id is None:
+            return {"error": "typ und id erforderlich"}
+        try:
+            page = local_data.get_seite_view(typ, int(item_id))
+            return page or {"error": "Seite nicht gefunden"}
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "calendar":
         try:
             from services import calendar as cal_service
@@ -240,13 +311,13 @@ def _handle_data_request(resource: str, req_data: dict | None = None):
             return {}
     if resource == "history":
         with history_lock:
-            snapshot = list(display_history[-120:])
+            snapshot = list(_get_display_history(category, tab_id)[-120:])
         result = []
         for m in snapshot:
             if m.get("content") == "session_break":
                 result.append({"role": "system", "type": "session_break", "timestamp": m.get("timestamp", "")})
             elif isinstance(m.get("content"), str):
-                result.append({"role": m["role"], "text": m["content"]})
+                result.append({"role": m["role"], "text": m["content"], "client": m.get("client")})
         return result
     if resource == "weather":
         try:
@@ -262,6 +333,40 @@ def _handle_data_request(resource: str, req_data: dict | None = None):
             return btc_service.get_price()
         except Exception:
             return {}
+    if resource == "coding_engine_usage":
+        try:
+            return coding_engine.get_usage_summary(days=int(req_data.get("days", 14)))
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "coding_task_status":
+        try:
+            return coding_engine.get_task_status()
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "tracking_topics":
+        try:
+            # coding_engine hat seine eigene dedizierte Ansicht — hier nicht doppelt zeigen
+            return [t for t in tracking.list_topics() if t != "coding_engine"]
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "tracking_progress":
+        topic = req_data.get("topic", "")
+        if not topic:
+            return {"error": "topic erforderlich"}
+        try:
+            progress = tracking.get_progress(topic)
+            progress["logs"] = tracking.get_logs(topic, limit=10)
+            return progress
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "session_transcript":
+        sid = req_data.get("session_id")
+        if sid is None:
+            return {"error": "session_id erforderlich"}
+        try:
+            return session_memory.get_transcript(int(sid))
+        except Exception as e:
+            return {"error": str(e)}
     return None
 
 
@@ -325,14 +430,70 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
         print(f"[server] Overlay-Dismiss Fehler: {e}", flush=True)
 
 
+_ENTITY_FIELDS = {
+    "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen"},
+    "projekte":     {"name", "status", "beschreibung", "typ", "notizen"},
+    "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
+    "seite":        {"titel", "inhalt"},
+}
+
+
+def _do_entity_action(entity: str, action: str, data: dict) -> None:
+    """Blockierende Todos/Projekte/Kontakte(/Seiten)-Mutation — Layer 1 DATA, kein LLM-Umweg."""
+    if entity not in _ENTITY_FIELDS:
+        raise ValueError(f"Unbekannte Entität: {entity}")
+    fields = {k: v for k, v in data.items() if k in _ENTITY_FIELDS[entity]}
+
+    if action == "add":
+        if entity == "seite":
+            raise ValueError("Seiten werden nur über die Migration angelegt")
+        name = (fields.get("name") or "").strip()
+        if not name:
+            raise ValueError("Name erforderlich")
+        fields["name"] = name
+        if entity == "todos":
+            local_data.add_todo(**fields)
+        elif entity == "projekte":
+            local_data.add_projekt(**fields)
+        else:
+            local_data.add_kontakt(**fields)
+    elif action == "update":
+        item_id = data.get("id")
+        if not item_id:
+            raise ValueError("id erforderlich")
+        if entity == "todos":
+            local_data.update_todo(item_id, **fields)
+        elif entity == "projekte":
+            local_data.update_projekt(item_id, **fields)
+        elif entity == "kontakte":
+            local_data.update_kontakt(item_id, **fields)
+        else:
+            local_data.update_seite(item_id, **fields)
+    elif action == "complete":
+        if entity != "todos":
+            raise ValueError(f"'complete' gibt es nur für todos, nicht {entity}")
+        item_id = data.get("id")
+        if not item_id:
+            raise ValueError("id erforderlich")
+        local_data.complete_todo(item_id)
+    elif action == "delete":
+        if entity == "seite":
+            raise ValueError("Seiten können hier nicht gelöscht werden")
+        item_id = data.get("id")
+        if not item_id:
+            raise ValueError("id erforderlich")
+        if entity == "todos":
+            local_data.delete_todo(item_id)
+        elif entity == "projekte":
+            local_data.delete_projekt(item_id)
+        else:
+            local_data.delete_kontakt(item_id)
+    else:
+        raise ValueError(f"Unbekannte Aktion: {action}")
+
+
 def _build_dashboard_sync() -> dict:
-    try:
-        context.refresh_if_stale()
-    except Exception:
-        pass
-    conn = context._get_db()
-    todos = context._get_cached(conn, "todos") or []
-    conn.close()
+    todos = local_data.list_todos()
     btc_data: dict = {}
     try:
         from services import btc as btc_service
@@ -370,7 +531,28 @@ def _build_dashboard_sync() -> dict:
         "clients": manager.list_clients(),
         "alarms": alarms,
         "followups": followups,
+        "chat_cost_today": _chat_spend_today(),
+        "coding_cost_today": _coding_spend_today(),
+        "chat_daily_budget": config.CHAT_DAILY_BUDGET_USD,
     }
+
+
+def _coding_spend_today() -> float:
+    """Gleiche Zahl wie die Coding-Engine-Kosten-Grafik, nur fürs Dashboard/Sidebar-Widget."""
+    try:
+        return coding_engine.get_usage_summary(days=1).get("today_usd", 0.0)
+    except Exception:
+        return 0.0
+
+
+def _chat_spend_today() -> float:
+    """Für die kleine Kosten-Anzeige in jarvis-web — Summe aller Chat-Turns (voice+web) heute."""
+    try:
+        today = date.today().isoformat()
+        logs = tracking.get_logs("chat", key="cost_usd", since_date=today, limit=2000)
+        return round(sum((l["value"] or 0.0) for l in logs if l["date"] == today), 4)
+    except Exception:
+        return 0.0
 
 
 def _activate_client(client_id: str):
@@ -404,16 +586,20 @@ async def handle_connection(websocket):
     print(f"[server] Client verbunden: {addr} ({client_id})")
 
     _capture = [False]  # Wird nach Greeting/Dashboard-Init auf True gesetzt
+    category = "voice"  # Default bis Rolle bekannt ist; send_json() bindet spät (Closure)
+    tab_id = client_id  # Für "web": stabile Tab-Identität vom Client (client_hello); sonst Fallback
 
     def send_json(event: dict):
         if _capture[0]:
             etype = event.get("type")
+            client_name = manager.get_name(client_id) or client_id
             if etype == P.TRANSCRIPT and event.get("text"):
                 with history_lock:
-                    display_history.append({"role": "user", "content": event["text"]})
+                    _get_display_history(category, tab_id).append({"role": "user", "content": event["text"], "client": client_name})
+                _get_session_clients(category, tab_id).add(client_name)
             elif etype == P.RESPONSE_DONE and event.get("text"):
                 with history_lock:
-                    display_history.append({"role": "assistant", "content": event["text"]})
+                    _get_display_history(category, tab_id).append({"role": "assistant", "content": event["text"], "client": client_name})
         asyncio.run_coroutine_threadsafe(
             websocket.send(json.dumps(event, ensure_ascii=False)), loop
         )
@@ -421,18 +607,8 @@ async def handle_connection(websocket):
     def send_audio(pcm: bytes):
         asyncio.run_coroutine_threadsafe(websocket.send(pcm), loop)
 
-    pipeline = JarvisPipeline(
-        client_id=client_id,
-        on_event=send_json,
-        on_audio=send_audio,
-        shared_history=api_history,
-        history_lock=history_lock,
-        llm_semaphore=llm_semaphore,
-    )
-
     manager.register(client_id, send_audio)
     manager.register_event(client_id, send_json)
-    manager.register_pipeline(client_id, pipeline)
     send_json({"type": P.STATE, "state": "idle"})
 
     # Warte kurz auf CLIENT_HELLO um Role und Raumname zu erkennen
@@ -446,14 +622,29 @@ async def handle_connection(websocket):
             if first_data.get("type") == P.CLIENT_HELLO:
                 name = first_data.get("name", "")
                 role = first_data.get("role", "client")
+                tab_id = first_data.get("tab_id") or client_id
                 if name:
                     manager.set_name(client_id, name)
                     manager.set_role(client_id, role)
-                    pipeline.set_room(name)
                     print(f"[server] Client {addr} heißt: {name!r} (role={role})")
                 pending_msgs.clear()
     except asyncio.TimeoutError:
         pass
+
+    # Erst jetzt ist die Kategorie bekannt — Pipeline bekommt die passende History
+    # zugewiesen (vorher konstruiert hätte sie fälschlich immer "voice" bekommen).
+    category = _category_for_role(role)
+    pipeline = JarvisPipeline(
+        client_id=client_id,
+        on_event=send_json,
+        on_audio=send_audio,
+        shared_history=_get_api_history(category, tab_id),
+        history_lock=history_lock,
+        llm_semaphore=llm_semaphore,
+    )
+    if manager.get_name(client_id):
+        pipeline.set_room(manager.get_name(client_id))
+    manager.register_pipeline(client_id, pipeline)
 
     if role == "dashboard":
         init_mode = "assistent"
@@ -467,10 +658,13 @@ async def handle_connection(websocket):
         learning.deliver_pending(client_id)
         print("[server] Dashboard-Sync gesendet.", flush=True)
     else:
-        # Begrüßung für Voice-Clients (nicht in display_history aufnehmen)
+        # Begrüßung für Voice-Clients — läuft über pipeline.greet(), NICHT über
+        # process_text()/den LLM: kein echter Gesprächsinhalt, braucht keine
+        # Intelligenz, und ein LLM-Call hätte bei kaltem Cache unnötig den vollen
+        # System-Prompt gekostet nur für ein Wort. Fasst History gar nicht erst an.
         print("[server] Starte Greeting…", flush=True)
         try:
-            await loop.run_in_executor(None, pipeline.process_text, "Sag nur: Bereit.", True)
+            await loop.run_in_executor(None, pipeline.greet, "Bereit.")
             print("[server] Greeting fertig.", flush=True)
         except Exception as e:
             print(f"[server] Greeting Fehler: {e}", flush=True)
@@ -489,6 +683,7 @@ async def handle_connection(websocket):
                     if data.get("type") == P.CLIENT_HELLO:
                         name = data.get("name", "")
                         r = data.get("role", "client")
+                        tab_id = data.get("tab_id") or client_id
                         if name:
                             manager.set_name(client_id, name)
                             manager.set_role(client_id, r)
@@ -498,11 +693,13 @@ async def handle_connection(websocket):
         async for message in websocket:
             if isinstance(message, bytes):
                 _activate_client(client_id)
-                if role != "dashboard" and _check_satellite_timeout():
-                    _push_session_break_to_dashboards()
+                if role != "dashboard":
+                    # Ein Sprach-Timeout betrifft nur die "voice"-Kategorie, nicht
+                    # die (unbeteiligte) Web-Live-Ansicht.
+                    _check_satellite_timeout()
                 await loop.run_in_executor(None, pipeline.process_audio, message)
                 _last_activity_ts = time.time()
-                _trim_api_history()
+                _trim_api_history(category, tab_id)
                 _save_history()
                 asyncio.create_task(_push_dashboard_update())
             else:
@@ -511,18 +708,29 @@ async def handle_connection(websocket):
                     _activate_client(client_id)
                     use_tts = data.get("tts", True)
                     text = data["text"]
-                    if role != "dashboard" and _check_satellite_timeout():
-                        _push_session_break_to_dashboards()
+                    attachments = data.get("attachments") or []
+                    if role != "dashboard":
+                        _check_satellite_timeout()
+                    client_name = manager.get_name(client_id) or client_id
                     with history_lock:
-                        display_history.append({"role": "user", "content": text})
-                    await loop.run_in_executor(None, pipeline.process_text, text, use_tts)
+                        display_entry = {"role": "user", "content": text, "client": client_name}
+                        if attachments:
+                            display_entry["attachments"] = [
+                                {"filename": a.get("filename"), "mime_type": a.get("mime_type")}
+                                for a in attachments
+                            ]
+                        _get_display_history(category, tab_id).append(display_entry)
+                    _get_session_clients(category, tab_id).add(client_name)
+                    await loop.run_in_executor(None, pipeline.process_text, text, use_tts, attachments)
                     _last_activity_ts = time.time()
-                    _trim_api_history()
+                    _trim_api_history(category, tab_id)
                     _save_history()
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
                     name = data.get("name", "")
                     role = data.get("role", "client")
+                    category = _category_for_role(role)
+                    tab_id = data.get("tab_id") or client_id
                     if name:
                         manager.set_name(client_id, name)
                         manager.set_role(client_id, role)
@@ -541,7 +749,7 @@ async def handle_connection(websocket):
                     send_json({"type": P.LAYOUT_CONFIG, **_build_layout_config(new_mode)})
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
-                    result = await loop.run_in_executor(None, _handle_data_request, resource, data)
+                    result = await loop.run_in_executor(None, _handle_data_request, resource, data, category, tab_id)
                     send_json({"type": P.DATA_RESPONSE, "resource": resource, "data": result})
                 elif data.get("type") == P.KNOWLEDGE_WRITE:
                     topic   = data.get("topic", "")
@@ -555,6 +763,15 @@ async def handle_connection(websocket):
                             send_json({"type": P.KNOWLEDGE_WRITE_ACK, "ok": False, "error": str(e)})
                     else:
                         send_json({"type": P.KNOWLEDGE_WRITE_ACK, "ok": False, "error": "topic, file und content erforderlich"})
+                elif data.get("type") == P.ENTITY_ACTION:
+                    entity = data.get("entity", "")
+                    action = data.get("action", "")
+                    try:
+                        await loop.run_in_executor(None, _do_entity_action, entity, action, data)
+                        send_json({"type": P.ENTITY_ACTION_ACK, "ok": True, "entity": entity, "action": action})
+                        asyncio.create_task(_push_dashboard_update())
+                    except Exception as e:
+                        send_json({"type": P.ENTITY_ACTION_ACK, "ok": False, "entity": entity, "action": action, "error": str(e)})
                 elif data.get("type") == P.ALARM_SYNC:
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.sync_from_client(client_name, data.get("alarms", []))
@@ -575,6 +792,8 @@ async def handle_connection(websocket):
                     )
                 elif data.get("type") == P.NOTIFICATION_ACK:
                     dispatcher.mark_delivered(data["id"])
+                elif data.get("type") == P.CODING_APPROVAL_RESPONSE:
+                    coding_engine.resolve_approval(data["id"], bool(data.get("approved")))
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])
@@ -582,19 +801,26 @@ async def handle_connection(websocket):
                         learning.reject_suggestion(data["id"])
                 elif data.get("type") == P.SESSION_RESET:
                     with history_lock:
-                        old_history = list(api_history)
-                        api_history.clear()
-                        last = display_history[-1] if display_history else None
+                        old_history = list(_get_api_history(category, tab_id))
+                        _clear_api_history(category, tab_id)
+                        disp = _get_display_history(category, tab_id)
+                        last = disp[-1] if disp else None
                         if not (last and last.get("content") == "session_break"):
-                            display_history.append({
+                            disp.append({
                                 "content": "session_break",
                                 "role": "system",
                                 "timestamp": datetime.utcnow().isoformat() + "Z",
                             })
-                    _push_session_break_to_dashboards()
+                    # Nur an diesen einen Client (Tab/Raum) — bei "web" ist die History
+                    # jetzt pro Tab isoliert, andere Tabs sind von diesem Reset nicht betroffen.
+                    send_json({"type": P.SESSION_BREAK})
                     if old_history:
-                        await loop.run_in_executor(None, session_memory.save, old_history)
-                    print("[server] Session manuell zurückgesetzt.", flush=True)
+                        clients_snapshot = sorted(_get_session_clients(category, tab_id))
+                        await loop.run_in_executor(
+                            None, lambda: session_memory.save(old_history, clients=clients_snapshot, category=category)
+                        )
+                    _reset_session_clients(category, tab_id)
+                    print(f"[server] Session ({category}) manuell zurückgesetzt.", flush=True)
                 elif data.get("type") == P.SESSION_LIST_REQUEST:
                     sessions = await loop.run_in_executor(None, session_memory.list_sessions, 30)
                     send_json({"type": P.SESSION_LIST_RESPONSE, "sessions": sessions})
@@ -604,20 +830,24 @@ async def handle_connection(websocket):
                     send_json({"type": P.SESSION_DELETE_ACK, "session_id": sid, "ok": ok})
                 elif data.get("type") == P.SESSION_LOAD:
                     sid = data.get("session_id")
-                    # Aktuelle Session speichern falls nicht leer
+                    # Aktuelle Session (eigener Tab/Raum) speichern falls nicht leer
                     with history_lock:
-                        old = list(api_history)
+                        old = list(_get_api_history(category, tab_id))
                     if old:
-                        await loop.run_in_executor(None, session_memory.save, old)
-                    # Transcript laden und als neue api_history setzen
+                        await loop.run_in_executor(
+                            None, lambda: session_memory.save(old, clients=sorted(_get_session_clients(category, tab_id)), category=category)
+                        )
+                    _reset_session_clients(category, tab_id)
+                    # Transcript laden und als neue api_history (eigener Tab/Raum) setzen
                     transcript = await loop.run_in_executor(None, session_memory.get_transcript, sid)
                     with history_lock:
-                        api_history.clear()
+                        hist = _get_api_history(category, tab_id)
+                        hist.clear()
                         for msg in transcript:
-                            api_history.append({"role": msg["role"], "content": msg["text"]})
+                            hist.append({"role": msg["role"], "content": msg["text"]})
                         # Rolling Window anwenden
-                        if len(api_history) > _ROLLING_WINDOW:
-                            del api_history[:len(api_history) - _ROLLING_WINDOW]
+                        if len(hist) > _ROLLING_WINDOW:
+                            del hist[:len(hist) - _ROLLING_WINDOW]
                     send_json({"type": P.SESSION_LOAD_ACK, "messages": transcript})
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
@@ -630,24 +860,62 @@ async def handle_connection(websocket):
         print(f"[server] Client getrennt: {addr}")
 
 
+def _save_all_sessions_on_shutdown():
+    """Beim Server-Shutdown (z.B. systemctl restart) laufende Sessions archivieren:
+    die eine geteilte voice-Session, plus JEDEN offenen web-Tab einzeln (seit der
+    Pro-Tab-Isolation 2026-07-20 ist api_histories["web"] ein dict tab_id -> history).
+    Ohne das verschwindet eine Konversation bei jedem Neustart mitten im Gespräch
+    spurlos: _load_history() lädt nur "voice" zurück, und der Disconnect-Handler
+    pro Verbindung speichert für Web-/Dashboard-Clients bewusst nicht (sonst gäbe
+    es bei jedem Tab-Wechsel eine neue Session) — ein Server-weiter Shutdown ist
+    aber kein trivialer Disconnect, das verdient eine echte Archivierung."""
+    with history_lock:
+        voice_hist = list(api_histories["voice"])
+        voice_clients = sorted(_session_clients["voice"])
+        web_tabs = {tab_id: list(hist) for tab_id, hist in api_histories["web"].items()}
+        web_clients = {tab_id: sorted(_get_session_clients("web", tab_id)) for tab_id in web_tabs}
+
+    if voice_hist:
+        t = session_memory.save(voice_hist, clients=voice_clients, category="voice")
+        if t:
+            t.join(timeout=10)
+    for tab_id, hist in web_tabs.items():
+        if not hist:
+            continue
+        t = session_memory.save(hist, clients=web_clients[tab_id], category="web")
+        if t:
+            t.join(timeout=10)
+    print("[server] Laufende Sessions vor Shutdown gesichert.", flush=True)
+
+
 async def main():
     brain.sync()
     knowledge.rebuild_index()
     _load_history()
-    context.refresh_if_stale()
     stt.load_model()
     alarm_service.init(manager)
     client_music_service.init(manager)
-    sleep_coach.init(manager, alarm_service)
+    sleep_coach.init(manager, alarm_service, dispatcher)
     proactive_service.init(manager, alarm_service, dispatcher)
+    coding_engine.init(manager, dispatcher)
     learning.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
+
+    loop = asyncio.get_event_loop()
+    stop_event = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop_event.set)
+
     async with websockets.serve(
         handle_connection, HOST, PORT,
         ping_interval=30,
         ping_timeout=120,
+        max_size=20 * 1024 * 1024,  # Default 1MiB reicht nicht für Bild-/PDF-Anhänge im Chat
     ):
-        await asyncio.Future()
+        await stop_event.wait()
+
+    print("[server] Shutdown-Signal empfangen — sichere Sessions...", flush=True)
+    await loop.run_in_executor(None, _save_all_sessions_on_shutdown)
 
 
 if __name__ == "__main__":

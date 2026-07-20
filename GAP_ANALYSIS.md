@@ -33,7 +33,7 @@ Legende: ✅ vorhanden und passt · ⚠️ vorhanden aber falsch/unvollständig 
 | Guideline-Versionierung | ❌ | M |
 | Audio Keepalive (Satellite) | ❌ | S |
 | Client-Settings in brain.config | ❌ | M |
-| PocketBase / Notion-Ablösung | ❌ | XL |
+| Notion-Ablösung (lokales SQLite statt PocketBase) | ✅ 2026-07-19 | XL |
 
 Aufwand: S = Stunden · M = 1–2 Tage · L = 3–5 Tage · XL = 1+ Woche
 
@@ -264,14 +264,9 @@ Notion Konzepte sind nicht dasselbe: kein TTL, kein `evergreen`-Flag, kein seman
 
 ---
 
-## Phase 9 — Notion-Ablösung (PocketBase)
+## Phase 9 — Notion-Ablösung
 
-**Status: ❌ Nicht begonnen**
-
-`notion.py` als Abstraktionsschicht existiert und ist sauber isoliert — das ist gut.
-Kein anderer Code greift direkt auf Notion-Objekte zu.
-
-PocketBase nicht installiert, keine Collections definiert.
+**Status: ✅ Erledigt (2026-07-19)** — direktes SQLite (`local_data.py`) statt PocketBase, siehe TECHNICAL_PLAN.md. `notion.py` ist gelöscht.
 
 ---
 

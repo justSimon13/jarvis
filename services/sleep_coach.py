@@ -4,6 +4,11 @@ Erinnert Simon abends ans Schlafen gehen basierend auf:
   - brain.read("schlaf", "stunden")   → Schlafbedarf (default 8)
   - brain.read("schlaf", "fallback")  → Fallback-Schlafzeit wenn kein Wecker (default "23:30")
 Reminder-Kette: 30min vorher (sanft) → pünktlich (direkt) → 30min danach (Konsequenz)
+
+Kommuniziert ausschließlich über dispatcher.notify() — nie pipeline.process_text()
+(sonst landet der Reminder als gefälschte Assistant-Nachricht in der History des
+gerade "aktiven" Clients, siehe ClientManager.get_active_pipeline() — unabhängig
+von Voice/Web-Kategorie. Gleicher Fix wie bei services/proactive.py).
 """
 import datetime
 import threading
@@ -11,13 +16,15 @@ import time
 
 _manager = None
 _alarm_service = None
+_dispatcher = None
 _thread: threading.Thread | None = None
 
 
-def init(client_manager, alarm_service) -> None:
-    global _manager, _alarm_service, _thread
+def init(client_manager, alarm_service, dispatcher=None) -> None:
+    global _manager, _alarm_service, _dispatcher, _thread
     _manager = client_manager
     _alarm_service = alarm_service
+    _dispatcher = dispatcher
     _thread = threading.Thread(target=_loop, daemon=True)
     _thread.start()
 
@@ -61,14 +68,12 @@ def _get_sleep_target() -> datetime.datetime | None:
     return target
 
 
-def _send_reminder(text: str) -> None:
-    pipeline = _manager.get_active_pipeline() if _manager else None
-    if not pipeline:
-        return
-    try:
-        pipeline.process_text(text, use_tts=True)
-    except Exception as e:
-        print(f"[sleep_coach] Reminder Fehler: {e}", flush=True)
+def _notify(text: str, priority: str = "normal", expires_in_min: int = 60) -> None:
+    """Sendet Push via NotificationDispatcher. Nie via Pipeline."""
+    if _dispatcher:
+        _dispatcher.notify(text, channels=["dashboard"], priority=priority, expires_in_min=expires_in_min)
+    else:
+        print(f"[sleep_coach] (kein Dispatcher) {text}", flush=True)
 
 
 def _loop() -> None:
@@ -99,7 +104,7 @@ def _loop() -> None:
             alarms = _alarm_service.list_alarms() if _alarm_service else []
             first_alarm = min(
                 (f"{a['hour']:02d}:{a['minute']:02d}" for a in alarms),
-                default="keinen Wecker"
+                default=None,
             )
 
             key_30 = f"{today}_30min"
@@ -109,31 +114,33 @@ def _loop() -> None:
             # 30min vor Schlafzeit: sanfter Hinweis
             if 28 <= diff <= 32 and key_30 not in fired_today:
                 fired_today.add(key_30)
-                wecker_info = f"Dein erster Wecker ist um {first_alarm}." if alarms else ""
-                _send_reminder(
-                    f"[SLEEP_COACH] Gib Simon einen sehr kurzen, sanften Hinweis: "
-                    f"In 30 Minuten ist seine Ziel-Schlafzeit ({target.strftime('%H:%M')}). "
-                    f"{wecker_info} Kein Vortrag, nur ein kurzer freundlicher Reminder."
+                wecker_info = f" Erster Wecker um {first_alarm}." if first_alarm else ""
+                _notify(
+                    f"In 30 Minuten ist deine Ziel-Schlafzeit ({target.strftime('%H:%M')}). "
+                    f"Langsam runterfahren. 🌙{wecker_info}",
+                    priority="normal",
                 )
 
             # Pünktlich: direkter Reminder
             elif -2 <= diff <= 2 and key_0 not in fired_today:
                 fired_today.add(key_0)
-                _send_reminder(
-                    f"[SLEEP_COACH] Sag Simon kurz und direkt: "
-                    f"Es ist jetzt seine Schlafzeit ({target.strftime('%H:%M')}). "
-                    f"{'Erster Wecker um ' + first_alarm + '.' if alarms else ''} "
-                    f"Kein langer Text."
+                wecker_info = f" Erster Wecker um {first_alarm}." if first_alarm else ""
+                _notify(
+                    f"Es ist jetzt deine Schlafzeit ({target.strftime('%H:%M')}).{wecker_info}",
+                    priority="normal",
                 )
 
             # 30min zu spät: leichte Konsequenz erwähnen
             elif -32 <= diff <= -28 and key_30late not in fired_today:
                 fired_today.add(key_30late)
-                _send_reminder(
-                    f"[SLEEP_COACH] Erwähne kurz dass Simon jetzt 30 Minuten nach seiner "
-                    f"Schlafzeit ({target.strftime('%H:%M')}) noch wach ist. "
-                    f"{'Bei ' + str(stunden) + ' Stunden Schlaf und Wecker um ' + first_alarm + ' wird es knapp.' if alarms else ''} "
-                    f"Kein erhobener Zeigefinger, nur ein sachlicher Hinweis."
+                knapp_info = (
+                    f" Bei {stunden} Stunden Schlaf und Wecker um {first_alarm} wird es knapp."
+                    if first_alarm else ""
+                )
+                _notify(
+                    f"Du bist jetzt 30 Minuten nach deiner Schlafzeit ({target.strftime('%H:%M')}) "
+                    f"noch wach.{knapp_info}",
+                    priority="high",
                 )
 
         except Exception as e:

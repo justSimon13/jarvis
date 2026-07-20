@@ -51,12 +51,13 @@ Schlafzimmer-Client (geplant)
 
 ## Pipeline
 
-Eine `JarvisPipeline`-Instanz pro Client — aber **eine geteilte History und ein geteilter Kontext**.
+Eine `JarvisPipeline`-Instanz pro Client — History ist **pro Client-Kategorie geteilt** (`"voice"` vs. `"web"`, seit 2026-07-19, siehe `CLAUDE.md` Architektur-Entscheidungen), Kontext (`brain.db`) bleibt für alle geteilt.
 
 ```
-Client A ──→ JarvisPipeline A ──┐
-                                 ├──→ shared_history  (in-memory, Server)
-Client B ──→ JarvisPipeline B ──┘     shared_context  (brain.db)
+Wohnzimmer   ──→ JarvisPipeline ──┐
+Schlafzimmer ──→ JarvisPipeline ──┼──→ api_histories["voice"]  (in-memory, Server)
+                                   │     shared_context           (brain.db)
+jarvis-web   ──→ JarvisPipeline ──┘──→ api_histories["web"]
 ```
 
 **Gleichzeitiger Input:** FIFO-Queue — immer nur eine Pipeline schreibt gleichzeitig in die History.
@@ -102,7 +103,7 @@ TTS läuft parallel zum LLM-Streaming (sobald ein Satz erkannt wird → sofort a
 | `followups` | Offene Punkte für nächstes Gespräch (mit optionalem `due`-Datum)      |
 | `events`    | Routinen: Check-In, Check-Out, Sport, sonstige Zeitfenster             |
 | `modules`   | Prompt-Inhalte — Basis-Identität + pro Modus (assistent/coach/fokus)  |
-| `config`    | Technisches: Notion-Config, Proaktiv-Einstellungen, Wetter-City etc.   |
+| `config`    | Technisches: Todos/Projekte-Einstellungen, Proaktiv-Einstellungen, Wetter-City etc. |
 
 > **Migration von alten Sections:**
 > `settings` → aufgeteilt in `behavior` + `events` + `config`
@@ -161,13 +162,13 @@ Alle Keys erscheinen automatisch im Prompt — kein `ordered_keys`, kein `label_
 ## Config-Split: .env vs brain.config
 
 **`.env` enthält nur Secrets:**
-- API Keys (Anthropic, ElevenLabs, Notion, Google, etc.)
+- API Keys (Anthropic, ElevenLabs, Google, etc.)
 - SMTP/IMAP Credentials
 - Alles was ein Token, Key oder Passwort ist
 
 **`brain.config` enthält alles andere:**
 - `weather_city`
-- Notion-Datenbank-IDs und Lade-Parameter
+- Todos/Projekte Lade-Parameter (`notion.todos`/`notion.projekte` — Legacy-Key-Name, Daten liegen seit 2026-07-19 lokal in `local_data.db`)
 - Proaktiv-Service-Einstellungen
 - Server-Port (optional)
 
@@ -187,7 +188,7 @@ Static Prompt  (Anthropic Prompt Cache, 5 min TTL)
 ├── brain.followups              ← Fällige offene Punkte
 ├── brain.memory                 ← Gelerntes
 ├── session_memory               ← Letzte 3 Tage Sessions
-└── context (Notion-Cache)       ← Todos, Projekte, Konzepte
+└── local_data.py                ← Todos, Projekte
 
 Dynamic Prompt  (kein Cache, immer frisch)
 ├── Aktuelle Uhrzeit + Wochentag + Tageszeit
@@ -370,13 +371,13 @@ stt.py                 ← ElevenLabs Scribe
 tts.py                 ← ElevenLabs TTS
 tools.py               ← Tool-Definitionen + execute()
 session_memory.py      ← Session-Zusammenfassungen (Haiku)
+local_data.py           ← Todos/Projekte/Kontakte (SQLite, ersetzt Notion seit 2026-07-19)
 config.py              ← nur Secrets aus .env
 main.py                ← Standalone CLI (unverändert)
 services/
   alarm.py             ← Wecker-Registry + Sleep-Log
   calendar.py          ← Google Calendar (cached)
   btc.py               ← CoinGecko (cached)
-  notion.py            ← Notion API
   email.py             ← IMAP/SMTP
   proactive.py         ← Kalender-Reminder + VIP-Email-Push
   timer.py             ← Software-Timer

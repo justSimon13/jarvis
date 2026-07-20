@@ -72,8 +72,9 @@ JARVIS Server (server.py) — HP EliteDesk, ws://192.168.0.155:8765
 | `client_manager.py` | Client-Registry, Audio-Routing, Mode-Tracking |
 | `session_memory.py` | Session-Zusammenfassung in SQLite |
 | `protocol.py` | Alle WebSocket-Nachrichtentypen (Konstanten + Kommentare) |
-| `config.py` | Env-Loading, Notion DB IDs, Pfade |
-| `services/` | notion, calendar, email, alarm, timer, btc, weather, search, reminders, music, proactive, sleep_coach |
+| `config.py` | Env-Loading, Pfade |
+| `local_data.py` | Todos/Projekte/Kontakte — lokales SQLite, ersetzt Notion seit 2026-07-19 |
+| `services/` | calendar, email, alarm, timer, btc, weather, search, reminders, music, proactive, sleep_coach |
 
 ---
 
@@ -87,7 +88,7 @@ JARVIS Server (server.py) — HP EliteDesk, ws://192.168.0.155:8765
 | `events` | Routinen (Check-In/Out, Sport), Zeitfenster, Feature-Flags |
 | `behavior` | Tonalität, Antwortstil, Erinnerungspräferenzen |
 | `modules` | System-Prompt-Sektionen (base identity + modus-spezifisch) |
-| `config` | Notion DB IDs, Weather-City, Feature-Flags (technisches) |
+| `config` | Todos/Projekte-Lade-Parameter, Weather-City, Feature-Flags (technisches) |
 
 Zugriff immer via `brain.read(section)` / `brain.write(section, key, value)`.
 
@@ -109,7 +110,7 @@ Alle Typen als Konstanten in `protocol.py`. Wichtigste:
 
 ## Architektur-Entscheidungen (NICHT ändern ohne Diskussion)
 
-1. **Shared History:** `api_history` (aktuelle Session, geht an Claude) + `display_history` (vollständiges Protokoll für Transcript). Session-Timeout 15 Min → `api_history` leeren, Break-Marker setzen.
+1. **History pro Kategorie:** `api_histories`/`display_histories` sind Dicts mit zwei Kategorien, `"voice"` (alle Sprach-/Raum-Clients — teilen sich weiterhin einen gemeinsamen Live-Kontext, das ist gewollt) und `"web"` (Dashboard-Rolle, z.B. jarvis-web — bewusst isoliert). Ableitung über `_category_for_role()` aus dem `role`-Feld. Bis 2026-07-19 war das ein einziger globaler Puffer für alle Clients; geändert nach wiederholten Vermischungs-Bugs (Sprach-Begrüßung landete in Web-Sessions). Details: `knowledge/programmierung/jarvis_projekt.md`. Session-Timeout weiterhin: `api_histories[kategorie]` leeren, Break-Marker setzen.
 
 2. **Prompt-Caching:** Statischer Prompt (Brain + Session-Memory) mit `cache_control: ephemeral` gecacht. Dynamischer Teil (Zeit, Kalender, BTC) immer frisch. TTL ~5 Min.
 
@@ -154,7 +155,7 @@ Cards und Quick-Actions können per `brain.modules.modes.<modus>` überschrieben
 | `history.json` | `~/.jarvis/` | Letzte 200 display_history Einträge |
 | `sessions.db` | `~/.jarvis/` | Session-Summaries |
 | `alarm_registry.json` | `~/.jarvis/` | Server-seitige Alarm-Registry |
-| `notion_cache.db` | `~/.jarvis/` | Notion-Cache (15 Min TTL) |
+| `local_data.db` | `~/.jarvis/` | Todos/Projekte/Kontakte (SQLite, ersetzt Notion) |
 | `calendar_cache.json` | `~/.jarvis/` | Calendar-Cache (15 Min TTL) |
 
 ---

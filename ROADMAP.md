@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Roadmap & Backlog
 
-Letzte Überarbeitung: 2026-07-16
+Letzte Überarbeitung: 2026-07-19
 
 Organisiert nach Priorität.
 
@@ -134,7 +134,7 @@ Tool-Beschreibungen explizit formulieren: JARVIS ruft sie **proaktiv** auf wenn 
 - Immer laden: `knowledge/simon/_core.md`
 - Modus-basiert laden: `knowledge/<topic>/_summary.md` (wenn existiert)
 - `brain.profile` aus Prompt entfernen
-- `detect_modules()` bleibt für Notion-Daten (Todos, Kalender, Projekte)
+- `detect_modules()` bleibt für Todos/Kalender/Projekte (Todos/Projekte lokal seit 2026-07-19, siehe `local_data.py`)
 
 ---
 
@@ -204,7 +204,7 @@ Scope wird beim Connect übergeben:
 Gibt zurück:
 - knowledge/programmierung/_summary.md
 - knowledge/digital35/_summary.md (nur work scope)
-- Aktive Projekte aus Notion
+- Aktive Projekte (lokal, `local_data.py`)
 - Tech-Stack aus simon/_core.md (nur personal scope)
 ```
 
@@ -253,7 +253,7 @@ Desktop-first Interface. Nicht das Dashboard umbauen — neues Repo mit anderem 
 - JARVIS kann Änderungen vorschlagen → Diff anzeigen, Simon bestätigt
 - Neue Themen anlegen via Button oder Gespräch
 
-**Todos** — aus Notion (bereits implementiert)
+**Todos** — lokal (`local_data.py`), Web-UI (Add/Complete/Delete) bereits implementiert
 
 **Kalender** — bereits implementiert
 
@@ -315,6 +315,24 @@ Abhängigkeit: Tailscale (Phase D) muss fertig sein.
 
 ---
 
+## 🔴 Phase G — Coding Engine (JARVIS entwickelt sich selbst) ✅ Grundversion fertig (2026-07-18)
+
+JARVIS kann jetzt über ein neues Tool `delegate_coding_task` selbst Code im `j.a.r.v.i.s.`-Repo schreiben — Simon sagt im Gespräch "JARVIS, bau X", JARVIS delegiert intern an eine eigene Coding-Engine (`services/coding_engine.py`, Claude Agent SDK), arbeitet in einem eigenen Branch (`jarvis/auto-*`, nie `main`), fragt bei riskanten Aktionen über jarvis-web nach Freigabe (`coding_approval_request`/`_response`) und meldet sich per Notification wenn fertig. Details/Design → `knowledge/programmierung/jarvis_coding_architektur.md`.
+
+**Deployment ✅ (2026-07-18):** `pip install claude-agent-sdk` + Smoke-Test + systemd-Neustart erledigt. Erster echter Ende-zu-Ende-Test erfolgreich: Task "lies ROADMAP.md, schreib STATUS.md" lief sauber durch — isolierter Worktree, korrekter Inhalt, sauberer Commit auf eigenem Branch, `main` unangetastet.
+
+Beim Testen gefunden und behoben: fehlende Git-Identität auf dem Server (Commits jetzt mit eigener Identität), gemeinsamer Checkout statt isoliertem Worktree (Sicherheitsrisiko — behoben), `query()` erfordert Streaming-Prompt mit `can_use_tool` (auf `ClaudeSDKClient` umgestellt), `allowed_tools` hebelte `can_use_tool` komplett aus (**Freigabe-System lief bis dahin komplett ins Leere** — behoben durch Entfernen aus `allowed_tools` + `disallowed_tools` für Tools außerhalb des Coding-Scopes), Notification-Rate-Limit kollidierte mit Fortschritts-Updates (Fortschritt läuft jetzt nur noch ins Server-Log). Details → `knowledge/programmierung/jarvis_coding_architektur.md`.
+
+**Noch offen:**
+- Eskalations-Freigabe-Flow noch nicht mit einer tatsächlich riskanten Aktion live getestet (bisherige Tests waren alle unkritisch)
+- Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
+- GitHub-Push/PR-Automation (`GITHUB_TOKEN` bleibt vorerst ungenutzt)
+- Konversationelle Konfigurierbarkeit der Eskalationsregeln
+- Nur `j.a.r.v.i.s.`-Repo als Ziel — dashboard/satellite/web noch nicht angebunden
+- Nur 1 Coding-Task gleichzeitig
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
@@ -338,7 +356,6 @@ JARVIS läuft 1×/Stunde, wertet Brain + History aus, entscheidet selbst ob Hinw
 - **Lichtsteuerung** — Philips Hue Bridge API
 - **SevDesk & Steuer** — Erinnerungsschicht + API
 - **Multi-Room Audio** — hängt an Schlafzimmer-Client
-- **Notion-Ablösung** — langfristig, eigenes Backend
 
 ---
 
@@ -360,3 +377,4 @@ JARVIS läuft 1×/Stunde, wertet Brain + History aus, entscheidet selbst ob Hinw
 - Brain Memory Schema mit Aging, Dedup, Pruning (Phase 3)
 - Context Modularisierung mit detect_modules() (Phase 4)
 - Tool Idempotenz + Session Memory Hardening (Phase 5)
+- Notion-Ablösung — Todos/Projekte/Kontakte lokal in SQLite (`local_data.py`), Konzepte-Feature gestrichen (2026-07-19)

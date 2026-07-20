@@ -7,8 +7,14 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
-NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
-MANUAL_MODE = os.getenv("MANUAL_MODE", "false").lower() == "true"
+MANUAL_MODE = os.getenv("MANUAL_MODE", "false").lower() == "true"  # main.py Standalone-CLI: Wake-Word vs. manuelles ENTER
+CODING_ENGINE_API_KEY = os.getenv("CODING_ENGINE_API_KEY", ANTHROPIC_API_KEY)  # eigener Key optional, sonst Fallback
+CODING_MANUAL_MODE = os.getenv("CODING_MANUAL_MODE", "false").lower() == "true"  # Coding-Engine: Freigabe bei JEDER Aktion statt nur bei riskanten
+CODING_TASK_BUDGET_USD = float(os.getenv("CODING_TASK_BUDGET_USD", "3.0"))    # Harte Obergrenze pro einzelnem Coding-Task
+CODING_DAILY_BUDGET_USD = float(os.getenv("CODING_DAILY_BUDGET_USD", "10.0"))  # Tages-Gesamtlimit für die Coding-Engine
+CODING_ENGINE_MODEL = os.getenv("CODING_ENGINE_MODEL", "claude-sonnet-5")       # Default: günstiger
+CODING_ENGINE_MODEL_HIGH = os.getenv("CODING_ENGINE_MODEL_HIGH", "claude-opus-4-8")  # nur wenn explizit "mehr Power" verlangt
+CHAT_DAILY_BUDGET_USD = float(os.getenv("CHAT_DAILY_BUDGET_USD", "5.0"))  # Nur Sichtbarkeit/Warnung, kein Hard-Block wie bei der Coding-Engine
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "")
@@ -25,13 +31,6 @@ GITHUB_REPO = "justSimon13/jarvis"
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)
 
-NOTION_CACHE_DB   = JARVIS_DIR / "notion_cache.db"
 KNOWLEDGE_DIR     = JARVIS_DIR / "knowledge"
 KNOWLEDGE_INDEX_DB = JARVIS_DIR / "knowledge_index.db"
 TRACKING_DB       = JARVIS_DIR / "tracking.db"
-
-NOTION_TODOS_DB_ID = os.getenv("NOTION_TODOS_DB_ID", "10ab63fa-fc26-80f5-9865-cf57555d8002")
-NOTION_PROJEKTE_DB_ID = os.getenv("NOTION_PROJEKTE_DB_ID", "194b63fa-fc26-80d1-9832-dceb4301afd3")
-NOTION_KONZEPTE_DB_ID = os.getenv("NOTION_KONZEPTE_DB_ID", "19fb63fa-fc26-80d3-807c-ffba582e38c0")
-NOTION_KONTAKTE_DB_ID = os.getenv("NOTION_KONTAKTE_DB_ID", "1a4b63fa-fc26-808c-ad83-e4973e38f570")
-NOTION_CACHE_TTL = 15 * 60  # seconds

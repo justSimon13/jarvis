@@ -884,7 +884,9 @@ Markdown-Content wird als Text gespeichert — Dashboard rendert es.
 
 ### Phase 9 — Strategisch: Notion-Ablösung
 
-**Ziel:** Notion durch eigenes Backend auf dem JARVIS-Server ersetzen. Keine externe API-Abhängigkeit, kein Rate Limit, kein Caching-Problem.
+**✅ Erledigt (2026-07-19)** — abweichend vom hier skizzierten PocketBase-Ansatz: direktes SQLite (`local_data.py`), konsistent mit brain.db/sessions.db/tracking.db, kein neuer Server-Prozess. Konzepte wurden komplett gestrichen statt migriert. Details: `knowledge/programmierung/jarvis_projekt.md`.
+
+**Ziel (ursprünglich):** Notion durch eigenes Backend auf dem JARVIS-Server ersetzen. Keine externe API-Abhängigkeit, kein Rate Limit, kein Caching-Problem.
 
 **Was ersetzt wird:**
 

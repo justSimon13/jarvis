@@ -237,10 +237,8 @@ def _check_todos(today: str, state: dict) -> None:
     if key in state["todos"]:
         return
     try:
-        import context
-        conn = context._get_db()
-        todos = context._get_cached(conn, "todos") or []
-        conn.close()
+        import local_data
+        todos = local_data.list_todos()
     except Exception as e:
         print(f"[proactive] Todo-Fehler: {e}", flush=True)
         return

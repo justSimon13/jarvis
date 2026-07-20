@@ -121,7 +121,6 @@ def main():
     _print_audio_devices()
 
     brain.sync()
-    context.refresh_if_stale()
     stt.load_model()
 
     player = _LocalPlayer()
@@ -163,7 +162,6 @@ def main():
                 print("\nHöre auf Wake Word...")
                 audio.listen_for_wake_word()
                 brain.check_missed_routines()
-                context.refresh_if_stale()
 
             if not config.MANUAL_MODE:
                 print("Ich höre...")

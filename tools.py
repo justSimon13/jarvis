@@ -2,7 +2,7 @@ import json
 import brain
 import knowledge
 import tracking
-from services import notion as notion_service
+import local_data
 from services import calendar as calendar_service
 from services import email as email_service
 from services import btc
@@ -13,26 +13,59 @@ from services import apple_music as apple_music_service
 from services import timer as timer_service
 from services import alarm as alarm_service
 from services import client_music as client_music_service
+from services import coding_engine
 
 DEFINITIONS = [
     {
-        "name": "notion_query",
+        "name": "delegate_coding_task",
         "description": (
-            "Liest Einträge aus einer Notion-Datenbank. "
-            "Verfügbare Datenbanken: 'todos', 'projekte', 'konzepte'. "
-            "Gibt eine Liste von Einträgen zurück."
+            "Delegiert eine Programmier-Aufgabe an JARVIS' eigene Coding-Engine, die selbstständig "
+            "im j.a.r.v.i.s.-Server-Repo Dateien anlegt/ändert. NUR verwenden wenn Simon explizit "
+            "möchte dass JARVIS selbst Code schreibt/ändert (z.B. 'JARVIS, füg X hinzu', 'entwickle Y'), "
+            "NICHT für normale Konversation oder Fragen über Code. Läuft asynchron im Hintergrund in "
+            "einem eigenen Git-Branch (nie main) — Ergebnis kommt per Notification, nicht in dieser Antwort."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "instruction": {
+                    "type": "string",
+                    "description": "Klare, vollständige Beschreibung der Coding-Aufgabe.",
+                },
+                "high_power": {
+                    "type": "boolean",
+                    "description": (
+                        "true NUR wenn Simon für diesen Task explizit mehr Rechenleistung/Qualität "
+                        "verlangt hat (z.B. 'mit mehr Power', 'das ist komplex, nimm das beste Modell'). "
+                        "Nutzt ein deutlich teureres Modell. Default false — für normale Aufgaben "
+                        "reicht das günstigere Modell."
+                    ),
+                },
+            },
+            "required": ["instruction"],
+        },
+    },
+    {
+        "name": "data_query",
+        "description": (
+            "Liest Einträge aus Todos oder Projekten. "
+            "Verfügbare Datenbanken: 'todos', 'projekte'. "
+            "Gibt eine Liste von Einträgen zurück. Manche Einträge haben ein "
+            "'unterseiten'-Feld (Liste von {id, titel}) — das sind nur die Titel, "
+            "kein Inhalt (Kosten-Rücksicht). Volltext einer Unterseite bei Bedarf "
+            "mit read_seite(seite_id) nachladen."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte", "konzepte"],
+                    "enum": ["todos", "projekte"],
                     "description": "Name der Datenbank",
                 },
                 "search": {
                     "type": "string",
-                    "description": "Suche im Titel (optional)",
+                    "description": "Suche im Namen (optional)",
                 },
                 "status": {
                     "type": "string",
@@ -47,60 +80,94 @@ DEFINITIONS = [
         },
     },
     {
-        "name": "notion_write",
+        "name": "data_write",
         "description": (
-            "Erstellt einen neuen Eintrag in einer Notion-Datenbank. "
-            "Verfügbare Datenbanken: 'todos', 'projekte', 'konzepte'. "
-            "todos: Name (Pflicht), Status, Datum (YYYY-MM-DD), Priorität (Niedrig/Mittel/Hoch), Bereich, Aufwand. "
-            "projekte: Projekt (Pflicht), Status, Beschreibung, Typ. "
-            "konzepte: Name (Pflicht), Status, Notiz, Typ. "
-            "Optional: content = Liste von Blöcken die als Seiteninhalt angelegt werden (Checkliste etc.)."
+            "Erstellt einen neuen Eintrag in Todos oder Projekten. "
+            "Verfügbare Datenbanken: 'todos', 'projekte'. "
+            "todos: name (Pflicht), status, datum (YYYY-MM-DD), prioritaet (Niedrig/Mittel/Hoch), bereich, aufwand. "
+            "projekte: name (Pflicht), status, beschreibung, typ."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte", "konzepte"],
+                    "enum": ["todos", "projekte"],
                     "description": "Name der Datenbank",
                 },
                 "properties": {
                     "type": "object",
-                    "description": "Felder des neuen Eintrags als Key-Value-Paare",
-                },
-                "content": {
-                    "type": "array",
-                    "description": "Optionale Blöcke als Seiteninhalt. Jedes Item: {type: 'to_do'|'paragraph'|'bullet'|'heading', text: '...'}",
-                    "items": {"type": "object"},
+                    "description": "Felder des neuen Eintrags als Key-Value-Paare (lokale Feldnamen, siehe oben)",
                 },
             },
             "required": ["database", "properties"],
         },
     },
     {
-        "name": "notion_update",
+        "name": "data_update",
         "description": (
-            "Aktualisiert einen bestehenden Notion-Eintrag per page_id. "
-            "page_id aus einem vorherigen notion_query entnehmen."
+            "Aktualisiert einen bestehenden Eintrag per id. "
+            "id aus einem vorherigen data_query entnehmen."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
+                "id": {
+                    "type": "integer",
+                    "description": "ID des Eintrags",
                 },
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte", "konzepte"],
-                    "description": "Name der Datenbank (für Schema-Lookup)",
+                    "enum": ["todos", "projekte"],
+                    "description": "Name der Datenbank",
                 },
                 "properties": {
                     "type": "object",
                     "description": "Zu ändernde Felder als Key-Value-Paare",
                 },
             },
-            "required": ["page_id", "database", "properties"],
+            "required": ["id", "database", "properties"],
+        },
+    },
+    {
+        "name": "data_delete",
+        "description": (
+            "Löscht einen Eintrag aus Todos oder Projekten per id. "
+            "id aus einem vorherigen data_query entnehmen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "ID des Eintrags",
+                },
+                "database": {
+                    "type": "string",
+                    "enum": ["todos", "projekte"],
+                    "description": "Name der Datenbank",
+                },
+            },
+            "required": ["id", "database"],
+        },
+    },
+    {
+        "name": "read_seite",
+        "description": (
+            "Lädt den vollen Inhalt EINER Unterseite eines Todos/Projekts nach — "
+            "lazy: data_query liefert nur Titel+id unter 'unterseiten', der Volltext "
+            "kommt erst hier. Falls die Seite selbst wieder Unterseiten hat, kommen "
+            "die im Ergebnis auch nur als Titel+id — dafür read_seite erneut aufrufen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "seite_id": {
+                    "type": "integer",
+                    "description": "id aus dem 'unterseiten'-Feld eines vorherigen data_query oder read_seite",
+                },
+            },
+            "required": ["seite_id"],
         },
     },
     {
@@ -113,7 +180,7 @@ DEFINITIONS = [
             "'followups' (offene Punkte für nächstes Gespräch), "
             "'events' (Routinen, Features, Check-In-Regeln), "
             "'modules' (Persönlichkeits-Prompt pro Modus), "
-            "'config' (technische Einstellungen, Notion-Config, Kontakte). "
+            "'config' (technische Einstellungen, Todos/Projekte-Ladeparameter, Kontakte). "
             "key optional – ohne key wird die ganze Section zurückgegeben."
         ),
         "input_schema": {
@@ -157,7 +224,7 @@ DEFINITIONS = [
             "Reihenfolge im Array = Anzeigereihenfolge. Nicht genannte Cards werden ausgeblendet. "
             "Dashboard-Schnellaktionen: key='modes.{modus}.quick_actions', value=Liste von Action-IDs. "
             "'config': Technisches. "
-            "Notion-Config: key='notion.todos.max', key='notion.konzepte.laden'. "
+            "Todos/Projekte-Config: key='todos_projekte.todos.max'. "
             "Kontakte: key='contacts.email_vip', value=[...Liste]. "
             "Schlaf: key='schlaf.stunden', key='schlaf.fallback'. "
             "Proaktiv: key='proaktiv.kalender_minuten', key='proaktiv.email_aktiv'. "
@@ -260,7 +327,7 @@ DEFINITIONS = [
     {
         "name": "sync_email_vip",
         "description": (
-            "Synchronisiert die Email-VIP-Liste aus Notion Kontakte (Mehrfachauswahl=Kunde) "
+            "Synchronisiert die Email-VIP-Liste aus den Kontakten mit Tag 'Kunde' "
             "in die JARVIS Settings. Aufrufen wenn Simon sagt 'sync VIP-Liste' oder 'aktualisiere Email-Filter'."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -400,167 +467,6 @@ DEFINITIONS = [
                 "index": {"type": "integer", "description": "Index des gewünschten Tracks (aus Suchergebnis)"},
             },
             "required": ["query", "index"],
-        },
-    },
-    {
-        "name": "notion_delete",
-        "description": (
-            "Archiviert (löscht) eine beliebige Notion-Seite per page_id – "
-            "funktioniert für Datenbank-Einträge und normale Seiten. "
-            "page_id aus notion_query oder notion_search_pages entnehmen."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
-                },
-                "database": {
-                    "type": "string",
-                    "enum": ["todos", "projekte", "konzepte"],
-                    "description": "Name der Datenbank (optional, nur für Cache-Invalidierung)",
-                },
-            },
-            "required": ["page_id"],
-        },
-    },
-    {
-        "name": "notion_append_blocks",
-        "description": (
-            "Fügt Blöcke (Checkboxen, Text, Aufzählungen) als Inhalt an eine bestehende Notion-Seite an. "
-            "WICHTIG: Immer ALLE Blöcke in einem einzigen Aufruf schicken — nicht mehrere Aufrufe hintereinander. "
-            "Bis zu 100 Blöcke pro Aufruf, bei mehr wird intern automatisch gebatcht. "
-            "page_id aus notion_query oder notion_write (gibt page_id zurück) entnehmen."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
-                },
-                "blocks": {
-                    "type": "array",
-                    "description": "Liste von Blöcken. Jedes Item: {type: 'to_do'|'paragraph'|'bullet'|'heading', text: '...'}. Bei to_do optional: checked: true/false",
-                    "items": {"type": "object"},
-                },
-            },
-            "required": ["page_id", "blocks"],
-        },
-    },
-    {
-        "name": "notion_search_pages",
-        "description": (
-            "Sucht beliebige Notion-Seiten nach Titel – nicht nur Datenbank-Einträge. "
-            "Gibt page_id, Titel und URL zurück. Danach notion_delete oder notion_append_blocks aufrufen."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Suche im Seitentitel",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximale Ergebnisse (Standard: 5)",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "notion_clear_page",
-        "description": (
-            "Löscht alle Blöcke (Inhalte) einer Notion-Seite, behält aber die Seite selbst. "
-            "Erstellt automatisch ein lokales Backup — mit notion_restore_page wiederherstellbar. "
-            "Danach mit notion_append_blocks neu befüllen. "
-            "page_id aus notion_query oder notion_search_pages entnehmen."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
-                },
-            },
-            "required": ["page_id"],
-        },
-    },
-    {
-        "name": "notion_restore_page",
-        "description": (
-            "Stellt eine Notion-Seite aus dem letzten lokalen Backup wieder her. "
-            "Backup wird automatisch von notion_clear_page erstellt. "
-            "Verwenden wenn JARVIS eine Seite versehentlich geleert hat oder ein Rebuild schiefgelaufen ist."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page_id": {
-                    "type": "string",
-                    "description": "ID der Notion-Seite",
-                },
-            },
-            "required": ["page_id"],
-        },
-    },
-    {
-        "name": "notion_read_page",
-        "description": (
-            "Liest den vollständigen Textinhalt einer Notion-Seite. "
-            "with_ids=true gibt jede Zeile mit Block-ID zurück ([id:...]) — nötig wenn danach "
-            "notion_update_block oder notion_delete_blocks aufgerufen werden soll. "
-            "with_ids=false (Standard) für reines Lesen ohne Bearbeitungsabsicht."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "page_id": {"type": "string", "description": "ID der Notion-Seite"},
-                "with_ids": {"type": "boolean", "description": "Block-IDs ausgeben (Standard: false)"},
-            },
-            "required": ["page_id"],
-        },
-    },
-    {
-        "name": "notion_update_block",
-        "description": (
-            "Ändert den Textinhalt eines einzelnen Blocks. "
-            "block_id aus notion_read_page (with_ids=true) entnehmen. "
-            "Für kleine Korrekturen — kein Clear/Rebuild der ganzen Seite nötig."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "block_id": {"type": "string", "description": "ID des Blocks"},
-                "text": {"type": "string", "description": "Neuer Textinhalt"},
-                "block_type": {
-                    "type": "string",
-                    "description": "Typ: paragraph, heading_1/2/3, bullet, numbered, to_do, quote (Standard: paragraph)",
-                },
-            },
-            "required": ["block_id", "text"],
-        },
-    },
-    {
-        "name": "notion_delete_blocks",
-        "description": (
-            "Löscht einen oder mehrere Blöcke aus einer Notion-Seite. "
-            "block_ids aus notion_read_page (with_ids=true) entnehmen. "
-            "Für gezieltes Entfernen von Duplikaten oder veralteten Abschnitten."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "block_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Liste der Block-IDs die gelöscht werden sollen",
-                },
-            },
-            "required": ["block_ids"],
         },
     },
     {
@@ -810,8 +716,13 @@ DEFINITIONS = [
 
 def execute(tool_name: str, tool_input: dict) -> str:
     try:
-        if tool_name == "notion_query":
-            results = notion_service.query(
+        if tool_name == "delegate_coding_task":
+            return coding_engine.start_task(
+                tool_input["instruction"], high_power=bool(tool_input.get("high_power", False))
+            )
+
+        if tool_name == "data_query":
+            results = local_data.query(
                 database=tool_input["database"],
                 search=tool_input.get("search"),
                 status=tool_input.get("status"),
@@ -819,21 +730,31 @@ def execute(tool_name: str, tool_input: dict) -> str:
             )
             return json.dumps(results, ensure_ascii=False)
 
-        if tool_name == "notion_write":
-            page_id = notion_service.write(
+        if tool_name == "data_write":
+            item_id = local_data.write(
                 database=tool_input["database"],
                 properties=tool_input["properties"],
-                content=tool_input.get("content"),
             )
-            return f"Erstellt (page_id: {page_id})"
+            return f"Erstellt (id: {item_id})"
 
-        if tool_name == "notion_update":
-            notion_service.update(
-                page_id=tool_input["page_id"],
+        if tool_name == "data_update":
+            local_data.update(
+                item_id=tool_input["id"],
                 database=tool_input["database"],
                 properties=tool_input["properties"],
             )
             return "Aktualisiert."
+
+        if tool_name == "data_delete":
+            local_data.delete(
+                item_id=tool_input["id"],
+                database=tool_input["database"],
+            )
+            return "Gelöscht."
+
+        if tool_name == "read_seite":
+            result = local_data.read_seite(tool_input["seite_id"])
+            return json.dumps(result, ensure_ascii=False) if result else "Seite nicht gefunden."
 
         if tool_name == "brain_read":
             result = brain.read(
@@ -879,7 +800,7 @@ def execute(tool_name: str, tool_input: dict) -> str:
             )
 
         if tool_name == "sync_email_vip":
-            emails = notion_service.sync_vip_emails()
+            emails = local_data.sync_vip_emails()
             brain.write(section="config", key="contacts.email_vip", value=emails)
             return f"{len(emails)} VIP-Emails synchronisiert: {', '.join(emails) if emails else '–'}"
 
@@ -934,52 +855,6 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "music_play_track":
             return apple_music_service.play_track_index(tool_input["query"], tool_input["index"])
-
-        if tool_name == "notion_delete":
-            notion_service.delete(
-                page_id=tool_input["page_id"],
-                database=tool_input.get("database"),
-            )
-            return "Archiviert."
-
-        if tool_name == "notion_append_blocks":
-            notion_service.append_blocks(
-                page_id=tool_input["page_id"],
-                blocks=tool_input["blocks"],
-            )
-            return "Blöcke hinzugefügt."
-
-        if tool_name == "notion_search_pages":
-            results = notion_service.search_pages(
-                query=tool_input["query"],
-                limit=tool_input.get("limit", 5),
-            )
-            return json.dumps(results, ensure_ascii=False)
-
-        if tool_name == "notion_clear_page":
-            n = notion_service.clear_page(page_id=tool_input["page_id"])
-            return f"{n} Blöcke gelöscht (Backup erstellt)."
-
-        if tool_name == "notion_restore_page":
-            return notion_service.restore_page(page_id=tool_input["page_id"])
-
-        if tool_name == "notion_read_page":
-            return notion_service.read_page(
-                page_id=tool_input["page_id"],
-                with_ids=tool_input.get("with_ids", False),
-            )
-
-        if tool_name == "notion_update_block":
-            notion_service.update_block(
-                block_id=tool_input["block_id"],
-                text=tool_input["text"],
-                block_type=tool_input.get("block_type", "paragraph"),
-            )
-            return "Block aktualisiert."
-
-        if tool_name == "notion_delete_blocks":
-            n = notion_service.delete_blocks(block_ids=tool_input["block_ids"])
-            return f"{n} Block(s) gelöscht."
 
         if tool_name == "client_music_play":
             client_music_service.play(
