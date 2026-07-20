@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Roadmap & Backlog
 
-Letzte Überarbeitung: 2026-07-19
+Letzte Überarbeitung: 2026-07-20
 
 Organisiert nach Priorität.
 
@@ -220,9 +220,15 @@ Was Claude Code in einer Session lernt → Simon sagt "JARVIS, merk dir X" → g
 
 ---
 
-## 🟡 Phase C — Web App (`jarvis-web`) ✅ Grundgerüst fertig
+## 🟡 Phase C — Web App (`jarvis-web`) ✅ live auf dem HP-Server (2026-07-20)
 
 Desktop-first Interface. Nicht das Dashboard umbauen — neues Repo mit anderem Fokus.
+
+**Deployment (2026-07-20):** eigenes GitHub-Repo (`justSimon13/jarvis-web`, privat), auf dem
+HP-Server als `jarvis-web.service` (systemd, Port 5174, neben dem älteren `jarvis-dashboard.service`
+fürs iPad auf Port 5173) — erreichbar unter `http://192.168.0.155:5174`. `VITE_JARVIS_WS_URL`
+in `.env` explizit auf die Server-IP gesetzt (Default `ws://localhost:8765` hätte sich sonst
+aus Sicht jedes Clients auf dessen eigenen Rechner bezogen, nicht den Server).
 
 **Stack:** Vue 3 + Vite (gleich wie Dashboard, Code-Sharing möglich)
 
@@ -378,3 +384,8 @@ JARVIS läuft 1×/Stunde, wertet Brain + History aus, entscheidet selbst ob Hinw
 - Context Modularisierung mit detect_modules() (Phase 4)
 - Tool Idempotenz + Session Memory Hardening (Phase 5)
 - Notion-Ablösung — Todos/Projekte/Kontakte lokal in SQLite (`local_data.py`), Konzepte-Feature gestrichen (2026-07-19)
+- Notion-Seiten-Migration — rekursiver Seitenbaum (Unterseiten, Breadcrumbs) statt flachem Textblob, `read_seite`-Tool für lazy-Load im Chat, "notion"-Naming komplett aus Schema/Code/Frontend entfernt (2026-07-20)
+- Kosten-Tracking — `compute_cost()` in llm.py, Chat-Kosten-Log pro Turn, Sidebar-Widget + Tracking-Ansicht, 1h-Cache-TTL, kostenlose Begrüßung ohne LLM-Call (2026-07-20)
+- Graceful Shutdown — Sessions werden bei Server-Neustart (SIGTERM) archiviert statt spurlos verloren zu gehen (2026-07-20)
+- Web-Chat-History pro Tab isoliert (stabile tab_id via sessionStorage) — vorher teilten sich alle offenen jarvis-web-Tabs eine Historie (2026-07-20)
+- sleep_coach.py auf dispatcher.notify() umgestellt (gleicher Fix wie proactive.py) — Reminder landeten vorher als gefälschte Assistant-Nachricht im Chat des gerade aktiven Clients (2026-07-20)
