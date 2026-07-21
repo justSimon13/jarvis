@@ -282,14 +282,24 @@ Neue Nachrichtentypen:
 
 Voraussetzung für Web App remote, iPhone App, MCP von Arbeit.
 
-**Erledigt (2026-07-21):** HP-Server + MacBook im selben Tailnet (`justSimon13`). Stabiler
-Hostname: `jarvisserver.tail47e1d9.ts.net`. `jarvis-web`s `.env` (`VITE_JARVIS_WS_URL`)
-darauf umgestellt, LAN-IP `192.168.0.155` bleibt zusätzlich nutzbar (rein additiv, kein
-Ersatz). Server bindet schon auf `0.0.0.0`, kein Firewall-/Config-Change am Backend nötig.
+**Erledigt (2026-07-21):** HP-Server + MacBook im selben Tailnet (`justSimon13`). Maschine
+auf `jarvis` umbenannt (Hostname `jarvis.tail47e1d9.ts.net`). Zugriff über `tailscale serve`
+statt roher Ports/IP:
+- `https://jarvis.tail47e1d9.ts.net` → jarvis-web
+- `https://jarvis.tail47e1d9.ts.net:8443` → jarvis-dashboard
+- `wss://jarvis.tail47e1d9.ts.net:8766` → JARVIS-Backend-WebSocket (TLS, sonst Mixed-Content-
+  Block im Browser weil die Web-Apps jetzt über https laufen)
+
+`jarvis-web`s `.env` (`VITE_JARVIS_WS_URL`) auf `wss://jarvis.tail47e1d9.ts.net:8766` gesetzt.
+`vite.config.js` beider Web-Apps bräuchte `server.allowedHosts: ['.tail47e1d9.ts.net']`
+(Vite blockt sonst unbekannte Host-Header — bei jarvis-web schon erledigt). LAN-IP
+`192.168.0.155` bleibt zusätzlich nutzbar (rein additiv, kein Ersatz). Server bindet
+schon auf `0.0.0.0`, kein Firewall-/Config-Change am Backend nötig.
 
 **Noch offen:**
 - iPhone/iPad ins Tailnet einladen (bisher nur Server + Mac)
-- `jarvis-dashboard` (altes iPad-Tool) hat vermutlich eine eigene `.env` — noch nicht umgestellt
+- `jarvis-dashboard` (altes iPad-Tool) — `allowedHosts` in dessen `vite.config.js` noch
+  nicht ergänzt (wird beim Aufruf über `:8443` vermutlich denselben Vite-Host-Block zeigen)
 - `jarvis-satellite` (separates Audio-Client-Gerät, eigenes Repo) — Config nicht in diesem
   Repo, noch nicht angefasst
 - Arbeits-Laptop ins Tailnet, damit MCP von Digital35 funktioniert — IT-Policy von

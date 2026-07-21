@@ -47,7 +47,8 @@ Kein Chatbot. Ein **persönliches Betriebssystem** für Simons Alltag — lokal 
 ## System-Topologie
 
 ```
-JARVIS Server (server.py) — HP EliteDesk, ws://jarvisserver.tail47e1d9.ts.net:8765 (Tailscale; LAN-IP ws://192.168.0.155:8765 weiterhin nutzbar)
+JARVIS Server (server.py) — HP EliteDesk, wss://jarvis.tail47e1d9.ts.net:8766 (Tailscale Serve, TLS)
+  (roh: ws://jarvis.tail47e1d9.ts.net:8765 oder ws://192.168.0.155:8765 im LAN — beide bleiben nutzbar)
   ├─ Brain (SQLite ~/.jarvis/brain.db) — 7 Sections
   ├─ Shared History (api_history + display_history)
   ├─ LLM Pipeline (Claude Sonnet 4.6 + Prompt-Caching)
@@ -162,11 +163,18 @@ Cards und Quick-Actions können per `brain.modules.modes.<modus>` überschrieben
 
 ## Deployment
 
-- **Server:** `python3 server.py` als systemd system service (`jarvis.service`) auf HP EliteDesk
-- **Dashboard (altes iPad-Tool):** `npm run dev` als systemd service (`jarvis-dashboard.service`), `:5173`
-- **jarvis-web:** eigenes Repo (`justSimon13/jarvis-web`, privat), `~/apps/jarvis-web`, systemd service (`jarvis-web.service`), `:5174`, `.env` mit `VITE_JARVIS_WS_URL`
+- **Server:** `python3 server.py` als systemd system service (`jarvis.service`) auf HP EliteDesk, Port 8765
+- **Dashboard (altes iPad-Tool):** `npm run dev` als systemd service (`jarvis-dashboard.service`), lokal `:5173`
+- **jarvis-web:** eigenes Repo (`justSimon13/jarvis-web`, privat), `~/apps/jarvis-web`, systemd service (`jarvis-web.service`), lokal `:5174`, `.env` mit `VITE_JARVIS_WS_URL`
 - **Satellite:** `python3 client.py` als systemd system service, `Group=audio`
-- **Verbindung:** `ws://jarvisserver.tail47e1d9.ts.net:8765` (Tailscale, seit 2026-07-20 — funktioniert auch von unterwegs) oder weiterhin `ws://192.168.0.155:8765` im LAN
+- **Tailscale (seit 2026-07-21):** Maschinenname `jarvis` (Tailnet `tail47e1d9`), Zugriff über `tailscale serve`
+  statt roher Ports/IP — funktioniert auch von unterwegs, nicht nur im Heim-LAN:
+  - `https://jarvis.tail47e1d9.ts.net` → jarvis-web (proxy → `:5174`)
+  - `https://jarvis.tail47e1d9.ts.net:8443` → jarvis-dashboard (proxy → `:5173`)
+  - `wss://jarvis.tail47e1d9.ts.net:8766` → JARVIS-Backend-WebSocket (proxy → `:8765`, TLS nötig
+    weil die Web-Apps jetzt über https laufen — Browser blocken sonst unverschlüsseltes `ws://`
+    als Mixed Content von einer `https://`-Seite aus)
+  - LAN-IP (`192.168.0.155`, rohe Ports) bleibt zusätzlich nutzbar, rein additiv
 
 ---
 
