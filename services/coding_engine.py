@@ -234,7 +234,10 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
     _notify(
         f"[JARVIS Code] Fertig — {location_note}{error_note} — ${cost:.2f} "
         f"(heute ${today_total:.2f} von ${config.CODING_DAILY_BUDGET_USD:.2f}): {summary}",
-        priority="normal", expires_in_min=1440,
+        # priority="high": bleibt stehen bis manuell weggeklickt (jarvis-web dismisst
+        # alles außer "high" automatisch nach 8s) — eine Fertig-Meldung, die man
+        # verpasst, ist genau so schlimm wie gar keine (2026-07-22 gemeldet).
+        priority="high", expires_in_min=1440,
     )
     _set_status(active=False, last_action="Fertig" if not error_note else "Fehler/Abbruch")
 

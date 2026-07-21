@@ -134,6 +134,19 @@ class NotificationDispatcher:
             except Exception as e:
                 print(f"[dispatcher] Pending-Delivery Fehler: {e}", flush=True)
 
+    def list_recent(self, limit: int = 30) -> list[dict]:
+        """Letzte Notifications für die Verlaufs-Ansicht (Glocke in jarvis-web) —
+        unabhängig vom delivered_at-Status, einfach chronologisch. Ohne das war
+        eine schnell weggeklickte oder verpasste Notification unwiederbringlich
+        weg (2026-07-22 gemeldet)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, text, priority, created_at FROM notifications "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [{"id": r[0], "text": r[1], "priority": r[2], "created_at": r[3]} for r in rows]
+
     def mark_delivered(self, notification_id: str):
         """Setzt delivered_at — aufgerufen wenn Client notification_ack schickt."""
         with self._lock:

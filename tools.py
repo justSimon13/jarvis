@@ -23,7 +23,8 @@ DEFINITIONS = [
             "im j.a.r.v.i.s.-Server-Repo Dateien anlegt/ändert. NUR verwenden wenn Simon explizit "
             "möchte dass JARVIS selbst Code schreibt/ändert (z.B. 'JARVIS, füg X hinzu', 'entwickle Y'), "
             "NICHT für normale Konversation oder Fragen über Code. Läuft asynchron im Hintergrund in "
-            "einem eigenen Git-Branch (nie main) — Ergebnis kommt per Notification, nicht in dieser Antwort."
+            "einem eigenen Git-Branch (nie main) — Ergebnis kommt per Notification, nicht in dieser Antwort. "
+            "Mit check_coding_task_status kann der Fortschritt/Status später im Gespräch abgefragt werden."
         ),
         "input_schema": {
             "type": "object",
@@ -44,6 +45,17 @@ DEFINITIONS = [
             },
             "required": ["instruction"],
         },
+    },
+    {
+        "name": "check_coding_task_status",
+        "description": (
+            "Prüft den Status des zuletzt gestarteten delegate_coding_task — läuft er noch, "
+            "ist er fertig, oder gab es einen Fehler/Abbruch? Nutzen wenn Simon fragt 'ist der "
+            "Task fertig?', 'was macht die Coding-Engine gerade?', 'lief das durch?' o.ä. — ohne "
+            "dieses Tool hat JARVIS sonst keine Möglichkeit das im Gespräch nachzuschauen. Zeigt "
+            "nur den EINEN zuletzt gestarteten Task (aktuell läuft nie mehr als einer gleichzeitig)."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "data_query",
@@ -720,6 +732,12 @@ def execute(tool_name: str, tool_input: dict) -> str:
             return coding_engine.start_task(
                 tool_input["instruction"], high_power=bool(tool_input.get("high_power", False))
             )
+
+        if tool_name == "check_coding_task_status":
+            status = coding_engine.get_task_status()
+            if not status:
+                return "Es wurde noch nie ein Coding-Task gestartet."
+            return json.dumps(status, ensure_ascii=False)
 
         if tool_name == "data_query":
             results = local_data.query(

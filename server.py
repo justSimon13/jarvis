@@ -406,6 +406,11 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return session_memory.get_transcript(int(sid))
         except Exception as e:
             return {"error": str(e)}
+    if resource == "notification_history":
+        try:
+            return dispatcher.list_recent(int(req_data.get("limit", 30)))
+        except Exception as e:
+            return {"error": str(e)}
     return None
 
 
