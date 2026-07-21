@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Roadmap & Backlog
 
-Letzte Überarbeitung: 2026-07-20
+Letzte Überarbeitung: 2026-07-21
 
 Organisiert nach Priorität.
 
@@ -278,29 +278,22 @@ Neue Nachrichtentypen:
 
 ---
 
-## 🔴 Phase D — Tailscale (Höchste Priorität — Voraussetzung für alles)
+## 🔴 Phase D — Tailscale ✅ Server + Mac im Tailnet (2026-07-21)
 
 Voraussetzung für Web App remote, iPhone App, MCP von Arbeit.
 
-**Schritte (Simon führt das auf dem HP-Server aus):**
-```bash
-# 1. Tailscale auf HP-Server installieren
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
+**Erledigt (2026-07-21):** HP-Server + MacBook im selben Tailnet (`justSimon13`). Stabiler
+Hostname: `jarvisserver.tail47e1d9.ts.net`. `jarvis-web`s `.env` (`VITE_JARVIS_WS_URL`)
+darauf umgestellt, LAN-IP `192.168.0.155` bleibt zusätzlich nutzbar (rein additiv, kein
+Ersatz). Server bindet schon auf `0.0.0.0`, kein Firewall-/Config-Change am Backend nötig.
 
-# 2. MacBook + iPhone + (optional) Arbeits-Laptop ins Tailnet einladen
-# → tailscale.com/admin → Geräte → Invite
-
-# 3. Stabilen Hostnamen merken: z.B. hp-elitedesk.tail[xxx].ts.net
-```
-
-**JARVIS Code-Änderung (klein):**
-- `JARVIS_SERVER` env-Variable in `.env` auf Tailscale-Hostname setzen
-- Dashboard + Web App nutzen diese Variable statt hardcoded IP
-- Ziel: `ws://hp-elitedesk.tail[xxx].ts.net:8765` von überall
-
-**Hinweis Arbeit:** Arbeits-Laptop muss im Tailnet sein damit MCP von Digital35 funktioniert.
-IT-Policy von Digital35 prüfen ob eigene Tailscale-Installation erlaubt ist.
+**Noch offen:**
+- iPhone/iPad ins Tailnet einladen (bisher nur Server + Mac)
+- `jarvis-dashboard` (altes iPad-Tool) hat vermutlich eine eigene `.env` — noch nicht umgestellt
+- `jarvis-satellite` (separates Audio-Client-Gerät, eigenes Repo) — Config nicht in diesem
+  Repo, noch nicht angefasst
+- Arbeits-Laptop ins Tailnet, damit MCP von Digital35 funktioniert — IT-Policy von
+  Digital35 vorher prüfen ob eigene Tailscale-Installation erlaubt ist
 
 ---
 

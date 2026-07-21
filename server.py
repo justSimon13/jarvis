@@ -105,6 +105,24 @@ def _reset_session_clients(category: str, tab_id: str) -> None:
         _session_clients["web"][tab_id] = set()
 
 
+# Welche sessions.db-Zeile gerade zu einem Web-Tab gehört — wird bei jeder
+# Nachricht per session_memory.upsert() aktualisiert (nicht erst beim Trennen),
+# damit ein einfach geschlossener Tab keine Konversation mehr verschluckt.
+# None = noch keine Zeile angelegt (erste Nachricht dieser Session steht noch aus).
+_active_session_ids: dict[str, int | None] = {}
+
+
+def _get_active_session_id(tab_id: str) -> int | None:
+    return _active_session_ids.get(tab_id)
+
+
+def _set_active_session_id(tab_id: str, session_id: int | None) -> None:
+    if session_id is None:
+        _active_session_ids.pop(tab_id, None)
+    else:
+        _active_session_ids[tab_id] = session_id
+
+
 SATELLITE_TIMEOUT = 28800  # 8h Inaktivität → neue Session (nur Voice-Clients)
 _last_activity_ts: float = 0.0
 _ROLLING_WINDOW = 60       # Max. Nachrichten in api_history
@@ -189,6 +207,27 @@ def _trim_api_history(category: str, tab_id: str):
         hist = _get_api_history(category, tab_id)
         if len(hist) > _ROLLING_WINDOW:
             del hist[:len(hist) - _ROLLING_WINDOW]
+
+
+def _persist_web_turn(loop, tab_id: str):
+    """Schreibt die aktuelle Web-Tab-Session nach jeder Nachricht in sessions.db durch
+    (UPDATE der bestehenden Zeile, kein neuer Eintrag) — läuft im Executor, damit der
+    SQLite-Write den Event-Loop nicht blockiert. finalize=False: keine Lernextraktion,
+    die läuft nur bei echtem Abschluss (Reset/Wechsel/Shutdown)."""
+    with history_lock:
+        hist_snapshot = list(_get_api_history("web", tab_id))
+        clients_snapshot = sorted(_get_session_clients("web", tab_id))
+    sid = _get_active_session_id(tab_id)
+
+    def _do():
+        return session_memory.upsert(sid, hist_snapshot, clients=clients_snapshot, category="web", finalize=False)
+
+    async def _run():
+        new_sid = await loop.run_in_executor(None, _do)
+        if new_sid is not None:
+            _set_active_session_id(tab_id, new_sid)
+
+    asyncio.create_task(_run())
 
 
 _QA_REGISTRY = {
@@ -725,6 +764,8 @@ async def handle_connection(websocket):
                     _last_activity_ts = time.time()
                     _trim_api_history(category, tab_id)
                     _save_history()
+                    if category == "web":
+                        _persist_web_turn(loop, tab_id)
                     asyncio.create_task(_push_dashboard_update())
                 elif data.get("type") == P.CLIENT_HELLO:
                     name = data.get("name", "")
@@ -816,9 +857,18 @@ async def handle_connection(websocket):
                     send_json({"type": P.SESSION_BREAK})
                     if old_history:
                         clients_snapshot = sorted(_get_session_clients(category, tab_id))
-                        await loop.run_in_executor(
-                            None, lambda: session_memory.save(old_history, clients=clients_snapshot, category=category)
-                        )
+                        if category == "web":
+                            # Zeile ist durch die laufenden Upserts schon aktuell — hier nur
+                            # noch finalisieren (Lernextraktion) statt blind neu einzufügen.
+                            await loop.run_in_executor(
+                                None, session_memory.upsert, _get_active_session_id(tab_id),
+                                old_history, clients_snapshot, category, True,
+                            )
+                            _set_active_session_id(tab_id, None)
+                        else:
+                            await loop.run_in_executor(
+                                None, lambda: session_memory.save(old_history, clients=clients_snapshot, category=category)
+                            )
                     _reset_session_clients(category, tab_id)
                     print(f"[server] Session ({category}) manuell zurückgesetzt.", flush=True)
                 elif data.get("type") == P.SESSION_LIST_REQUEST:
@@ -830,15 +880,24 @@ async def handle_connection(websocket):
                     send_json({"type": P.SESSION_DELETE_ACK, "session_id": sid, "ok": ok})
                 elif data.get("type") == P.SESSION_LOAD:
                     sid = data.get("session_id")
-                    # Aktuelle Session (eigener Tab/Raum) speichern falls nicht leer
+                    # Aktuelle Session (eigener Tab/Raum) abschließen falls nicht leer
                     with history_lock:
                         old = list(_get_api_history(category, tab_id))
                     if old:
-                        await loop.run_in_executor(
-                            None, lambda: session_memory.save(old, clients=sorted(_get_session_clients(category, tab_id)), category=category)
-                        )
+                        clients_snapshot = sorted(_get_session_clients(category, tab_id))
+                        if category == "web":
+                            await loop.run_in_executor(
+                                None, session_memory.upsert, _get_active_session_id(tab_id),
+                                old, clients_snapshot, category, True,
+                            )
+                        else:
+                            await loop.run_in_executor(
+                                None, lambda: session_memory.save(old, clients=clients_snapshot, category=category)
+                            )
                     _reset_session_clients(category, tab_id)
-                    # Transcript laden und als neue api_history (eigener Tab/Raum) setzen
+                    # Transcript laden und als neue api_history (eigener Tab/Raum) setzen —
+                    # weitere Nachrichten in diesem Tab schreiben ab jetzt die GELADENE
+                    # Zeile fort (statt eine neue anzulegen), das ist ja "fortsetzen".
                     transcript = await loop.run_in_executor(None, session_memory.get_transcript, sid)
                     with history_lock:
                         hist = _get_api_history(category, tab_id)
@@ -848,6 +907,8 @@ async def handle_connection(websocket):
                         # Rolling Window anwenden
                         if len(hist) > _ROLLING_WINDOW:
                             del hist[:len(hist) - _ROLLING_WINDOW]
+                    if category == "web":
+                        _set_active_session_id(tab_id, sid)
                     send_json({"type": P.SESSION_LOAD_ACK, "messages": transcript})
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
@@ -868,7 +929,11 @@ def _save_all_sessions_on_shutdown():
     spurlos: _load_history() lädt nur "voice" zurück, und der Disconnect-Handler
     pro Verbindung speichert für Web-/Dashboard-Clients bewusst nicht (sonst gäbe
     es bei jedem Tab-Wechsel eine neue Session) — ein Server-weiter Shutdown ist
-    aber kein trivialer Disconnect, das verdient eine echte Archivierung."""
+    aber kein trivialer Disconnect, das verdient eine echte Archivierung. Web-Tabs
+    laufen inzwischen ohnehin schon laufend über session_memory.upsert() mit — hier
+    nur noch ein finaler Upsert (finalize=True, Lernextraktion) auf die schon
+    bekannte Zeile, kein blinder Neu-Insert (sonst Duplikat der schon gespeicherten
+    Zeile)."""
     with history_lock:
         voice_hist = list(api_histories["voice"])
         voice_clients = sorted(_session_clients["voice"])
@@ -882,9 +947,10 @@ def _save_all_sessions_on_shutdown():
     for tab_id, hist in web_tabs.items():
         if not hist:
             continue
-        t = session_memory.save(hist, clients=web_clients[tab_id], category="web")
-        if t:
-            t.join(timeout=10)
+        session_memory.upsert(
+            _get_active_session_id(tab_id), hist, clients=web_clients[tab_id],
+            category="web", finalize=True,
+        )
     print("[server] Laufende Sessions vor Shutdown gesichert.", flush=True)
 
 

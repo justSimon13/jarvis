@@ -47,7 +47,7 @@ Kein Chatbot. Ein **persönliches Betriebssystem** für Simons Alltag — lokal 
 ## System-Topologie
 
 ```
-JARVIS Server (server.py) — HP EliteDesk, ws://192.168.0.155:8765
+JARVIS Server (server.py) — HP EliteDesk, ws://jarvisserver.tail47e1d9.ts.net:8765 (Tailscale; LAN-IP ws://192.168.0.155:8765 weiterhin nutzbar)
   ├─ Brain (SQLite ~/.jarvis/brain.db) — 7 Sections
   ├─ Shared History (api_history + display_history)
   ├─ LLM Pipeline (Claude Sonnet 4.6 + Prompt-Caching)
@@ -162,10 +162,11 @@ Cards und Quick-Actions können per `brain.modules.modes.<modus>` überschrieben
 
 ## Deployment
 
-- **Server:** `python3 server.py` als systemd system service auf HP EliteDesk
-- **Dashboard:** `npm run dev` als systemd user service, `:5173`
+- **Server:** `python3 server.py` als systemd system service (`jarvis.service`) auf HP EliteDesk
+- **Dashboard (altes iPad-Tool):** `npm run dev` als systemd service (`jarvis-dashboard.service`), `:5173`
+- **jarvis-web:** eigenes Repo (`justSimon13/jarvis-web`, privat), `~/apps/jarvis-web`, systemd service (`jarvis-web.service`), `:5174`, `.env` mit `VITE_JARVIS_WS_URL`
 - **Satellite:** `python3 client.py` als systemd system service, `Group=audio`
-- **Verbindung:** `ws://192.168.0.155:8765` intern, Tailscale für Remote
+- **Verbindung:** `ws://jarvisserver.tail47e1d9.ts.net:8765` (Tailscale, seit 2026-07-20 — funktioniert auch von unterwegs) oder weiterhin `ws://192.168.0.155:8765` im LAN
 
 ---
 

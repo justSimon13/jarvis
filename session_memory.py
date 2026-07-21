@@ -116,6 +116,69 @@ def save(history: list[dict], clients: list[str] | None = None, category: str | 
     return t
 
 
+def upsert(session_id: int | None, history: list[dict], clients: list[str] | None = None,
+           category: str | None = None, finalize: bool = False) -> int | None:
+    """Wie save(), aber schreibt bei jeder Nachricht durch statt erst beim Verbindungsende
+    — sonst geht eine Konversation komplett verloren, wenn z.B. ein Browser-Tab einfach
+    geschlossen wird, ohne dass ein Neustart oder "+ Neuer Chat" je einen Save auslöst
+    (2026-07-20 entdeckt: Tab zu, Inhalt war für immer weg, weder im Verlauf noch sonstwo).
+
+    session_id=None → legt eine neue Zeile an (Titel = erste User-Nachricht), sonst wird
+    die bestehende Zeile aktualisiert (Titel bleibt). Gibt die (neue oder bestehende)
+    session_id zurück — vom Aufrufer zu merken und beim nächsten Aufruf wieder mitzugeben.
+
+    finalize=True stößt zusätzlich die Lernextraktion an — NUR bei echtem Abschluss
+    (Session-Reset, Session-Wechsel, Shutdown), nicht bei jedem Zwischen-Save, sonst
+    würde jede einzelne Nachricht einen zusätzlichen LLM-Call kosten."""
+    if not history:
+        return session_id
+
+    now = datetime.now()
+    transcript_msgs = []
+    for msg in history:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role not in ("user", "assistant"):
+            continue
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if content:
+            transcript_msgs.append({"role": role, "text": str(content)})
+
+    if not transcript_msgs:
+        return session_id
+
+    transcript_json = json.dumps(transcript_msgs, ensure_ascii=False)
+    clients_json = json.dumps(sorted(set(clients or [])), ensure_ascii=False)
+
+    with _get_db() as conn:
+        if session_id is None:
+            title = _first_user_message(history)
+            cur = conn.execute(
+                "INSERT INTO sessions (date, time, title, transcript, clients, category) VALUES (?, ?, ?, ?, ?, ?)",
+                (now.date().isoformat(), now.strftime("%H:%M"), title, transcript_json, clients_json, category)
+            )
+            session_id = cur.lastrowid
+        else:
+            conn.execute(
+                "UPDATE sessions SET time = ?, transcript = ?, clients = ? WHERE id = ?",
+                (now.strftime("%H:%M"), transcript_json, clients_json, session_id)
+            )
+
+    if finalize:
+        print(f"[session] Abgeschlossen (id={session_id}): {len(transcript_msgs)} Nachrichten", flush=True)
+        try:
+            import learning
+            learning.process_session(history)
+        except Exception as e:
+            print(f"[session] Learning-Start Fehler: {e}", flush=True)
+
+    return session_id
+
+
 def list_sessions(limit: int = 30) -> list[dict]:
     """Gibt eine Liste vergangener Sessions für die UI zurück."""
     try:
