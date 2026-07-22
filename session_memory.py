@@ -54,6 +54,24 @@ def _get_db() -> sqlite3.Connection:
     return conn
 
 
+def _extract_text(content) -> str:
+    """Extrahiert den Text-Anteil einer Message für den persistierten Transcript.
+    Reine Tool-Nachrichten (nur tool_use/tool_result-Blöcke, kein Text-Block) wurden
+    bisher stillschweigend zu einem leeren String — das hat sie beim Aufbau von
+    transcript_msgs komplett verschluckt und unsichtbare Lücken in den persistierten
+    Verlauf gerissen (2026-07-22: Restore nach einem Neustart zeigte plötzlich große
+    Teile eines tool-lastigen Gesprächs nicht mehr — die Turns dazwischen waren genau
+    so verschwunden). Jetzt bleibt wenigstens ein kurzer Platzhalter übrig."""
+    if not isinstance(content, list):
+        return str(content) if content else ""
+    text_parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    text = " ".join(t for t in text_parts if t)
+    if text:
+        return text
+    kinds = sorted({b.get("type") for b in content if isinstance(b, dict) and b.get("type")})
+    return f"[{', '.join(kinds)}]" if kinds else ""
+
+
 def _first_user_message(history: list[dict]) -> str:
     for msg in history:
         if msg.get("role") == "user":
@@ -85,16 +103,11 @@ def save(history: list[dict], clients: list[str] | None = None, category: str | 
         transcript_msgs = []
         for msg in history:
             role = msg.get("role")
-            content = msg.get("content", "")
             if role not in ("user", "assistant"):
                 continue
-            if isinstance(content, list):
-                content = " ".join(
-                    b.get("text", "") for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-            if content:
-                transcript_msgs.append({"role": role, "text": str(content)})
+            text = _extract_text(msg.get("content", ""))
+            if text:
+                transcript_msgs.append({"role": role, "text": text})
 
         if not transcript_msgs:
             return
@@ -150,16 +163,11 @@ def upsert(session_id: int | None, history: list[dict], clients: list[str] | Non
     transcript_msgs = []
     for msg in history:
         role = msg.get("role")
-        content = msg.get("content", "")
         if role not in ("user", "assistant"):
             continue
-        if isinstance(content, list):
-            content = " ".join(
-                b.get("text", "") for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            )
-        if content:
-            transcript_msgs.append({"role": role, "text": str(content)})
+        text = _extract_text(msg.get("content", ""))
+        if text:
+            transcript_msgs.append({"role": role, "text": text})
 
     if not transcript_msgs:
         return session_id

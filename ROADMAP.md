@@ -406,7 +406,26 @@ Fix: `_is_safe_readonly_command()` — eine enge, bewusst konservative Whitelist
 
 Lokal mit vier Szenarien verifiziert (eigene `JarvisPipeline`-Instanz, `_run_llm` gemockt): reiner Fehlschlag → History bleibt leer (kein Orphan); normaler Erfolg → sauberes User/Assistant-Paar; Fehlschlag NACH bestehender guter History → nur die neue Nachricht wird zurückgerollt, der Rest bleibt erhalten; Erfolg direkt nach einem Rollback → volle Alternation über den ganzen Verlauf hinweg wiederhergestellt.
 
-**Zur "Session teilt sich"-Beobachtung:** Vermutlich Simons eigener Workaround (manuell "+ Neuer Chat" nach dem Eindruck JARVIS hänge fest) statt eines automatischen Effekts — mit obigem Fix sollte die Ursache dafür aber ohnehin entfallen, ein einzelner Fehlschlag zieht keine Kaskade mehr nach sich.
+**Zur "Session teilt sich"-Beobachtung:** meine erste Vermutung (Simons eigener "+ Neuer Chat"-Klick) war falsch — Simon hat das explizit verneint, hat keinen neuen Chat erstellt. Die tatsächliche Ursache: siehe nächster Abschnitt.
+
+---
+
+## 🔴 Vorfall: Historie riss nach Neustart große Lücken (Tool-lastige Gespräche) ✅ behoben
+
+**Symptom:** Simon verglich zwei Screenshots (vor/nach einem Neustart) — nach dem Neustart fehlte ein großer Mittelteil eines Tauri/WebSocket-Debugging-Gesprächs komplett, obwohl es sich laut Sidebar (gleicher Titel, nur aktualisierter Zeitstempel) um dieselbe Session handelte, kein neuer Eintrag. *"Fällt dir was auf?"*
+
+**Root Cause, zwei Teile die zusammenwirken:**
+1. `pipeline.py`s `self.history` wurde nach jedem Tool-Turn hart auf 40 Einträge gekappt (`del self.history[:-40]`). Ein einzelner Tool-Aufruf kostet dabei bereits 2 Einträge (Assistant-Tool-Use + User-Tool-Result) — ein Gespräch mit mehreren Recherche-/Editier-Schritten (wie die Tauri-WebSocket-Debugging-Session) sprengt das sehr schnell, die ältere Hälfte fiel dabei einfach raus. Das war **kein neuer Bug**, sondern hat schon vorher bestanden — nur unsichtbar, weil der Browser-Tab bis dahin seine eigene, lokale Kopie des kompletten Verlaufs behielt und nie mit dem tatsächlich persistierten (bereits gekappten) Stand abgeglichen wurde.
+2. `session_memory.py`s Transcript-Aufbau (für `sessions.db`) extrahierte nur `type: "text"`-Blöcke aus jeder Message — eine Message die AUSSCHLIESSLICH aus `tool_use`/`tool_result`-Blöcken bestand (kein Text) ergab einen leeren String und wurde komplett verschluckt, nicht nur gekürzt.
+
+Der Web-Tab-Verlauf-Fix von vorhin (Restore nach Neustart über `find_active_session()`) hat diese beiden vorbestehenden, stillen Lücken zum ersten Mal sichtbar gemacht — vorher hat die lokale Browser-Kopie das kaschiert, bis zu einem echten Neustart/Reload war der Unterschied nie direkt zu sehen.
+
+**Fix (Simon: "smarter trimmen statt hart abschneiden"):**
+- `pipeline.py`: `final_messages` wird vor dem Abspeichern in `self.history` zusätzlich durch `llm.compress_tool_history()` geschickt (bisher lief das nur PRO Live-API-Call innerhalb eines Turns, nie dauerhaft vor dem Speichern) — ältere Tool-Results schrumpfen dauerhaft auf kurze Platzhalter statt für immer in voller Länge liegen zu bleiben. Der jeweils NEUESTE Tool-Result eines Turns bleibt bewusst unkomprimiert (volle Details fürs unmittelbare Modell-Kontext), wird erst beim nächsten Tool-Turn komprimiert — 1-Turn-Verzögerung ist gewolltes Verhalten der bestehenden Funktion.
+- Cap dadurch angehoben: 40 → 150 Einträge im Tool-Zweig, 20 → 40 im reinen Text-Zweig — dank der Kompression kostet ein Eintrag jetzt deutlich weniger, es passen spürbar mehr echte Gesprächs-Turns rein bevor überhaupt getrimmt wird.
+- `session_memory.py`: neue `_extract_text()`-Hilfsfunktion (ersetzt die inline-duplizierte Logik in `save()` und `upsert()`) — reine Tool-Nachrichten ergeben jetzt einen lesbaren Platzhalter wie `[tool_result]` oder `[tool_use, tool_result]` statt komplett zu verschwinden.
+
+Lokal verifiziert: `_extract_text()` gegen 10 Fälle (Text, gemischt, reine Tool-Blöcke, leer); `upsert()` mit einem 8-Turn-Testgespräch (inkl. zwei reinen Tool-Turns) — alle 8 Einträge bleiben erhalten statt auf 6 zu schrumpfen; `pipeline.py`-Kompression über zwei aufeinanderfolgende Tool-Turns (bestätigt: älterer Tool-Result schrumpft von 1000 auf 311 Zeichen, neuester bleibt bei 1000 — genau das erwartete 1-Turn-Verzögerungsverhalten); neuer Cap mit 60 simulierten Turns (120 Einträge) — bleibt komplett erhalten, wäre vorher bei 40 hart gekappt worden.
 
 ---
 

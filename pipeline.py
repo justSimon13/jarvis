@@ -179,14 +179,26 @@ class JarvisPipeline:
                     # Alte Anhänge (Bilder/PDFs) komprimieren — sonst wird bei jedem
                     # weiteren Turn wieder das komplette Base64 mitgeschickt.
                     final_messages = llm.compress_attachment_history(final_messages)
+                    # Der jeweils LETZTE Tool-Result eines Turns bleibt in _run_llm()s
+                    # eigenem compress_tool_history()-Aufruf bewusst unkomprimiert (der
+                    # kommt erst beim NÄCHSTEN Tool-Aufruf dran) — ohne diesen zusätzlichen
+                    # Aufruf hier würde er dauerhaft unkomprimiert in self.history hängen
+                    # bleiben, bei tool-lastigen Gesprächen zieht das den Cap (unten)
+                    # deutlich früher als nötig (2026-07-22: nach einem Neustart fehlte ein
+                    # großer Mittelteil eines Tauri-Debugging-Gesprächs — Ursache war genau
+                    # diese Kombination aus hartem Entry-Cap + unkomprimierten Tool-Results).
+                    final_messages = llm.compress_tool_history(final_messages)
                     del self.history[:]
                     self.history.extend(final_messages)
-                    if len(self.history) > 40:
-                        del self.history[:-40]
+                    # Cap deutlich höher als die alten 40 — dank der Kompression oben kostet
+                    # ein einzelner Eintrag jetzt viel weniger, es passen also spürbar mehr
+                    # echte Gesprächs-Turns rein bevor überhaupt getrimmt werden muss.
+                    if len(self.history) > 150:
+                        del self.history[:-150]
                 elif response:
                     self.history.append({"role": "assistant", "content": response})
-                    if len(self.history) > 20:
-                        del self.history[:-20]
+                    if len(self.history) > 40:
+                        del self.history[:-40]
                 else:
                     # _run_llm ist komplett gescheitert (Timeout/API-Fehler/Exception,
                     # kein Response-Text) — die oben angehängte User-Nachricht muss
