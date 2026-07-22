@@ -654,6 +654,7 @@ async def handle_connection(websocket):
 
     manager.register(client_id, send_audio)
     manager.register_event(client_id, send_json)
+    coding_engine.refresh_idle_status()
     send_json({"type": P.STATE, "state": "idle"})
 
     # Warte kurz auf CLIENT_HELLO um Role und Raumname zu erkennen
@@ -922,6 +923,7 @@ async def handle_connection(websocket):
         pass
     finally:
         manager.unregister(client_id)
+        coding_engine.refresh_idle_status()
         if role != "dashboard":
             pipeline.save_session()
         print(f"[server] Client getrennt: {addr}")

@@ -101,6 +101,10 @@ def init(client_manager, dispatcher) -> None:
                            unit="usd", label="Task-Limit Coding-Engine")
     except Exception as e:
         print(f"[coding_engine] Goal-Sync Fehler: {e}", flush=True)
+    # Frisch schreiben statt einer eventuell veralteten Datei von vor dem letzten
+    # Neustart vertrauen — direkt nach dem Start sind garantiert 0 Clients
+    # verbunden und kein Coding-Task aktiv.
+    refresh_idle_status()
 
 
 # ── Öffentliche API ──────────────────────────────────────────────────────────
@@ -319,10 +323,57 @@ def _repo_slug_for(project_root: Path) -> str:
 
 # ── Git (immer über einen isolierten Worktree, nie im Haupt-Checkout) ─────────
 
+def _sync_main_before_task(project_root: Path) -> None:
+    """Holt vor einem neuen Task den aktuellen main-Stand von origin, damit ein
+    frisch gemergter PR (egal ob von Simon selbst oder aus einem vorherigen
+    JARVIS-Task) nicht verpasst wird — sonst würde der neue Task-Worktree vom
+    alten main abzweigen und Simons gerade gemergte Änderung ignorieren
+    (2026-07-22: 'jarvis coded, ich merge PR, danach soll er mit aktuellem
+    main weiter coden können'). Rein informativ/best-effort: rührt project_root
+    NIE an wenn es gerade nicht sauber oder nicht auf main ist (z.B. weil Simon
+    oder Claude Code über den SMB-Mount mittendrin sind) — dann läuft der Task
+    einfach mit dem Stand weiter, der schon da ist, statt irgendwas zu riskieren.
+    Gleiche Grundidee wie scripts/auto_update.sh, hier nur synchron vor dem
+    Task statt per Timer alle 5 Minuten."""
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(project_root), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if branch != "main":
+            print(f"[coding_engine] {project_root.name}: Checkout nicht auf main (sondern {branch}) — überspringe Pre-Task-Pull.", flush=True)
+            return
+
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(project_root), capture_output=True, text=True, check=True,
+        )
+        if status.stdout.strip():
+            print(f"[coding_engine] {project_root.name}: Checkout nicht sauber — überspringe Pre-Task-Pull.", flush=True)
+            return
+
+        subprocess.run(["git", "fetch", "origin", "main", "--quiet"], cwd=str(project_root), check=True, capture_output=True, text=True)
+        local_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(project_root), capture_output=True, text=True, check=True).stdout.strip()
+        remote_rev = subprocess.run(["git", "rev-parse", "origin/main"], cwd=str(project_root), capture_output=True, text=True, check=True).stdout.strip()
+        if local_rev == remote_rev:
+            return
+
+        subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
+            cwd=str(project_root), check=True, capture_output=True, text=True,
+        )
+        print(f"[coding_engine] {project_root.name}: vor Task-Start auf aktuellen main gepullt ({local_rev[:7]} -> {remote_rev[:7]}).", flush=True)
+    except subprocess.CalledProcessError as e:
+        # Best-effort — z.B. kein Fast-Forward möglich (lokale Historie ist
+        # divergiert). Task läuft trotzdem weiter, nur eben ohne den Pull.
+        print(f"[coding_engine] {project_root.name}: Pre-Task-Pull fehlgeschlagen ({e.stderr.strip() if e.stderr else e}), fahre mit vorhandenem Stand fort.", flush=True)
+
+
 def _create_worktree(project_root: Path, branch: str) -> Path | None:
     """Legt einen neuen git-worktree an, ausgehend vom letzten Commit auf main —
     unabhängig davon, was gerade uncommittet im Haupt-Checkout (project_root)
     liegt. Wechselt NICHT den Branch von project_root selbst."""
+    _sync_main_before_task(project_root)
     worktree_path = _WORKTREE_BASE / branch
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
@@ -692,12 +743,40 @@ def _set_status(**fields) -> None:
         _current_status.update(fields)
         snapshot = dict(_current_status)
     _push_task_status(snapshot)
+    refresh_idle_status()
 
 
 def get_task_status() -> dict:
     """Für data_request 'coding_task_status' — initialer Stand beim Seitenaufruf."""
     with _status_lock:
         return dict(_current_status)
+
+
+_IDLE_STATUS_PATH = Path.home() / ".jarvis" / "idle_status.json"
+
+
+def refresh_idle_status() -> None:
+    """Schreibt eine kleine Status-Datei für scripts/auto_update.sh — der Timer
+    läuft als eigener Bash-Prozess außerhalb von JARVIS und kann sonst nicht
+    wissen, ob gerade jemand verbunden ist oder ein Coding-Task läuft. Ohne das
+    würde der Auto-Update-Timer JARVIS auch mitten in einem laufenden Gespräch
+    neu starten (2026-07-22: 'dann soll er halt restarten wenn alle Prozesse
+    abgeschlossen sind und er für seinen Teil fertig ist'). Von server.py bei
+    jedem Client-Connect/-Disconnect aufgerufen, und hier bei jeder
+    Coding-Task-Statusänderung."""
+    try:
+        with _status_lock:
+            coding_active = bool(_current_status.get("active"))
+        connected = len(_manager.connected) if _manager else 0
+        status = {
+            "connected_clients": connected,
+            "coding_task_active": coding_active,
+            "updated_at": datetime.now().isoformat(),
+        }
+        _IDLE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _IDLE_STATUS_PATH.write_text(json.dumps(status), encoding="utf-8")
+    except Exception as e:
+        print(f"[coding_engine] Idle-Status-Schreibfehler: {e}", flush=True)
 
 
 def _push_task_status(status: dict) -> None:
