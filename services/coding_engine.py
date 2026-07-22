@@ -559,23 +559,92 @@ def _commit_and_push_thread(project_root: Path, label: str, message: str | None)
 _RUN_COMMAND_TIMEOUT_SEC = 120
 _RUN_COMMAND_OUTPUT_MAX_CHARS = 800
 
+# Enge, bewusst konservative Whitelist: nur Binaries, die MIT JEDEM Argument
+# read-only sind (kein "find" — hat -delete/-exec; kein "curl"/"wget" — schon
+# in _DESTRUCTIVE_PATTERNS aus anderem Grund geflaggt). systemctl/journalctl/git
+# brauchen eine Sub-Kommando-Prüfung, da nicht jedes Sub-Kommando sicher ist.
+_SAFE_READONLY_BINARIES = {
+    "ls", "cat", "pwd", "head", "tail", "wc", "stat", "file", "which",
+    "df", "du", "ps", "whoami", "uname", "date", "uptime", "free", "hostname",
+}
+_SAFE_SYSTEMCTL_SUBCOMMANDS = {
+    "status", "is-active", "is-enabled", "is-failed",
+    "list-units", "list-timers", "list-unit-files", "show",
+}
+_SAFE_GIT_SUBCOMMANDS = {"status", "log", "diff", "show", "branch", "remote"}
+_UNSAFE_JOURNALCTL_FLAGS = ("--vacuum-", "--rotate", "--flush")
+
+
+def _is_safe_readonly_command(command: str) -> bool:
+    """Einzelner Befehl (kein &&/;/|/Umleitung/Sub-Shell) mit einer Binary aus
+    einer engen Read-Only-Whitelist — läuft synchron OHNE Freigabe, das
+    Ergebnis kommt direkt als Tool-Antwort zurück statt nur per Notification.
+    Grund: sonst sieht JARVIS selbst nie ob ein Befehl fehlgeschlagen ist und
+    kann nicht reagieren/woanders weitersuchen (2026-07-22: 'Er schmiert
+    einfach ab ohne irgendwas? Der soll das checken und woanders suchen' —
+    z.B. 'ls ~/projekte/' schlägt fehl, JARVIS bekommt das mangels sofortigem
+    Ergebnis gar nicht mit und kann nicht selbst 'ls ~/' zur Korrektur
+    nachschieben). Alles andere (Schreiben, sudo, unbekannte Binaries,
+    verkettete Befehle) läuft weiterhin über die Freigabe."""
+    stripped = command.strip()
+    if any(op in stripped for op in ("&&", "||", ";", "|", ">", "<", "`", "$(")):
+        return False
+    parts = stripped.split()
+    if not parts:
+        return False
+    binary = parts[0]
+    if binary in _SAFE_READONLY_BINARIES:
+        return True
+    if binary == "systemctl":
+        return len(parts) > 1 and parts[1] in _SAFE_SYSTEMCTL_SUBCOMMANDS
+    if binary == "git":
+        return len(parts) > 1 and parts[1] in _SAFE_GIT_SUBCOMMANDS
+    if binary == "journalctl":
+        return not any(flag in stripped for flag in _UNSAFE_JOURNALCTL_FLAGS)
+    return False
+
 
 def run_command(command: str, cwd: str | None = None) -> str:
-    """Von tools.execute() aufgerufen ('run_command'). Führt einen beliebigen
-    Shell-Befehl auf dem Server aus — IMMER erst nach Freigabe (voller Befehl im
-    Dialog), da sich hier keine sinnvolle Grenze wie bei create_project/
-    commit_and_push ziehen lässt (ein Befehl kann buchstäblich alles sein).
-    Braucht der Befehl sudo und greift keine NOPASSWD-Regel, fragt ein zweites
-    Popup interaktiv nach dem Passwort (siehe _execute_with_sudo_support) —
-    2026-07-22: 'Mach doch bei sudo ein Pop-up'.
+    """Von tools.execute() aufgerufen ('run_command'). Read-only Befehle aus
+    einer engen Whitelist (_is_safe_readonly_command) laufen SOFORT synchron
+    und geben ihr Ergebnis direkt als Tool-Antwort zurück — JARVIS sieht Erfolg/
+    Fehler damit noch in derselben Antwort und kann reagieren (z.B. bei einem
+    falschen Pfad selbst nachschauen was es stattdessen gibt), statt blind auf
+    eine Notification zu warten, die es selbst nie sieht.
 
-    Kehrt SOFORT zurück, Freigabe + Ausführung laufen im Hintergrund-Thread
-    (gleicher Deadlock-Grund wie create_project: tools.execute() läuft
-    synchron auf der Verbindung, über die später die Freigabe-Antwort
-    reinkäme). Anlass (2026-07-22): 'Es nervt mich gerade immer für jarvis
-    etwas auf dem HP Server auszuführen. Das soll JARVIS selbst können.'"""
+    Alles andere läuft IMMER erst nach Freigabe (voller Befehl im Dialog), da
+    sich hier keine sinnvolle Grenze wie bei create_project/commit_and_push
+    ziehen lässt (ein Befehl kann buchstäblich alles sein). Braucht der Befehl
+    sudo und greift keine NOPASSWD-Regel, fragt ein zweites Popup interaktiv
+    nach dem Passwort (siehe _execute_with_sudo_support) — 2026-07-22: 'Mach
+    doch bei sudo ein Pop-up'. Kehrt dafür SOFORT zurück, Freigabe + Ausführung
+    laufen im Hintergrund-Thread (gleicher Deadlock-Grund wie create_project:
+    tools.execute() läuft synchron auf der Verbindung, über die später die
+    Freigabe-Antwort reinkäme). Anlass (2026-07-22): 'Es nervt mich gerade
+    immer für jarvis etwas auf dem HP Server auszuführen. Das soll JARVIS
+    selbst können.'"""
     if not command or not command.strip():
         return "Kein Befehl angegeben."
+
+    workdir = cwd or str(WORKSPACE_ROOT)
+
+    if _is_safe_readonly_command(command):
+        try:
+            result = subprocess.run(
+                command, shell=True, cwd=workdir, capture_output=True, text=True,
+                timeout=_RUN_COMMAND_TIMEOUT_SEC,
+            )
+            output = ((result.stdout or "") + (result.stderr or "")).strip()
+            if len(output) > _RUN_COMMAND_OUTPUT_MAX_CHARS:
+                output = output[:_RUN_COMMAND_OUTPUT_MAX_CHARS] + f"\n… [gekürzt, {len(output)} Zeichen insgesamt]"
+            output = output or "(keine Ausgabe)"
+            status = "Erfolg" if result.returncode == 0 else f"Exit-Code {result.returncode}"
+            return f"{status}: {output}"
+        except subprocess.TimeoutExpired:
+            return f"Timeout nach {_RUN_COMMAND_TIMEOUT_SEC}s."
+        except Exception as e:
+            return f"Fehler: {e}"
+
     threading.Thread(target=_run_command_thread, args=(command, cwd), daemon=True).start()
     return "Ich frage kurz im Dashboard nach Freigabe für diesen Befehl — Ergebnis kommt per Notification."
 
