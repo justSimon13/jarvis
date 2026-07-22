@@ -863,6 +863,8 @@ async def handle_connection(websocket):
                     dispatcher.mark_delivered(data["id"])
                 elif data.get("type") == P.CODING_APPROVAL_RESPONSE:
                     coding_engine.resolve_approval(data["id"], bool(data.get("approved")))
+                elif data.get("type") == P.CODING_SUDO_PASSWORD_RESPONSE:
+                    coding_engine.resolve_sudo_password(data["id"], data.get("password", ""))
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])

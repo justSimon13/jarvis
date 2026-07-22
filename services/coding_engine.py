@@ -190,6 +190,61 @@ def resolve_approval(approval_id: str, approved: bool) -> None:
         print(f"[coding_engine] Freigabe-Antwort ohne passenden Task: {approval_id}", flush=True)
 
 
+# Separater Mechanismus von _pending_events/_pending_decisions oben — hier wird
+# ein String (das Passwort) statt eines bool erwartet. Gleicher _approval_lock
+# reicht, schützt schon mehrere verwandte Dicts.
+_pending_password_events: dict[str, threading.Event] = {}
+_pending_passwords: dict[str, str] = {}
+
+
+def resolve_sudo_password(request_id: str, password: str) -> None:
+    """Von server.py bei CODING_SUDO_PASSWORD_RESPONSE aufgerufen. Das Passwort
+    selbst wird hier NIE geloggt oder sonst irgendwo abgelegt — nur kurz im
+    Dict zwischengehalten, bis der wartende Thread es abholt und sofort danach
+    wieder entfernt (siehe _request_sudo_password_sync)."""
+    with _approval_lock:
+        _pending_passwords[request_id] = password
+        event = _pending_password_events.get(request_id)
+    if event:
+        event.set()
+    else:
+        print(f"[coding_engine] Sudo-Passwort-Antwort ohne passende Anfrage: {request_id}", flush=True)
+
+
+def _request_sudo_password_sync(command_hint: str, timeout: float = _APPROVAL_TIMEOUT_SEC) -> str | None:
+    """Blockiert den aufrufenden Thread bis Simon per CODING_SUDO_PASSWORD_RESPONSE
+    antwortet (oder Timeout) — läuft wie _request_approval_sync in einem eigenen
+    Hintergrund-Thread, nie auf dem Haupt-Event-Loop."""
+    request_id = str(uuid.uuid4())
+    event = threading.Event()
+    with _approval_lock:
+        _pending_password_events[request_id] = event
+
+    _push_sudo_password_request(request_id, command_hint)
+    got_response = event.wait(timeout)
+
+    with _approval_lock:
+        password = _pending_passwords.pop(request_id, None)
+        _pending_password_events.pop(request_id, None)
+
+    return password if got_response else None
+
+
+def _push_sudo_password_request(request_id: str, command_hint: str) -> None:
+    if not _manager:
+        return
+    payload = {
+        "type": P.CODING_SUDO_PASSWORD_REQUEST,
+        "id": request_id,
+        "text": f"sudo-Passwort benötigt für: {command_hint}",
+    }
+    for cb, _mode in _manager.get_dashboard_event_callbacks():
+        try:
+            cb(payload)
+        except Exception as e:
+            print(f"[coding_engine] Sudo-Passwort-Push-Fehler: {e}", flush=True)
+
+
 # ── Task-Ausführung ───────────────────────────────────────────────────────────
 
 def _run_task_thread(instruction: str, high_power: bool = False, auto_mode: bool = False, project_root: Path | None = None) -> None:
@@ -510,9 +565,9 @@ def run_command(command: str, cwd: str | None = None) -> str:
     Shell-Befehl auf dem Server aus — IMMER erst nach Freigabe (voller Befehl im
     Dialog), da sich hier keine sinnvolle Grenze wie bei create_project/
     commit_and_push ziehen lässt (ein Befehl kann buchstäblich alles sein).
-    Kein sudo ohne vorher eingerichtete NOPASSWD-Regel (siehe
-    install_auto_update.sh für das Muster) — läuft sonst einfach in einen
-    Passwort-Prompt, der nie beantwortet wird, und danach in den Timeout.
+    Braucht der Befehl sudo und greift keine NOPASSWD-Regel, fragt ein zweites
+    Popup interaktiv nach dem Passwort (siehe _execute_with_sudo_support) —
+    2026-07-22: 'Mach doch bei sudo ein Pop-up'.
 
     Kehrt SOFORT zurück, Freigabe + Ausführung laufen im Hintergrund-Thread
     (gleicher Deadlock-Grund wie create_project: tools.execute() läuft
@@ -523,6 +578,40 @@ def run_command(command: str, cwd: str | None = None) -> str:
         return "Kein Befehl angegeben."
     threading.Thread(target=_run_command_thread, args=(command, cwd), daemon=True).start()
     return "Ich frage kurz im Dashboard nach Freigabe für diesen Befehl — Ergebnis kommt per Notification."
+
+
+def _execute_with_sudo_support(command: str, workdir: str) -> subprocess.CompletedProcess | None:
+    """Führt command aus. Enthält der Befehl sudo, wird zuerst non-interaktiv
+    versucht (sudo -n — falls schon eine passende NOPASSWD-Regel existiert,
+    z.B. für 'systemctl restart jarvis.service' aus install_auto_update.sh,
+    reicht das ohne jede Rückfrage). Scheitert das spezifisch weil ein
+    Passwort nötig ist, wird interaktiv per Dashboard-Popup danach gefragt
+    (2026-07-22: 'Mach doch bei sudo ein Pop-up') und via stdin an
+    'sudo -S' übergeben — NIE geloggt, NIE gespeichert, nur für diesen einen
+    Aufruf verwendet. Gibt None zurück wenn kein Passwort innerhalb des
+    Timeouts eingegeben wurde."""
+    stripped = command.strip()
+    if not (stripped.startswith("sudo ") or " sudo " in f" {stripped} "):
+        return subprocess.run(command, shell=True, cwd=workdir, capture_output=True, text=True, timeout=_RUN_COMMAND_TIMEOUT_SEC)
+
+    noninteractive_cmd = command.replace("sudo ", "sudo -n ", 1)
+    result = subprocess.run(
+        noninteractive_cmd, shell=True, cwd=workdir, capture_output=True, text=True,
+        timeout=_RUN_COMMAND_TIMEOUT_SEC,
+    )
+    needs_password = result.returncode != 0 and "password is required" in (result.stderr or "").lower()
+    if not needs_password:
+        return result
+
+    password = _request_sudo_password_sync(command[:150])
+    if password is None:
+        return None
+
+    interactive_cmd = command.replace("sudo ", "sudo -S ", 1)
+    return subprocess.run(
+        interactive_cmd, shell=True, cwd=workdir, capture_output=True, text=True,
+        input=password + "\n", timeout=_RUN_COMMAND_TIMEOUT_SEC,
+    )
 
 
 def _run_command_thread(command: str, cwd: str | None) -> None:
@@ -542,10 +631,10 @@ def _run_command_thread(command: str, cwd: str | None) -> None:
         return
 
     try:
-        result = subprocess.run(
-            command, shell=True, cwd=workdir, capture_output=True, text=True,
-            timeout=_RUN_COMMAND_TIMEOUT_SEC,
-        )
+        result = _execute_with_sudo_support(command, workdir)
+        if result is None:
+            _notify(f"Befehl abgebrochen: sudo-Passwort nicht rechtzeitig eingegeben: {command[:80]}", priority="high")
+            return
         output = ((result.stdout or "") + (result.stderr or "")).strip()
         if len(output) > _RUN_COMMAND_OUTPUT_MAX_CHARS:
             output = output[:_RUN_COMMAND_OUTPUT_MAX_CHARS] + f"\n… [gekürzt, {len(output)} Zeichen insgesamt]"

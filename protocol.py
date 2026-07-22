@@ -79,6 +79,8 @@ KNOWLEDGE_WRITE_ACK  = "knowledge_write_ack"  # {"type": "knowledge_write_ack", 
 CODING_APPROVAL_REQUEST  = "coding_approval_request"   # {"type": "coding_approval_request", "id": "...", "text": "..."} — JARVIS fragt vor riskanter Aktion nach
 CODING_APPROVAL_RESPONSE = "coding_approval_response"  # {"type": "coding_approval_response", "id": "...", "approved": bool} — Nutzer entscheidet
 CODING_TASK_STATUS = "coding_task_status"  # {"type": "coding_task_status", "active": bool, "branch": "...", "model": "...", "instruction": "...", "started_at": "...", "last_action": "..."} — Live-Fortschritt, kein Rate-Limit (anders als notification_push)
+CODING_SUDO_PASSWORD_REQUEST  = "coding_sudo_password_request"   # {"type": "coding_sudo_password_request", "id": "...", "text": "..."} — run_command() braucht ein sudo-Passwort (keine passende NOPASSWD-Regel)
+CODING_SUDO_PASSWORD_RESPONSE = "coding_sudo_password_response"  # {"type": "coding_sudo_password_response", "id": "...", "password": "..."} — nur einmalig verwendet, nie serverseitig gespeichert/geloggt
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
