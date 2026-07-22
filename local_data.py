@@ -707,6 +707,35 @@ def backfill_seiten_inhalte(force: bool = False) -> dict:
 _ROOT_TABLES = {"projekte", "todos", "kontakte"}
 
 
+def create_seite(titel: str, inhalt: str = "", *, parent_typ: str | None = None,
+                  parent_id: int | None = None, eltern_seite_id: int | None = None) -> int:
+    """Legt eine neue Seite an — entweder direkt an einem Todo/Projekt/Kontakt
+    (parent_typ+parent_id) oder als Unterseite einer bestehenden Seite
+    (eltern_seite_id). Genau eine der beiden Varianten angeben, nie beide/keine
+    (2026-07-23: bisher gab es nur update_seite() für BESTEHENDE Zeilen — kein
+    Weg, überhaupt eine neue Seite anzulegen, weder fürs Frontend noch fürs LLM.
+    JARVIS hatte deshalb bei 'dokumentier das als Unterseite' keine echte
+    Möglichkeit dazu und hat stattdessen fälschlich behauptet, in "Notion" zu
+    schreiben — Notion existiert in diesem System seit 2026-07-19 nicht mehr)."""
+    has_root = bool(parent_typ) and parent_id is not None
+    has_eltern = eltern_seite_id is not None
+    if has_root == has_eltern:
+        raise ValueError("Entweder parent_typ+parent_id ODER eltern_seite_id angeben, nicht beides/keins.")
+    if has_root and parent_typ not in _ROOT_TABLES:
+        raise ValueError(f"parent_typ muss eines von {_ROOT_TABLES} sein, nicht {parent_typ!r}.")
+    now = _now()
+    conn = _get_db()
+    cur = conn.execute(
+        "INSERT INTO seiten (parent_typ, parent_id, eltern_seite_id, titel, inhalt, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (parent_typ, parent_id, eltern_seite_id, titel, inhalt, now, now),
+    )
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    return new_id
+
+
 def update_seite(seite_id: int, **fields) -> None:
     allowed = {"titel", "inhalt"}
     sets = [f"{k} = ?" for k in fields if k in allowed]

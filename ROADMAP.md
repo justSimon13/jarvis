@@ -445,6 +445,21 @@ Lokal mit einer Test-DB verifiziert: INSERT mit tab_id → UPDATE ohne tab_id (b
 
 ---
 
+## 🔴 Fehlendes Tool: Unterseiten anlegen/bearbeiten ✅ behoben
+
+**Anlass:** Simon zeigte einen Chat-Ausschnitt (Tauri-Desktop-App) — JARVIS behauptete, ein PRD "in Notion" dokumentiert zu haben. Notion existiert in diesem System seit der Ablösung am 2026-07-19 nicht mehr, keine Zeile Code, kein Tool, keine Erwähnung irgendwo im Live-Kontext (geprüft: keine Wissensdatenbank-Treffer, keine Notion-Referenz in irgendeinem Code-Pfad den JARVIS während eines Gesprächs tatsächlich lädt — nur historische Migrations-Doku/Einmal-Skripte, die nie in den System-Prompt geladen werden). Auf Nachfrage gab JARVIS selbst zu: *"Das war meine Annahme, sorry"* — eine Konfabulation ohne erkennbare technische Ursache, vermutlich weil "Doku schreiben" im Trainingsdatensatz stark mit Notion assoziiert ist.
+
+**Der tatsächlich reparable Teil:** JARVIS diagnostizierte im selben Gespräch korrekt, dass es für Unterseiten-Dokumentation kein Schreib-Tool gibt — nur `read_seite` (lesend) existierte, `local_data.py` hatte zwar `update_seite()` für bestehende Zeilen, aber keine Funktion um überhaupt eine neue Seite anzulegen (weder fürs Frontend noch fürs LLM).
+
+**Fix:**
+- Neue Funktion `local_data.create_seite(titel, inhalt="", *, parent_typ=None, parent_id=None, eltern_seite_id=None)` — legt eine Seite entweder direkt an einem Todo/Projekt/Kontakt an oder verschachtelt unter einer bestehenden Seite (genau eine der beiden Varianten, sonst `ValueError`).
+- Neue LLM-Tools `create_seite` (nutzt die Funktion oben) und `write_seite` (dünner Wrapper um das schon vorhandene `update_seite()`, bisher nur über die UI-eigene `entity_action` erreichbar, nie als Chat-Tool). `data_query`s Beschreibung verweist jetzt auf beide, nicht nur auf `read_seite`.
+- Tool-Beschreibung von `create_seite` weist explizit darauf hin, dass es kein Notion gibt — falls das Muster nochmal auftritt, soll JARVIS das nicht wiederholen.
+
+Lokal verifiziert: `create_seite()` direkt (Wurzel-Seite, verschachtelte Unterseite, `list_unterseiten()` findet sie, beide/keine Parent-Variante wird korrekt abgelehnt, ungültiger `parent_typ` wird abgelehnt) sowie über den vollen `tools.execute()`-Dispatch-Pfad (create → write → read bestätigt die Änderung → Fehlerfall gibt saubere Meldung statt Absturz).
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

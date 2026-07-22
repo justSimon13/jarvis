@@ -205,7 +205,8 @@ DEFINITIONS = [
             "Gibt eine Liste von Einträgen zurück. Manche Einträge haben ein "
             "'unterseiten'-Feld (Liste von {id, titel}) — das sind nur die Titel, "
             "kein Inhalt (Kosten-Rücksicht). Volltext einer Unterseite bei Bedarf "
-            "mit read_seite(seite_id) nachladen."
+            "mit read_seite(seite_id) nachladen, neue Unterseite anlegen mit "
+            "create_seite, bestehende bearbeiten mit write_seite."
         ),
         "input_schema": {
             "type": "object",
@@ -317,6 +318,71 @@ DEFINITIONS = [
                 "seite_id": {
                     "type": "integer",
                     "description": "id aus dem 'unterseiten'-Feld eines vorherigen data_query oder read_seite",
+                },
+            },
+            "required": ["seite_id"],
+        },
+    },
+    {
+        "name": "create_seite",
+        "description": (
+            "Legt eine NEUE Unterseite an — zum Dokumentieren (PRD, Recherche, Notizen, "
+            "Besprechungsergebnisse) direkt an einem Todo/Projekt/Kontakt, oder verschachtelt "
+            "unter einer bereits bestehenden Unterseite. Nutzen wenn Simon sagt 'dokumentier "
+            "das', 'leg eine Seite an für X', 'schreib das als Unterseite' o.ä. WICHTIG: es gibt "
+            "in diesem System KEIN Notion (seit 2026-07-19 vollständig entfernt, alles läuft über "
+            "lokales SQLite) — nie behaupten dort etwas zu schreiben. NICHT für ein komplett neues "
+            "Software-Projekt (das ist create_project)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "titel": {
+                    "type": "string",
+                    "description": "Titel der neuen Seite.",
+                },
+                "inhalt": {
+                    "type": "string",
+                    "description": "Inhalt (Markdown erlaubt). Kann leer sein und später per write_seite ergänzt werden.",
+                },
+                "parent_typ": {
+                    "type": "string",
+                    "enum": ["todos", "projekte", "kontakte"],
+                    "description": "Zusammen mit parent_id: an welchem Todo/Projekt/Kontakt die Seite direkt hängen soll.",
+                },
+                "parent_id": {
+                    "type": "integer",
+                    "description": "id des Todos/Projekts/Kontakts, zusammen mit parent_typ.",
+                },
+                "eltern_seite_id": {
+                    "type": "integer",
+                    "description": "Alternative zu parent_typ/parent_id: id einer bestehenden Seite, unter der die neue verschachtelt werden soll.",
+                },
+            },
+            "required": ["titel"],
+        },
+    },
+    {
+        "name": "write_seite",
+        "description": (
+            "Aktualisiert Titel und/oder Inhalt einer BEREITS BESTEHENDEN Unterseite (id über "
+            "data_query's 'unterseiten'-Feld oder read_seite bekannt). Für eine komplett neue "
+            "Seite stattdessen create_seite."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "seite_id": {
+                    "type": "integer",
+                    "description": "id der zu bearbeitenden Seite.",
+                },
+                "titel": {
+                    "type": "string",
+                    "description": "Neuer Titel (weglassen = unverändert).",
+                },
+                "inhalt": {
+                    "type": "string",
+                    "description": "Neuer Inhalt (weglassen = unverändert — ersetzt sonst den kompletten bisherigen Inhalt, nicht additiv).",
                 },
             },
             "required": ["seite_id"],
@@ -932,6 +998,26 @@ def execute(tool_name: str, tool_input: dict) -> str:
         if tool_name == "read_seite":
             result = local_data.read_seite(tool_input["seite_id"])
             return json.dumps(result, ensure_ascii=False) if result else "Seite nicht gefunden."
+
+        if tool_name == "create_seite":
+            try:
+                new_id = local_data.create_seite(
+                    tool_input["titel"],
+                    tool_input.get("inhalt", ""),
+                    parent_typ=tool_input.get("parent_typ"),
+                    parent_id=tool_input.get("parent_id"),
+                    eltern_seite_id=tool_input.get("eltern_seite_id"),
+                )
+                return f"Seite angelegt (id={new_id})."
+            except ValueError as e:
+                return f"Fehler: {e}"
+
+        if tool_name == "write_seite":
+            fields = {k: tool_input[k] for k in ("titel", "inhalt") if k in tool_input}
+            if not fields:
+                return "Nichts zu aktualisieren — weder titel noch inhalt angegeben."
+            local_data.update_seite(tool_input["seite_id"], **fields)
+            return "Seite aktualisiert."
 
         if tool_name == "brain_read":
             result = brain.read(
