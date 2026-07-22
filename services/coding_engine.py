@@ -4,13 +4,24 @@ JARVIS Coding Engine — JARVIS entwickelt sich selbst, über das Claude Agent S
 Läuft als eigener Hintergrund-Thread pro Task (analog zu services/proactive.py),
 nie auf dem asyncio-Haupt-Loop von server.py. Arbeitet in einem eigenen
 `git worktree` (eigener Branch, eigenes Arbeitsverzeichnis) — NICHT im
-gemeinsam genutzten Haupt-Checkout (WORKSPACE_ROOT), damit Simons/Claude Codes
-eigene, noch uncommittete Arbeit dort nie berührt wird und der Branch-Wechsel
-nicht den für alle sichtbaren Checkout umschaltet.
+gemeinsam genutzten Haupt-Checkout, damit Simons/Claude Codes eigene, noch
+uncommittete Arbeit dort nie berührt wird und der Branch-Wechsel nicht den
+für alle sichtbaren Checkout umschaltet.
+
+Ziel-Repo pro Task: standardmäßig WORKSPACE_ROOT (dieses j.a.r.v.i.s.-Server-
+Repo selbst), optional eines der von create_project() unter config.PROJECTS_ROOT
+angelegten Projekte (Parameter `project` bei start_task()) — JARVIS kann also
+nur im eigenen Server-Repo oder in Projekten, die es selbst (mit Freigabe)
+angelegt hat, Code schreiben, nirgendwo sonst auf dem Server.
 
 Freigabe-Fluss: can_use_tool() blockiert (in einem Executor-Thread, nicht auf
 dem Coding-Engine-eigenen Event-Loop) bis server.py per resolve_approval()
-eine Antwort auf CODING_APPROVAL_REQUEST liefert.
+eine Antwort auf CODING_APPROVAL_REQUEST liefert. Per Task abschaltbar
+(`auto_mode=True`) wenn Simon das für diesen einen Task explizit so verlangt —
+dann läuft der komplette Task ohne jede Rückfrage durch (2026-07-22:
+"ich will ihm auch sagen können, dass er das im auto mode einfach
+runter programmiert - ohne meine Bestätigung"). Landet trotzdem nie direkt
+auf main — der PR danach bleibt die letzte Kontrollinstanz.
 """
 import asyncio
 import json
@@ -60,17 +71,23 @@ _TRACKING_TOPIC = "coding_engine"
 
 # Bewusst knapp statt des vollen Claude-Code-Presets — nur die Konventionen aus
 # CLAUDE.md, die für automatisierte Einzel-Tasks wirklich relevant sind.
-_SYSTEM_PROMPT = (
-    "Du bist JARVIS' eigene Coding-Engine, ein autonomer Hintergrund-Task ohne "
-    "Live-Rückfragemöglichkeit an Simon. Du arbeitest im j.a.r.v.i.s.-Server-Repo "
-    "(Python asyncio WebSocket-Server) auf einem bereits ausgecheckten eigenen "
-    "Git-Branch (niemals main). Konventionen: Print-Ausgaben mit Prefix "
-    "[modulname] und flush=True; Kommentare Deutsch oder Englisch; Services "
-    "sind isoliert, keine Cross-Service-Imports. Halte Änderungen minimal und "
-    "exakt auf die gestellte Aufgabe fokussiert — keine Refactorings oder "
-    "Zusatzänderungen ohne Auftrag. Committe deine Änderungen nicht selbst, "
-    "das übernimmt die aufrufende Umgebung."
-)
+def _build_system_prompt(project_root: Path) -> str:
+    if project_root == WORKSPACE_ROOT:
+        repo_note = (
+            "Du arbeitest im j.a.r.v.i.s.-Server-Repo (Python asyncio WebSocket-Server). "
+            "Konventionen: Print-Ausgaben mit Prefix [modulname] und flush=True; Kommentare "
+            "Deutsch oder Englisch; Services sind isoliert, keine Cross-Service-Imports."
+        )
+    else:
+        repo_note = f"Du arbeitest im Projekt '{project_root.name}' unter {project_root}."
+    return (
+        "Du bist JARVIS' eigene Coding-Engine, ein autonomer Hintergrund-Task ohne "
+        f"Live-Rückfragemöglichkeit an Simon. {repo_note} Du bist bereits auf einem "
+        "eigenen Git-Branch (niemals main) ausgecheckt. Halte Änderungen minimal und "
+        "exakt auf die gestellte Aufgabe fokussiert — keine Refactorings oder "
+        "Zusatzänderungen ohne Auftrag. Committe deine Änderungen nicht selbst, "
+        "das übernimmt die aufrufende Umgebung."
+    )
 
 
 def init(client_manager, dispatcher) -> None:
@@ -88,13 +105,29 @@ def init(client_manager, dispatcher) -> None:
 
 # ── Öffentliche API ──────────────────────────────────────────────────────────
 
-def start_task(instruction: str, high_power: bool = False) -> str:
+def start_task(instruction: str, high_power: bool = False, auto_mode: bool = False, project: str | None = None) -> str:
     """Von tools.execute() aufgerufen. Kehrt sofort zurück, Task läuft im Hintergrund.
 
     high_power=True nutzt das teurere, stärkere Modell (nur wenn Simon das für
     diesen Task explizit verlangt hat) — Default ist das günstigere Modell.
+
+    project=None (Default) = dieses j.a.r.v.i.s.-Server-Repo selbst. Sonst Name
+    eines zuvor mit create_project() angelegten Projekts unter config.PROJECTS_ROOT.
+
+    auto_mode=True überspringt für DIESEN Task jede Freigabe-Rückfrage
+    (Write/Edit/Bash außerhalb des Sandbox-Worktrees, riskante Bash-Befehle,
+    Secret-Dateien) — nur setzen wenn Simon das für diesen Task ausdrücklich
+    so verlangt hat. Der PR am Ende bleibt trotzdem die letzte Kontrollinstanz,
+    nichts landet je direkt auf main.
     """
     global _task_running
+
+    project_root = WORKSPACE_ROOT
+    if project:
+        candidate = config.PROJECTS_ROOT / project
+        if not (candidate / ".git").is_dir():
+            return f"Projekt '{project}' nicht gefunden unter {config.PROJECTS_ROOT} — erst mit create_project anlegen."
+        project_root = candidate
 
     spent_today = _today_spend()
     if spent_today >= config.CODING_DAILY_BUDGET_USD:
@@ -108,9 +141,17 @@ def start_task(instruction: str, high_power: bool = False) -> str:
             return "Es läuft bereits ein Coding-Task — ich melde mich, sobald der fertig ist, bevor ich einen neuen starte."
         _task_running = True
 
-    threading.Thread(target=_run_task_thread, args=(instruction, high_power), daemon=True).start()
+    threading.Thread(
+        target=_run_task_thread, args=(instruction, high_power, auto_mode, project_root), daemon=True,
+    ).start()
     model_note = " (mit mehr Power, teureres Modell)" if high_power else ""
-    return f"Ich fange im Hintergrund an{model_note}. Ich melde mich per Notification, wenn ich fertig bin oder eine Freigabe brauche."
+    auto_note = " im Auto-Modus, ohne Rückfragen" if auto_mode else ""
+    project_note = f" am Projekt '{project}'" if project else ""
+    return (
+        f"Ich fange im Hintergrund an{project_note}{model_note}{auto_note}. "
+        "Ich melde mich per Notification, wenn ich fertig bin"
+        f"{' oder eine Freigabe brauche' if not auto_mode else ''}."
+    )
 
 
 def resolve_approval(approval_id: str, approved: bool) -> None:
@@ -126,10 +167,10 @@ def resolve_approval(approval_id: str, approved: bool) -> None:
 
 # ── Task-Ausführung ───────────────────────────────────────────────────────────
 
-def _run_task_thread(instruction: str, high_power: bool = False) -> None:
+def _run_task_thread(instruction: str, high_power: bool = False, auto_mode: bool = False, project_root: Path | None = None) -> None:
     global _task_running
     try:
-        asyncio.run(_run_task(instruction, high_power))
+        asyncio.run(_run_task(instruction, high_power, auto_mode, project_root))
     except Exception as e:
         print(f"[coding_engine] Task-Fehler: {e}", flush=True)
         _notify(f"Coding-Task fehlgeschlagen: {e}", priority="high")
@@ -141,19 +182,23 @@ def _run_task_thread(instruction: str, high_power: bool = False) -> None:
         _set_status(active=False)
 
 
-async def _run_task(instruction: str, high_power: bool = False) -> None:
+async def _run_task(instruction: str, high_power: bool = False, auto_mode: bool = False, project_root: Path | None = None) -> None:
     from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher, ResultMessage
 
+    project_root = project_root or WORKSPACE_ROOT
     branch = f"jarvis/auto-{int(time.time())}"
-    worktree_path = _create_worktree(branch)
+    worktree_path = _create_worktree(project_root, branch)
     if worktree_path is None:
         _notify("Konnte keinen eigenen Worktree/Branch anlegen — Task abgebrochen.", priority="high")
         return
 
     model = config.CODING_ENGINE_MODEL_HIGH if high_power else config.CODING_ENGINE_MODEL
-    _notify(f"[JARVIS Code] Starte auf Branch {branch} ({model}): {instruction[:120]}", priority="normal")
+    project_note = f" [Projekt: {project_root.name}]" if project_root != WORKSPACE_ROOT else ""
+    auto_note = " [Auto-Modus]" if auto_mode else ""
+    _notify(f"[JARVIS Code]{project_note}{auto_note} Starte auf Branch {branch} ({model}): {instruction[:120]}", priority="normal")
     _set_status(
         active=True, branch=branch, model=model, instruction=instruction[:200],
+        project=project_root.name if project_root != WORKSPACE_ROOT else None, auto_mode=auto_mode,
         started_at=datetime.now().isoformat(), last_action="Gestartet",
     )
 
@@ -164,12 +209,12 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
         options = ClaudeAgentOptions(
             cwd=str(worktree_path),
             model=model,
-            can_use_tool=_make_can_use_tool(worktree_path),
+            can_use_tool=_make_can_use_tool(worktree_path, auto_mode),
             # Minimaler eigener System-Prompt statt des großen eingebauten
             # Claude-Code-Presets (Slash-Commands, Skills, Subagents-Anleitung
             # etc.) — das allein war beim "sag hallo"-Test schon ~22K Tokens
             # Cache-Write. Für einen engen, automatisierten Einzel-Task nicht nötig.
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_build_system_prompt(project_root),
             # Kein automatisches Laden von .mcp.json (verbindet sonst unnötig
             # mit dem JARVIS-MCP-Server samt dessen "ruf proaktiv
             # jarvis_get_coding_context() auf"-Anweisung) und keine
@@ -207,7 +252,7 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
             # Einschränkung nicht und ist für einzelne Tasks mit Freigabe-Callback die
             # von Anthropic empfohlene, einfachere Variante.
             async with ClaudeSDKClient(options=options) as client:
-                await client.query(_build_prompt(instruction))
+                await client.query(_build_prompt(instruction, project_root))
                 async for message in client.receive_response():
                     if isinstance(message, ResultMessage):
                         result_message = message
@@ -219,7 +264,7 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
         else:
             os.environ.pop("ANTHROPIC_API_KEY", None)
 
-    committed = _finalize_commit(worktree_path, branch, instruction)
+    committed = _finalize_commit(project_root, worktree_path, branch, instruction)
 
     # total_cost_usd ist eine Client-seitige Schätzung des SDK, keine autoritative
     # Abrechnung (siehe Agent-SDK-Doku "Track cost and usage") — für die exakte
@@ -231,7 +276,8 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
 
     pr_url = None
     if committed:
-        pr_url = _create_pull_request(branch, instruction, worktree_path)
+        repo_slug = _repo_slug_for(project_root)
+        pr_url = _create_pull_request(repo_slug, branch, instruction, worktree_path)
         if pr_url:
             location_note = f"PR erstellt: {pr_url}"
         else:
@@ -240,7 +286,7 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
         location_note = f"Branch {branch} — keine Änderungen, Worktree wieder entfernt"
 
     _notify(
-        f"[JARVIS Code] Fertig — {location_note}{error_note} — ${cost:.2f} "
+        f"[JARVIS Code]{project_note}{auto_note} Fertig — {location_note}{error_note} — ${cost:.2f} "
         f"(heute ${today_total:.2f} von ${config.CODING_DAILY_BUDGET_USD:.2f}): {summary}",
         # priority="high": bleibt stehen bis manuell weggeklickt (jarvis-web dismisst
         # alles außer "high" automatisch nach 8s) — eine Fertig-Meldung, die man
@@ -253,26 +299,36 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
     )
 
 
-def _build_prompt(instruction: str) -> str:
+def _build_prompt(instruction: str, project_root: Path) -> str:
+    where = "deinem eigenen Server-Repo" if project_root == WORKSPACE_ROOT else f"dem Projekt '{project_root.name}'"
     return (
-        "Du bist JARVIS' eigene Coding-Engine und arbeitest in deinem eigenen Server-Repo, "
+        f"Du bist JARVIS' eigene Coding-Engine und arbeitest in {where}, "
         "auf einem bereits ausgecheckten eigenen Branch (niemals main). "
         f"Aufgabe: {instruction}"
     )
 
 
+def _repo_slug_for(project_root: Path) -> str:
+    """'owner/repo' für die GitHub-API — alle create_project()-Repos liegen unter
+    demselben Owner wie das j.a.r.v.i.s.-Repo selbst (Simons eigener Account)."""
+    if project_root == WORKSPACE_ROOT:
+        return config.GITHUB_REPO
+    owner = config.GITHUB_REPO.split("/")[0]
+    return f"{owner}/{project_root.name}"
+
+
 # ── Git (immer über einen isolierten Worktree, nie im Haupt-Checkout) ─────────
 
-def _create_worktree(branch: str) -> Path | None:
+def _create_worktree(project_root: Path, branch: str) -> Path | None:
     """Legt einen neuen git-worktree an, ausgehend vom letzten Commit auf main —
-    unabhängig davon, was gerade uncommittet im Haupt-Checkout (WORKSPACE_ROOT)
-    liegt. Wechselt NICHT den Branch von WORKSPACE_ROOT selbst."""
+    unabhängig davon, was gerade uncommittet im Haupt-Checkout (project_root)
+    liegt. Wechselt NICHT den Branch von project_root selbst."""
     worktree_path = _WORKTREE_BASE / branch
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["git", "worktree", "add", "-b", branch, str(worktree_path), "main"],
-            cwd=str(WORKSPACE_ROOT), check=True, capture_output=True, text=True,
+            cwd=str(project_root), check=True, capture_output=True, text=True,
         )
         return worktree_path
     except subprocess.CalledProcessError as e:
@@ -280,7 +336,7 @@ def _create_worktree(branch: str) -> Path | None:
         return None
 
 
-def _finalize_commit(worktree_path: Path, branch: str, instruction: str) -> bool:
+def _finalize_commit(project_root: Path, worktree_path: Path, branch: str, instruction: str) -> bool:
     """Committet Änderungen im Worktree. Räumt den Worktree auf wenn es nichts
     zu committen gab. Gibt zurück ob etwas committet wurde."""
     try:
@@ -289,7 +345,7 @@ def _finalize_commit(worktree_path: Path, branch: str, instruction: str) -> bool
             cwd=str(worktree_path), capture_output=True, text=True, check=True,
         )
         if not status.stdout.strip():
-            _remove_worktree(worktree_path, branch, delete_branch=True)
+            _remove_worktree(project_root, worktree_path, branch, delete_branch=True)
             return False
 
         subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), check=True)
@@ -303,34 +359,37 @@ def _finalize_commit(worktree_path: Path, branch: str, instruction: str) -> bool
         return False
 
 
-def _remove_worktree(worktree_path: Path, branch: str, delete_branch: bool = False) -> None:
+def _remove_worktree(project_root: Path, worktree_path: Path, branch: str, delete_branch: bool = False) -> None:
     try:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree_path)],
-            cwd=str(WORKSPACE_ROOT), check=True, capture_output=True, text=True,
+            cwd=str(project_root), check=True, capture_output=True, text=True,
         )
         if delete_branch:
             subprocess.run(
                 ["git", "branch", "-D", branch],
-                cwd=str(WORKSPACE_ROOT), check=True, capture_output=True, text=True,
+                cwd=str(project_root), check=True, capture_output=True, text=True,
             )
     except subprocess.CalledProcessError as e:
         print(f"[coding_engine] Worktree-Cleanup Fehler: {e.stderr}", flush=True)
 
 
-def _create_pull_request(branch: str, instruction: str, worktree_path: Path) -> str | None:
-    """Pusht den Branch und legt einen echten GitHub-PR an. Committet wird weiterhin
-    ohne Rückfrage (wie bisher) — aber damit die Arbeit nicht einfach auf einem lokalen
-    Branch liegen bleibt, den niemand mehr anschaut, braucht der Merge nach main jetzt
-    Simons bewusste Aktion (PR annehmen). Push nutzt GITHUB_TOKEN direkt in der URL statt
-    sich auf eine vorhandene Git-Credential-Konfiguration zu verlassen. Gibt die PR-URL
-    zurück, oder None wenn kein Token gesetzt ist oder Push/PR fehlschlägt (Ergebnis bleibt
-    dann trotzdem auf dem Branch erhalten, nur ohne PR — kein Datenverlust)."""
+def _create_pull_request(repo_slug: str, branch: str, instruction: str, worktree_path: Path) -> str | None:
+    """Pusht den Branch und legt einen echten GitHub-PR an (im durch repo_slug
+    angegebenen Repo — dem j.a.r.v.i.s.-Repo selbst oder einem von create_project
+    angelegten Projekt). Committet wird weiterhin ohne Rückfrage (wie bisher) —
+    aber damit die Arbeit nicht einfach auf einem lokalen Branch liegen bleibt,
+    den niemand mehr anschaut, braucht der Merge nach main jetzt Simons bewusste
+    Aktion (PR annehmen). Push nutzt GITHUB_TOKEN direkt in der URL statt sich
+    auf eine vorhandene Git-Credential-Konfiguration zu verlassen. Gibt die
+    PR-URL zurück, oder None wenn kein Token gesetzt ist oder Push/PR fehlschlägt
+    (Ergebnis bleibt dann trotzdem auf dem Branch erhalten, nur ohne PR — kein
+    Datenverlust)."""
     if not config.GITHUB_TOKEN:
         print("[coding_engine] Kein GITHUB_TOKEN gesetzt — kein PR, Branch bleibt lokal.", flush=True)
         return None
 
-    push_url = f"https://x-access-token:{config.GITHUB_TOKEN}@github.com/{config.GITHUB_REPO}.git"
+    push_url = f"https://x-access-token:{config.GITHUB_TOKEN}@github.com/{repo_slug}.git"
     try:
         subprocess.run(
             ["git", "push", push_url, f"{branch}:{branch}"],
@@ -347,7 +406,7 @@ def _create_pull_request(branch: str, instruction: str, worktree_path: Path) -> 
         "body": f"Automatisch von JARVIS' Coding-Engine erstellt.\n\n**Aufgabe:**\n{instruction}",
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"https://api.github.com/repos/{config.GITHUB_REPO}/pulls",
+        f"https://api.github.com/repos/{repo_slug}/pulls",
         data=body, method="POST",
         headers={
             "Authorization": f"Bearer {config.GITHUB_TOKEN}",
@@ -429,11 +488,19 @@ def _create_project_thread(name: str, description: str, private: bool) -> None:
         return
 
     config.PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
-    push_url = clone_url.replace("https://", f"https://x-access-token:{config.GITHUB_TOKEN}@")
+    clone_url_with_token = clone_url.replace("https://", f"https://x-access-token:{config.GITHUB_TOKEN}@")
     try:
         subprocess.run(
-            ["git", "clone", push_url, str(local_path)],
+            ["git", "clone", clone_url_with_token, str(local_path)],
             check=True, capture_output=True, text=True, timeout=30,
+        )
+        # git speichert die Clone-URL 1:1 als "origin" in .git/config — mit Token
+        # eingebettet läge der PAT sonst dauerhaft im Klartext auf der Platte.
+        # Push/PR bauen sich die Token-URL ohnehin bei Bedarf frisch (s. _create_pull_request),
+        # der gespeicherte Remote braucht also keine Credentials.
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", clone_url],
+            cwd=str(local_path), check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
         print(f"[coding_engine] Lokaler Checkout fehlgeschlagen: {e.stderr}", flush=True)
@@ -478,14 +545,16 @@ def _github_create_repo(name: str, description: str, private: bool) -> dict | No
 
 # ── Freigabe / Eskalation ──────────────────────────────────────────────────────
 
-def _make_can_use_tool(workspace_root: Path):
+def _make_can_use_tool(workspace_root: Path, auto_mode: bool = False):
     """Baut can_use_tool für einen konkreten Task, gebunden an dessen Worktree —
     'außerhalb des Workspace' bedeutet außerhalb DIESES Worktrees, nicht des
-    Haupt-Checkouts."""
+    Haupt-Checkouts. auto_mode=True (Simon hat das für diesen Task ausdrücklich
+    verlangt) lässt jede Aktion ohne Rückfrage durch, auch riskante — der PR am
+    Ende bleibt trotzdem die letzte Kontrollinstanz, nichts landet direkt auf main."""
     async def can_use_tool(tool_name, input_data, context):
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-        if config.CODING_MANUAL_MODE or _is_risky(tool_name, input_data, workspace_root):
+        if not auto_mode and (config.CODING_MANUAL_MODE or _is_risky(tool_name, input_data, workspace_root)):
             approved = await _escalate(tool_name, input_data)
             if approved:
                 return PermissionResultAllow(updated_input=input_data)

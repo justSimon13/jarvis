@@ -339,14 +339,18 @@ Beim Testen gefunden und behoben: fehlende Git-Identität auf dem Server (Commit
 - Echte GitHub-PR-Erstellung (`_create_pull_request`, nutzt `GITHUB_TOKEN`) statt Branch ohne Review
 - Notification-Verlauf (Glocke in jarvis-web, `notification_history`-Resource)
 
-Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lokalen Checkout unter `config.PROJECTS_ROOT` (`~/apps`, gleicher Ort wie der bestehende jarvis-web-Checkout) an, ebenfalls immer mit Freigabe-Pflicht. `delegate_coding_task` bleibt weiterhin exklusiv auf das `j.a.r.v.i.s.`-Repo beschränkt — `create_project` deckt "neues Projekt aufsetzen" ab, nicht "Code in einem bestehenden Fremdprojekt schreiben".
+Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lokalen Checkout unter `config.PROJECTS_ROOT` (`~/apps`, gleicher Ort wie der bestehende jarvis-web-Checkout) an, ebenfalls immer mit Freigabe-Pflicht.
+
+**Erweiterung ✅ (2026-07-22, zweiter Teil):** Zwei weitere Punkte aus Simons Feedback ("Ja auf jeden fall, dass muss er können" zu Cross-Projekt-Coding, "ich will ihm auch sagen können, dass er das im auto mode einfach runter programmiert - ohne meine Bestätigung"):
+- `delegate_coding_task` ist nicht mehr exklusiv auf das `j.a.r.v.i.s.`-Repo beschränkt — neuer optionaler Parameter `project` lässt JARVIS in jedem Git-Repo unter `config.PROJECTS_ROOT` (`~/apps/<name>`) arbeiten, egal ob per `create_project` angelegt oder schon vorher da (z.B. `project="jarvis-web"` funktioniert bereits heute, weil das dort schon liegt). Jedes Ziel bekommt weiterhin einen eigenen isolierten Worktree/Branch und einen eigenen PR im richtigen Repo (`_repo_slug_for()`). `jarvis-satellite` bleibt außen vor — anderes physisches Gerät, kein Zugriff vom Server aus.
+- Neuer optionaler Parameter `auto_mode` — wenn Simon das für einen einzelnen Task ausdrücklich verlangt, überspringt der komplette Task jede Freigabe-Rückfrage (auch bei riskanten Aktionen). Der PR am Ende bleibt trotzdem die einzige Instanz, die tatsächlich nach `main` mergt — auto_mode ändert daran nichts.
+- Nebenbei behoben: `create_project`s lokaler `git clone` speicherte den `GITHUB_TOKEN` bisher dauerhaft im Klartext in `.git/config` (Standard-Verhalten von `git clone <url-mit-token>`) — Remote-URL wird jetzt direkt danach auf die tokenlose Variante zurückgesetzt.
 
 **Noch offen:**
 - Eskalations-Freigabe-Flow noch nicht mit einer tatsächlich riskanten Aktion live getestet (bisherige Tests waren alle unkritisch)
 - Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
 - Konversationelle Konfigurierbarkeit der Eskalationsregeln
-- `delegate_coding_task` kann nur im `j.a.r.v.i.s.`-Repo Code schreiben — für neu von `create_project` angelegte oder bestehende Fremd-Projekte (dashboard/satellite/web) noch nicht nutzbar
-- Nur 1 Coding-Task gleichzeitig
+- Nur 1 Coding-Task gleichzeitig (gilt jetzt projektübergreifend — zwei Tasks in unterschiedlichen Projekten können aktuell trotzdem nicht parallel laufen)
 
 ---
 

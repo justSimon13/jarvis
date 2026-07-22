@@ -20,7 +20,8 @@ DEFINITIONS = [
         "name": "delegate_coding_task",
         "description": (
             "Delegiert eine Programmier-Aufgabe an JARVIS' eigene Coding-Engine, die selbstständig "
-            "im j.a.r.v.i.s.-Server-Repo Dateien anlegt/ändert. NUR verwenden wenn Simon explizit "
+            "Dateien anlegt/ändert — standardmäßig im j.a.r.v.i.s.-Server-Repo, oder wahlweise in einem "
+            "mit create_project angelegten Projekt (Parameter project). NUR verwenden wenn Simon explizit "
             "möchte dass JARVIS selbst Code schreibt/ändert (z.B. 'JARVIS, füg X hinzu', 'entwickle Y'), "
             "NICHT für normale Konversation oder Fragen über Code. Läuft asynchron im Hintergrund in "
             "einem eigenen Git-Branch (nie main) — Ergebnis kommt per Notification, nicht in dieser Antwort. "
@@ -33,6 +34,13 @@ DEFINITIONS = [
                     "type": "string",
                     "description": "Klare, vollständige Beschreibung der Coding-Aufgabe.",
                 },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Name eines zuvor mit create_project angelegten Projekts, in dem JARVIS statt im "
+                        "j.a.r.v.i.s.-Server-Repo arbeiten soll. Weglassen = das j.a.r.v.i.s.-Server-Repo selbst."
+                    ),
+                },
                 "high_power": {
                     "type": "boolean",
                     "description": (
@@ -40,6 +48,18 @@ DEFINITIONS = [
                         "verlangt hat (z.B. 'mit mehr Power', 'das ist komplex, nimm das beste Modell'). "
                         "Nutzt ein deutlich teureres Modell. Default false — für normale Aufgaben "
                         "reicht das günstigere Modell."
+                    ),
+                },
+                "auto_mode": {
+                    "type": "boolean",
+                    "description": (
+                        "true NUR wenn Simon für DIESEN Task explizit gesagt hat, dass JARVIS ohne "
+                        "Rückfrage/Freigabe durchprogrammieren soll (z.B. 'im Auto-Modus', 'frag nicht "
+                        "nochmal nach', 'zieh das einfach durch'). Überspringt für den kompletten Task "
+                        "jede Freigabe-Anfrage, auch bei riskanten Aktionen. Default false — normalerweise "
+                        "fragt JARVIS bei riskanten Aktionen (Dateien außerhalb des Projekt-Ordners, "
+                        "potenziell gefährliche Bash-Befehle, Secret-Zugriffe) im Dashboard nach. Nur setzen "
+                        "wenn Simon das ausdrücklich so gesagt hat, nie von dir aus annehmen."
                     ),
                 },
             },
@@ -761,7 +781,10 @@ def execute(tool_name: str, tool_input: dict) -> str:
     try:
         if tool_name == "delegate_coding_task":
             return coding_engine.start_task(
-                tool_input["instruction"], high_power=bool(tool_input.get("high_power", False))
+                tool_input["instruction"],
+                high_power=bool(tool_input.get("high_power", False)),
+                auto_mode=bool(tool_input.get("auto_mode", False)),
+                project=tool_input.get("project"),
             )
 
         if tool_name == "check_coding_task_status":
