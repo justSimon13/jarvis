@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -561,11 +562,13 @@ _RUN_COMMAND_OUTPUT_MAX_CHARS = 800
 
 # Enge, bewusst konservative Whitelist: nur Binaries, die MIT JEDEM Argument
 # read-only sind (kein "find" — hat -delete/-exec; kein "curl"/"wget" — schon
-# in _DESTRUCTIVE_PATTERNS aus anderem Grund geflaggt). systemctl/journalctl/git
-# brauchen eine Sub-Kommando-Prüfung, da nicht jedes Sub-Kommando sicher ist.
+# in _DESTRUCTIVE_PATTERNS aus anderem Grund geflaggt; kein "top" — hängt ohne
+# TTY ohne -bn1). systemctl/journalctl/git/sed brauchen eine Sub-Kommando- bzw.
+# Flag-Prüfung, da nicht jede Variante sicher ist.
 _SAFE_READONLY_BINARIES = {
     "ls", "cat", "pwd", "head", "tail", "wc", "stat", "file", "which",
     "df", "du", "ps", "whoami", "uname", "date", "uptime", "free", "hostname",
+    "ss", "netstat", "grep", "sort", "uniq", "cut", "tr", "column", "awk",
 }
 _SAFE_SYSTEMCTL_SUBCOMMANDS = {
     "status", "is-active", "is-enabled", "is-failed",
@@ -575,33 +578,59 @@ _SAFE_GIT_SUBCOMMANDS = {"status", "log", "diff", "show", "branch", "remote"}
 _UNSAFE_JOURNALCTL_FLAGS = ("--vacuum-", "--rotate", "--flush")
 
 
-def _is_safe_readonly_command(command: str) -> bool:
-    """Einzelner Befehl (kein &&/;/|/Umleitung/Sub-Shell) mit einer Binary aus
-    einer engen Read-Only-Whitelist — läuft synchron OHNE Freigabe, das
-    Ergebnis kommt direkt als Tool-Antwort zurück statt nur per Notification.
-    Grund: sonst sieht JARVIS selbst nie ob ein Befehl fehlgeschlagen ist und
-    kann nicht reagieren/woanders weitersuchen (2026-07-22: 'Er schmiert
-    einfach ab ohne irgendwas? Der soll das checken und woanders suchen' —
-    z.B. 'ls ~/projekte/' schlägt fehl, JARVIS bekommt das mangels sofortigem
-    Ergebnis gar nicht mit und kann nicht selbst 'ls ~/' zur Korrektur
-    nachschieben). Alles andere (Schreiben, sudo, unbekannte Binaries,
-    verkettete Befehle) läuft weiterhin über die Freigabe."""
-    stripped = command.strip()
-    if any(op in stripped for op in ("&&", "||", ";", "|", ">", "<", "`", "$(")):
+def _is_safe_segment(tokens: list[str]) -> bool:
+    """Ein einzelnes Pipe-Segment (schon per shlex tokenisiert, s.u.)."""
+    if not tokens:
         return False
-    parts = stripped.split()
-    if not parts:
-        return False
-    binary = parts[0]
+    binary = tokens[0]
     if binary in _SAFE_READONLY_BINARIES:
         return True
+    if binary == "sed":
+        # nur Stream-Editing auf stdout, kein In-Place-Schreiben (-i/-i.bak/--in-place)
+        return not any(t == "-i" or t.startswith("-i.") or t.startswith("--in-place") for t in tokens)
     if binary == "systemctl":
-        return len(parts) > 1 and parts[1] in _SAFE_SYSTEMCTL_SUBCOMMANDS
+        return len(tokens) > 1 and tokens[1] in _SAFE_SYSTEMCTL_SUBCOMMANDS
     if binary == "git":
-        return len(parts) > 1 and parts[1] in _SAFE_GIT_SUBCOMMANDS
+        return len(tokens) > 1 and tokens[1] in _SAFE_GIT_SUBCOMMANDS
     if binary == "journalctl":
-        return not any(flag in stripped for flag in _UNSAFE_JOURNALCTL_FLAGS)
+        return not any(t.startswith("--vacuum-") or t in ("--rotate", "--flush") for t in tokens)
     return False
+
+
+def _is_safe_readonly_command(command: str) -> bool:
+    """Eine Kette read-only Befehle, ausschließlich über Pipes verbunden (kein
+    &&/;/Umleitung/Sub-Shell) — läuft synchron OHNE Freigabe, das Ergebnis
+    kommt direkt als Tool-Antwort zurück statt nur per Notification. Grund:
+    sonst sieht JARVIS selbst nie ob ein Befehl fehlgeschlagen ist und kann
+    nicht reagieren/woanders weitersuchen (2026-07-22: 'Er schmiert einfach ab
+    ohne irgendwas? Der soll das checken und woanders suchen').
+
+    Pipes werden über shlex-Tokens statt Roh-Text-Split erkannt — ein Text-Split
+    auf '|' würde sonst auch innerhalb gequoteter Argumente splitten (z.B.
+    grep -E '8000|8080' — das '|' dort ist Teil des Regex-Patterns, kein
+    Pipe-Operator). Jedes Segment einzeln gegen die Whitelist geprüft. Alles
+    andere (Schreiben, sudo, unbekannte Binaries, &&/;/Umleitung) läuft
+    weiterhin über die Freigabe."""
+    stripped = command.strip()
+    if any(op in stripped for op in ("&&", "||", ";", ">", "<", "`", "$(")):
+        return False
+    try:
+        tokens = shlex.split(stripped)
+    except ValueError:
+        return False  # kaputtes Quoting o.ä. — nicht raten, lieber über die Freigabe laufen lassen
+    if not tokens:
+        return False
+
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok == "|":
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+
+    if any(not seg for seg in segments):
+        return False  # z.B. führendes/doppeltes/nachgestelltes Pipe
+    return all(_is_safe_segment(seg) for seg in segments)
 
 
 def run_command(command: str, cwd: str | None = None) -> str:
