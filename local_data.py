@@ -201,7 +201,19 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
         ).fetchall()
     conn.close()
     cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "externe_id"]
-    return [dict(zip(cols, r)) for r in rows]
+    results = [dict(zip(cols, r)) for r in rows]
+    # Gleicher Hinweis wie in query() (LLM-Pfad) — sonst hat das Frontend keine
+    # Möglichkeit zu wissen ob es Unterseiten gibt, ohne pro Projekt einen
+    # extra Request zu machen. Vorher stützte sich ProjektItem.vue fälschlich
+    # auf externe_id (nur bei Notion-migrierten Zeilen gesetzt) um zu
+    # entscheiden ob der Name klickbar ist — seit create_seite() können auch
+    # NEUE, nie-migrierte Projekte Unterseiten bekommen (2026-07-23: 'Warum
+    # kann ich mich nicht [...] rein klicken?').
+    for r in results:
+        unterseiten = list_seiten("projekte", r["id"])
+        if unterseiten:
+            r["unterseiten"] = unterseiten
+    return results
 
 
 def add_projekt(name: str, status: str | None = None, beschreibung: str | None = None,
@@ -253,10 +265,14 @@ def list_kontakte(tag_filter: str | None = None) -> list[dict]:
         tags = json.loads(r[4]) if r[4] else []
         if tag_filter and tag_filter not in tags:
             continue
-        result.append({
+        entry = {
             "id": r[0], "name": r[1], "email": r[2], "telefon": r[3],
             "tags": tags, "notizen": r[5], "externe_id": r[6],
-        })
+        }
+        unterseiten = list_seiten("kontakte", r[0])
+        if unterseiten:
+            entry["unterseiten"] = unterseiten
+        result.append(entry)
     return result
 
 

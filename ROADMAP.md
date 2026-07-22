@@ -458,6 +458,10 @@ Lokal mit einer Test-DB verifiziert: INSERT mit tab_id → UPDATE ohne tab_id (b
 
 Lokal verifiziert: `create_seite()` direkt (Wurzel-Seite, verschachtelte Unterseite, `list_unterseiten()` findet sie, beide/keine Parent-Variante wird korrekt abgelehnt, ungültiger `parent_typ` wird abgelehnt) sowie über den vollen `tools.execute()`-Dispatch-Pfad (create → write → read bestätigt die Änderung → Fehlerfall gibt saubere Meldung statt Absturz).
 
+**Nachbesserung, direkt danach:** Simon konnte in jarvis-web trotzdem nicht in ein Projekt mit neu angelegter Unterseite reinklicken ("halbautomaten – WordPress Relaunch"). Root Cause: `jarvis-web`s `ProjektItem.vue`/`KontaktItem.vue` machten den Namen nur klickbar wenn `externe_id` gesetzt war — ein Feld das AUSSCHLIESSLICH bei aus Notion migrierten Zeilen befüllt wird. Seit `create_seite()` können aber auch nie-migrierte, ganz normale Projekte/Kontakte Unterseiten bekommen — die Bedingung war seit dem heutigen Feature schlicht falsch, nicht nur unvollständig. `local_data.list_projekte()`/`list_kontakte()` hängen jetzt (wie `query()`, der LLM-Pfad, schon länger) einen `unterseiten`-Hinweis (Liste von `{id, titel}`) an jede Zeile mit tatsächlich vorhandenen Seiten an — Frontend prüft jetzt `unterseiten?.length || externe_id` (additiv, kein Verhaltensverlust für die alten Notion-Zeilen). `TodosView` hat aktuell noch KEIN Klick-durch für Unterseiten, obwohl `create_seite`/`read_seite` auch für Todos funktionieren — nicht Teil dieser Runde, da nicht gemeldet.
+
+Verifiziert: Python-seitig (`list_projekte()` liefert `unterseiten` exakt für Zeilen mit echten Seiten, nicht für andere) sowie live gegen den echten Server (der lokale Dev-Server verbindet sich inzwischen mit der echten Tailscale-Adresse) — "halbautomaten – WordPress Relaunch" zeigte sich dort tatsächlich als nicht-klickbares `<div>`, exakt das gemeldete Symptom, vor dem Deploy des Backend-Fixes.
+
 ---
 
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
