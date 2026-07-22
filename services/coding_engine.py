@@ -71,6 +71,19 @@ _TRACKING_TOPIC = "coding_engine"
 
 # Bewusst knapp statt des vollen Claude-Code-Presets — nur die Konventionen aus
 # CLAUDE.md, die für automatisierte Einzel-Tasks wirklich relevant sind.
+def _load_git_conventions(project_root: Path) -> str:
+    """Projekt-spezifische GIT_CONVENTIONS.md (im Wurzelverzeichnis des Ziel-Projekts)
+    hat Vorrang, sonst die Default-Version im j.a.r.v.i.s.-Repo selbst (2026-07-22:
+    'eventuell noch die Möglichkeit je nach Projekt eine eigene anzulegen')."""
+    for path in (project_root / "GIT_CONVENTIONS.md", WORKSPACE_ROOT / "GIT_CONVENTIONS.md"):
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"[coding_engine] GIT_CONVENTIONS.md ({path}) konnte nicht gelesen werden: {e}", flush=True)
+    return ""
+
+
 def _build_system_prompt(project_root: Path) -> str:
     if project_root == WORKSPACE_ROOT:
         repo_note = (
@@ -80,13 +93,21 @@ def _build_system_prompt(project_root: Path) -> str:
         )
     else:
         repo_note = f"Du arbeitest im Projekt '{project_root.name}' unter {project_root}."
+
+    conventions = _load_git_conventions(project_root)
+    conventions_block = f"\n\nGit-Konventionen für diesen Task:\n{conventions}" if conventions else ""
+
     return (
         "Du bist JARVIS' eigene Coding-Engine, ein autonomer Hintergrund-Task ohne "
         f"Live-Rückfragemöglichkeit an Simon. {repo_note} Du bist bereits auf einem "
         "eigenen Git-Branch (niemals main) ausgecheckt. Halte Änderungen minimal und "
         "exakt auf die gestellte Aufgabe fokussiert — keine Refactorings oder "
         "Zusatzänderungen ohne Auftrag. Committe deine Änderungen nicht selbst, "
-        "das übernimmt die aufrufende Umgebung."
+        "das übernimmt die aufrufende Umgebung — aber beende deine Abschlussantwort "
+        "IMMER mit einem Commit-Message-Vorschlag in genau diesem Format (sonst kann "
+        "die Umgebung deine Änderung nur mit einer generischen Nachricht committen):\n\n"
+        "---COMMIT---\n<typ>: <kurze Zusammenfassung>\n\n<Body: was und warum>\n---END---"
+        f"{conventions_block}"
     )
 
 
@@ -268,15 +289,19 @@ async def _run_task(instruction: str, high_power: bool = False, auto_mode: bool 
         else:
             os.environ.pop("ANTHROPIC_API_KEY", None)
 
-    committed = _finalize_commit(project_root, worktree_path, branch, instruction)
-
     # total_cost_usd ist eine Client-seitige Schätzung des SDK, keine autoritative
     # Abrechnung (siehe Agent-SDK-Doku "Track cost and usage") — für die exakte
     # Rechnung zählt die Anthropic Console, hier nur als Budget-Näherung genutzt.
     cost = (result_message.total_cost_usd or 0.0) if result_message else 0.0
     today_total = _record_spend(cost, branch, instruction)
-    summary = (result_message.result[:400] if result_message and result_message.result else "(keine Zusammenfassung)")
+    # Volle, ungekürzte Agent-Antwort für _build_commit_message() (der ---COMMIT---
+    # Block kann je nach Zusammenfassungslänge erst nach Zeichen 400 stehen) —
+    # summary (für die Notification) wird trotzdem gekürzt.
+    agent_result = result_message.result if result_message and result_message.result else ""
+    summary = agent_result[:400] or "(keine Zusammenfassung)"
     error_note = " ⚠️ mit Fehler/Abbruch beendet" if (result_message and result_message.is_error) else ""
+
+    committed = _finalize_commit(project_root, worktree_path, branch, instruction, agent_result)
 
     pr_url = None
     if committed:
@@ -451,8 +476,8 @@ def _commit_and_push_thread(project_root: Path, label: str, message: str | None)
     if len(detail) > _DETAIL_MAX_CHARS:
         detail = detail[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(detail)} Zeichen insgesamt]"
 
-    commit_msg = message or f"JARVIS: Änderungen in {label}"
-    summary = f"Commit + Push auf {branch} ({label}): {commit_msg[:80]}"
+    commit_msg = _ensure_conventional_prefix(message or f"Änderungen in {label}")
+    summary = f"Commit + Push auf {branch} ({label}): {commit_msg.splitlines()[0][:80]}"
 
     if not _request_approval_sync("CommitAndPush", summary, detail):
         _notify(f"{label}: Commit/Push nicht freigegeben.", priority="normal")
@@ -494,7 +519,61 @@ def _create_worktree(project_root: Path, branch: str) -> Path | None:
         return None
 
 
-def _finalize_commit(project_root: Path, worktree_path: Path, branch: str, instruction: str) -> bool:
+_COMMIT_BLOCK_RE = re.compile(r"---COMMIT---\s*\n(.*?)\n---END---", re.DOTALL)
+
+_TYPE_KEYWORDS = {
+    "fix": ("fix", "behebe", "behoben", "repariere", "bug", "fehler"),
+    "docs": ("dokumentation", "readme", "roadmap", "doku", "kommentar"),
+    "refactor": ("refactor", "umbau", "aufräum", "vereinfach"),
+    "test": ("test", "teste"),
+    "chore": ("abhängigkeit", "dependency", "config", "requirements"),
+}
+
+
+def _heuristic_commit_message(instruction: str) -> str:
+    """Fallback wenn der Agent keinen ---COMMIT----Block geliefert hat (Task
+    vorzeitig abgebrochen o.ä.) — simple Keyword-Suche in der ursprünglichen
+    Aufgabenbeschreibung statt einer echten Zusammenfassung des tatsächlichen
+    Diffs, aber besser als gar kein Typ-Präfix."""
+    lower = instruction.lower()
+    commit_type = "feat"
+    for typ, keywords in _TYPE_KEYWORDS.items():
+        if any(k in lower for k in keywords):
+            commit_type = typ
+            break
+    clean = instruction.strip()
+    subject = clean.splitlines()[0][:72]
+    if len(clean) > len(subject):
+        return f"{commit_type}: {subject}\n\n{clean}"
+    return f"{commit_type}: {subject}"
+
+
+_CONVENTIONAL_PREFIX_RE = re.compile(r"^(feat|fix|docs|refactor|chore|test|style|perf|build)(\([\w.-]+\))?:\s")
+
+
+def _ensure_conventional_prefix(message: str) -> str:
+    """Stellt sicher, dass eine Commit-Message ein Typ-Präfix nach GIT_CONVENTIONS.md
+    hat — für commit_and_push(), wo die Message meist direkt von Simon oder der
+    aufrufenden LLM-Antwort kommt statt von der Coding-Engine selbst generiert zu
+    werden. Bereits vorhandenes Präfix (z.B. Simon diktiert selbst 'fix: ...')
+    bleibt unangetastet."""
+    if _CONVENTIONAL_PREFIX_RE.match(message):
+        return message
+    return _heuristic_commit_message(message)
+
+
+def _build_commit_message(instruction: str, agent_result: str) -> str:
+    """Nutzt den vom Agent selbst vorgeschlagenen ---COMMIT----Block (siehe
+    _build_system_prompt(), GIT_CONVENTIONS.md) wenn vorhanden — der kennt den
+    tatsächlichen Diff, nicht nur die ursprüngliche Aufgabenbeschreibung.
+    Fällt sonst auf eine simple Heuristik zurück."""
+    match = _COMMIT_BLOCK_RE.search(agent_result or "")
+    if match:
+        return match.group(1).strip()
+    return _heuristic_commit_message(instruction)
+
+
+def _finalize_commit(project_root: Path, worktree_path: Path, branch: str, instruction: str, agent_result: str = "") -> bool:
     """Committet Änderungen im Worktree. Räumt den Worktree auf wenn es nichts
     zu committen gab. Gibt zurück ob etwas committet wurde."""
     try:
@@ -508,7 +587,7 @@ def _finalize_commit(project_root: Path, worktree_path: Path, branch: str, instr
 
         subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), check=True)
         subprocess.run(
-            ["git", *_GIT_AUTHOR, "commit", "-m", f"JARVIS: {instruction[:72]}"],
+            ["git", *_GIT_AUTHOR, "commit", "-m", _build_commit_message(instruction, agent_result)],
             cwd=str(worktree_path), check=True, capture_output=True, text=True,
         )
         return True

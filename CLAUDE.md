@@ -204,3 +204,4 @@ Kurzübersicht (Top 3):
 - Neue WebSocket-Typen immer in `protocol.py` als Konstante definieren
 - Brain-Änderungen immer via `brain.write()`, nie direktes SQLite
 - `api_history` wird MIT `history_lock` modifiziert
+- `GIT_CONVENTIONS.md` (Repo-Wurzel) gilt für Commits der Coding-Engine selbst (`delegate_coding_task`/`commit_and_push`) — nicht bindend für Commits von Simon oder Claude Code von Hand. Ein Projekt unter `config.PROJECTS_ROOT` kann eine eigene `GIT_CONVENTIONS.md` in seiner Wurzel anlegen, die dann Vorrang hat.
