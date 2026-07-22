@@ -86,6 +86,10 @@ def _get_db() -> sqlite3.Connection:
     for table in ("todos", "projekte", "kontakte"):
         _ensure_column(conn, table, "notizen", "TEXT")
         _ensure_column(conn, table, "externe_id", "TEXT")
+    # D35/externe Issue-Integration: zusätzliche, nullable Felder für todos —
+    # bestehende Zeilen bleiben unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
+    for column in ("source", "external_id", "repo", "body", "labels"):
+        _ensure_column(conn, "todos", column, "TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seiten (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +117,8 @@ def list_todos(tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
     cutoff = (date.today() - timedelta(days=tage_zurueck)).isoformat()
     conn = _get_db()
     rows = conn.execute(
-        """SELECT id, name, status, datum, prioritaet, bereich, aufwand, notizen, externe_id FROM todos
+        """SELECT id, name, status, datum, prioritaet, bereich, aufwand, notizen, externe_id,
+                  source, external_id, repo, body, labels FROM todos
            WHERE (status IS NULL OR status NOT IN ('Erledigt', 'Archiviert'))
              AND (datum IS NULL OR datum >= ?)
            ORDER BY (datum IS NULL) ASC, datum ASC
@@ -121,19 +126,24 @@ def list_todos(tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
         (cutoff, max_results)
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen", "externe_id"]
+    cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen", "externe_id",
+            "source", "external_id", "repo", "body", "labels"]
     return [dict(zip(cols, r)) for r in rows]
 
 
 def add_todo(name: str, status: str | None = None, datum: str | None = None,
              prioritaet: str | None = None, bereich: str | None = None,
-             aufwand: str | None = None) -> int:
+             aufwand: str | None = None, source: str | None = None,
+             external_id: str | None = None, repo: str | None = None,
+             body: str | None = None, labels: str | None = None) -> int:
     conn = _get_db()
     now = _now()
     cur = conn.execute(
-        """INSERT INTO todos (name, status, datum, prioritaet, bereich, aufwand, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, status or "Nicht begonnen", datum, prioritaet, bereich, aufwand, now, now)
+        """INSERT INTO todos (name, status, datum, prioritaet, bereich, aufwand, created_at, updated_at,
+                               source, external_id, repo, body, labels)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, status or "Nicht begonnen", datum, prioritaet, bereich, aufwand, now, now,
+         source, external_id, repo, body, labels)
     )
     conn.commit()
     todo_id = cur.lastrowid
@@ -142,7 +152,8 @@ def add_todo(name: str, status: str | None = None, datum: str | None = None,
 
 
 def update_todo(todo_id: int, **fields) -> None:
-    allowed = {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen"}
+    allowed = {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
+               "source", "external_id", "repo", "body", "labels"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -296,7 +307,8 @@ def delete_kontakt(kontakt_id: int) -> None:
 
 def query(database: str, search: str | None = None, status: str | None = None, limit: int = 10) -> list[dict]:
     if database == "todos":
-        cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen"]
+        cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
+                "source", "external_id", "repo", "body", "labels"]
         table = "todos"
     elif database == "projekte":
         cols = ["id", "name", "status", "beschreibung", "typ", "notizen"]
@@ -332,7 +344,8 @@ def query(database: str, search: str | None = None, status: str | None = None, l
 def write(database: str, properties: dict) -> int:
     if database == "todos":
         return add_todo(**{k: v for k, v in properties.items()
-                            if k in {"name", "status", "datum", "prioritaet", "bereich", "aufwand"}})
+                            if k in {"name", "status", "datum", "prioritaet", "bereich", "aufwand",
+                                     "source", "external_id", "repo", "body", "labels"}})
     if database == "projekte":
         return add_projekt(**{k: v for k, v in properties.items()
                                if k in {"name", "status", "beschreibung", "typ"}})
