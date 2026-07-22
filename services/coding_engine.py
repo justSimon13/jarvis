@@ -376,6 +376,18 @@ def _sync_main_before_task(project_root: Path) -> None:
     print(f"[coding_engine] {project_root.name}: {result}", flush=True)
 
 
+def _resolve_project(project: str | None) -> tuple[Path, str] | str:
+    """Löst project (Name oder None) zu (project_root, label) auf. Gibt einen
+    str (Fehlermeldung) zurück statt eines Tupels wenn project nicht gefunden
+    wurde — Aufrufer unterscheidet über isinstance()."""
+    if not project:
+        return WORKSPACE_ROOT, "j.a.r.v.i.s.-Server-Repo"
+    candidate = config.PROJECTS_ROOT / project
+    if not (candidate / ".git").is_dir():
+        return f"Projekt '{project}' nicht gefunden unter {config.PROJECTS_ROOT}."
+    return candidate, f"Projekt '{project}'"
+
+
 def sync_project(project: str | None = None) -> str:
     """Von tools.execute() aufgerufen ('sync_project'). Direkter, kostenloser
     Pull-Befehl ohne Coding-Task/LLM-Sub-Session — Simon wollte JARVIS im Chat
@@ -385,15 +397,83 @@ def sync_project(project: str | None = None) -> str:
     für echte Coding-Tasks ohnehin schon automatisch). Läuft synchron, kein
     Freigabe-Dialog nötig — git fetch + --ff-only-pull ist read-mostly und
     rührt nie etwas an, das Checkout-Sauberkeit riskieren würde."""
-    project_root = WORKSPACE_ROOT
-    if project:
-        candidate = config.PROJECTS_ROOT / project
-        if not (candidate / ".git").is_dir():
-            return f"Projekt '{project}' nicht gefunden unter {config.PROJECTS_ROOT}."
-        project_root = candidate
-
-    label = "j.a.r.v.i.s.-Server-Repo" if project_root == WORKSPACE_ROOT else f"Projekt '{project}'"
+    resolved = _resolve_project(project)
+    if isinstance(resolved, str):
+        return resolved
+    project_root, label = resolved
     return f"{label}: {_sync_main(project_root)}"
+
+
+def commit_and_push(project: str | None = None, message: str | None = None) -> str:
+    """Von tools.execute() aufgerufen ('commit_and_push'). Kehrt SOFORT zurück,
+    Freigabe + eigentliche Arbeit läuft im Hintergrund-Thread (gleicher
+    Deadlock-Grund wie create_project: tools.execute() läuft synchron innerhalb
+    der Verbindung, über die später auch die Freigabe-Antwort reinkäme).
+
+    Committet + pusht uncommittete Änderungen DIREKT im Live-Checkout (nicht
+    über einen isolierten Coding-Task-Worktree) — landet damit auch direkt auf
+    dem aktuell ausgecheckten Branch (meist main), OHNE PR-Review-Schritt
+    dazwischen. Die Freigabe-Anfrage zeigt deshalb den vollen Diff — das ist
+    hier die einzige Kontrollinstanz, anders als bei delegate_coding_task's
+    Branch+PR-Flow (2026-07-22: 'Es fehlt auch push' — konkreter Anlass: ein
+    Coding-Task hatte Dateien per Freigabe direkt im Live-Checkout angelegt/
+    geändert statt in seinem Worktree, der PR-Flow griff dafür nicht, die
+    Dateien blieben uncommittet liegen)."""
+    resolved = _resolve_project(project)
+    if isinstance(resolved, str):
+        return resolved
+    project_root, label = resolved
+
+    threading.Thread(target=_commit_and_push_thread, args=(project_root, label, message), daemon=True).start()
+    return f"Ich prüfe kurz was in {label} zu committen ist und frage im Dashboard nach Freigabe — Ergebnis kommt per Notification."
+
+
+def _commit_and_push_thread(project_root: Path, label: str, message: str | None) -> None:
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(project_root), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(project_root), capture_output=True, text=True, check=True,
+        ).stdout
+    except subprocess.CalledProcessError as e:
+        _notify(f"{label}: git-Status konnte nicht ermittelt werden ({e.stderr.strip() if e.stderr else e}).", priority="high")
+        return
+
+    if not status.strip():
+        _notify(f"{label}: Nichts zu committen — Checkout ist bereits sauber.", priority="normal")
+        return
+
+    diff = subprocess.run(["git", "diff", "HEAD"], cwd=str(project_root), capture_output=True, text=True).stdout
+    detail = f"Branch: {branch}\n\nDatei-Status:\n{status}\nDiff:\n{diff or '(keine Textänderungen an bestehenden Dateien — vermutlich nur neue Dateien)'}"
+    if len(detail) > _DETAIL_MAX_CHARS:
+        detail = detail[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(detail)} Zeichen insgesamt]"
+
+    commit_msg = message or f"JARVIS: Änderungen in {label}"
+    summary = f"Commit + Push auf {branch} ({label}): {commit_msg[:80]}"
+
+    if not _request_approval_sync("CommitAndPush", summary, detail):
+        _notify(f"{label}: Commit/Push nicht freigegeben.", priority="normal")
+        return
+
+    try:
+        subprocess.run(["git", "add", "-A"], cwd=str(project_root), check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", *_GIT_AUTHOR, "commit", "-m", commit_msg],
+            cwd=str(project_root), check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "push", "origin", branch],
+            cwd=str(project_root), check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[coding_engine] Commit/Push fehlgeschlagen: {e.stderr}", flush=True)
+        _notify(f"{label}: Commit/Push fehlgeschlagen ({(e.stderr or str(e)).strip()[:200]}).", priority="high")
+        return
+
+    _notify(f"[JARVIS] {label}: committet + gepusht auf {branch}.", priority="high", expires_in_min=1440)
 
 
 def _create_worktree(project_root: Path, branch: str) -> Path | None:

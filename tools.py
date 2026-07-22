@@ -100,6 +100,34 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "commit_and_push",
+        "description": (
+            "Committet uncommittete Änderungen DIREKT im Live-Checkout (nicht über einen isolierten "
+            "Coding-Task-Worktree) und pusht sie sofort zu GitHub — landet damit OHNE PR-Review direkt "
+            "auf dem aktuell ausgecheckten Branch (meist main). Fragt IMMER zuerst eine Freigabe im "
+            "Dashboard mit dem vollen Diff an — das ist hier die einzige Kontrollinstanz. Läuft asynchron "
+            "im Hintergrund — Ergebnis kommt per Notification, nicht in dieser Antwort. Nutzen wenn Simon "
+            "sagt 'push das', 'commit und push', 'schieb das hoch' o.ä. für Änderungen die schon im "
+            "Checkout liegen (z.B. von einem vorherigen Coding-Task der direkt im Live-Checkout "
+            "geschrieben hat, oder von Simon selbst) — NICHT für 'füge X hinzu' o.ä., das ist "
+            "delegate_coding_task."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Name eines mit create_project angelegten Projekts. Weglassen = das j.a.r.v.i.s.-Server-Repo selbst.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Commit-Message (optional, sinnvoller Default falls weggelassen).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "create_project",
         "description": (
             "Legt ein komplett neues Projekt an: GitHub-Repository unter Simons Account PLUS lokaler "
@@ -817,6 +845,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "sync_project":
             return coding_engine.sync_project(tool_input.get("project"))
+
+        if tool_name == "commit_and_push":
+            return coding_engine.commit_and_push(tool_input.get("project"), tool_input.get("message"))
 
         if tool_name == "create_project":
             return coding_engine.create_project(
