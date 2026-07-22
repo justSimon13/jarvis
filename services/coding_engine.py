@@ -323,50 +323,77 @@ def _repo_slug_for(project_root: Path) -> str:
 
 # ── Git (immer über einen isolierten Worktree, nie im Haupt-Checkout) ─────────
 
-def _sync_main_before_task(project_root: Path) -> None:
-    """Holt vor einem neuen Task den aktuellen main-Stand von origin, damit ein
-    frisch gemergter PR (egal ob von Simon selbst oder aus einem vorherigen
-    JARVIS-Task) nicht verpasst wird — sonst würde der neue Task-Worktree vom
-    alten main abzweigen und Simons gerade gemergte Änderung ignorieren
-    (2026-07-22: 'jarvis coded, ich merge PR, danach soll er mit aktuellem
-    main weiter coden können'). Rein informativ/best-effort: rührt project_root
-    NIE an wenn es gerade nicht sauber oder nicht auf main ist (z.B. weil Simon
-    oder Claude Code über den SMB-Mount mittendrin sind) — dann läuft der Task
-    einfach mit dem Stand weiter, der schon da ist, statt irgendwas zu riskieren.
-    Gleiche Grundidee wie scripts/auto_update.sh, hier nur synchron vor dem
-    Task statt per Timer alle 5 Minuten."""
+def _sync_main(project_root: Path) -> str:
+    """Holt --ff-only den aktuellen main-Stand von origin in project_root, wenn
+    das sicher möglich ist. Rührt project_root NIE an wenn es gerade nicht
+    sauber oder nicht auf main ist (z.B. weil Simon oder Claude Code über den
+    SMB-Mount mittendrin sind) — dann einfach der vorhandene Stand, statt
+    irgendwas zu riskieren. Gibt eine kurze, für Menschen lesbare
+    Ergebnismeldung zurück (genutzt sowohl von _sync_main_before_task als
+    stiller Vorab-Schritt als auch von sync_project() als direkte Tool-Antwort
+    an Simon)."""
     try:
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=str(project_root), capture_output=True, text=True, check=True,
         ).stdout.strip()
         if branch != "main":
-            print(f"[coding_engine] {project_root.name}: Checkout nicht auf main (sondern {branch}) — überspringe Pre-Task-Pull.", flush=True)
-            return
+            return f"Checkout ist gerade nicht auf main (sondern {branch}) — kein Pull versucht."
 
         status = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(project_root), capture_output=True, text=True, check=True,
         )
         if status.stdout.strip():
-            print(f"[coding_engine] {project_root.name}: Checkout nicht sauber — überspringe Pre-Task-Pull.", flush=True)
-            return
+            return "Checkout hat gerade uncommittete Änderungen — kein Pull versucht, um nichts zu riskieren."
 
         subprocess.run(["git", "fetch", "origin", "main", "--quiet"], cwd=str(project_root), check=True, capture_output=True, text=True)
         local_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(project_root), capture_output=True, text=True, check=True).stdout.strip()
         remote_rev = subprocess.run(["git", "rev-parse", "origin/main"], cwd=str(project_root), capture_output=True, text=True, check=True).stdout.strip()
         if local_rev == remote_rev:
-            return
+            return f"Bereits aktuell (auf {local_rev[:7]})."
 
         subprocess.run(
             ["git", "pull", "--ff-only", "origin", "main"],
             cwd=str(project_root), check=True, capture_output=True, text=True,
         )
-        print(f"[coding_engine] {project_root.name}: vor Task-Start auf aktuellen main gepullt ({local_rev[:7]} -> {remote_rev[:7]}).", flush=True)
+        return f"Gepullt: {local_rev[:7]} → {remote_rev[:7]}."
     except subprocess.CalledProcessError as e:
-        # Best-effort — z.B. kein Fast-Forward möglich (lokale Historie ist
-        # divergiert). Task läuft trotzdem weiter, nur eben ohne den Pull.
-        print(f"[coding_engine] {project_root.name}: Pre-Task-Pull fehlgeschlagen ({e.stderr.strip() if e.stderr else e}), fahre mit vorhandenem Stand fort.", flush=True)
+        detail = e.stderr.strip() if e.stderr else str(e)
+        return f"Pull fehlgeschlagen: {detail[:200]}"
+
+
+def _sync_main_before_task(project_root: Path) -> None:
+    """Holt vor einem neuen Task den aktuellen main-Stand von origin, damit ein
+    frisch gemergter PR (egal ob von Simon selbst oder aus einem vorherigen
+    JARVIS-Task) nicht verpasst wird — sonst würde der neue Task-Worktree vom
+    alten main abzweigen und Simons gerade gemergte Änderung ignorieren
+    (2026-07-22: 'jarvis coded, ich merge PR, danach soll er mit aktuellem
+    main weiter coden können'). Rein informativ — läuft still im Server-Log,
+    ein fehlgeschlagener Pull bricht den Task nicht ab, er läuft dann einfach
+    mit dem vorhandenen Stand weiter."""
+    result = _sync_main(project_root)
+    print(f"[coding_engine] {project_root.name}: {result}", flush=True)
+
+
+def sync_project(project: str | None = None) -> str:
+    """Von tools.execute() aufgerufen ('sync_project'). Direkter, kostenloser
+    Pull-Befehl ohne Coding-Task/LLM-Sub-Session — Simon wollte JARVIS im Chat
+    direkt 'pull jetzt' sagen können (2026-07-22), ohne dafür Budget für einen
+    ganzen Coding-Task zu verbrennen (der bräuchte eine Agent-SDK-Session nur
+    um am Ende git pull auszuführen — das übernimmt _sync_main_before_task
+    für echte Coding-Tasks ohnehin schon automatisch). Läuft synchron, kein
+    Freigabe-Dialog nötig — git fetch + --ff-only-pull ist read-mostly und
+    rührt nie etwas an, das Checkout-Sauberkeit riskieren würde."""
+    project_root = WORKSPACE_ROOT
+    if project:
+        candidate = config.PROJECTS_ROOT / project
+        if not (candidate / ".git").is_dir():
+            return f"Projekt '{project}' nicht gefunden unter {config.PROJECTS_ROOT}."
+        project_root = candidate
+
+    label = "j.a.r.v.i.s.-Server-Repo" if project_root == WORKSPACE_ROOT else f"Projekt '{project}'"
+    return f"{label}: {_sync_main(project_root)}"
 
 
 def _create_worktree(project_root: Path, branch: str) -> Path | None:

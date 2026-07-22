@@ -78,6 +78,28 @@ DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "sync_project",
+        "description": (
+            "Zieht sofort den aktuellen main-Stand von GitHub (git pull), OHNE einen Coding-Task zu "
+            "starten — schnell und kostenlos, kein LLM-Sub-Aufruf. Rührt den Checkout nur an wenn er "
+            "gerade sauber ist und ein reiner Fast-Forward möglich ist, sonst wird ehrlich gemeldet dass "
+            "gerade nicht gepullt werden konnte. Nutzen wenn Simon fragt 'kannst du pullen?', 'bist du "
+            "aktuell?', 'zieh dir den neuesten Stand' o.ä. — NICHT für 'füge X hinzu' o.ä., das ist "
+            "delegate_coding_task. Vor jedem delegate_coding_task passiert das ohnehin schon automatisch, "
+            "dieses Tool ist nur für den direkten 'pull jetzt'-Wunsch ohne dass gerade ein Task ansteht."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Name eines mit create_project angelegten Projekts. Weglassen = das j.a.r.v.i.s.-Server-Repo selbst.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "create_project",
         "description": (
             "Legt ein komplett neues Projekt an: GitHub-Repository unter Simons Account PLUS lokaler "
@@ -792,6 +814,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
             if not status:
                 return "Es wurde noch nie ein Coding-Task gestartet."
             return json.dumps(status, ensure_ascii=False)
+
+        if tool_name == "sync_project":
+            return coding_engine.sync_project(tool_input.get("project"))
 
         if tool_name == "create_project":
             return coding_engine.create_project(
