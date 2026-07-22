@@ -187,6 +187,18 @@ class JarvisPipeline:
                     self.history.append({"role": "assistant", "content": response})
                     if len(self.history) > 20:
                         del self.history[:-20]
+                else:
+                    # _run_llm ist komplett gescheitert (Timeout/API-Fehler/Exception,
+                    # kein Response-Text) — die oben angehängte User-Nachricht muss
+                    # wieder raus. Sonst hätte der NÄCHSTE Turn zwei aufeinanderfolgende
+                    # "user"-Rollen in der History, was die Anthropic-API generell mit
+                    # "roles must alternate" ablehnt — EIN Timeout hätte damit die
+                    # komplette restliche Session unbrauchbar gemacht, jede weitere
+                    # Nachricht wäre aus genau demselben Grund erneut gescheitert
+                    # (2026-07-22 live beobachtet: "ich laufe immer wieder in diesen
+                    # Timeout, jarvis antwortet dann einfach nicht mehr").
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history.pop()
 
             if turn_cost:
                 try:

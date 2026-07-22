@@ -396,6 +396,20 @@ Fix: `_is_safe_readonly_command()` — eine enge, bewusst konservative Whitelist
 
 ---
 
+## 🔴 Vorfall: EIN Timeout hat die ganze restliche Session unbrauchbar gemacht ✅ behoben
+
+**Symptom:** Simon: *"Ich laufe immer und immer wieder in diesen Timeout und jarvis antwortet dann einfach nicht mehr. Die Session teilt sich dann auch immer an dem Punkt."* Nach dem ersten Timeout-Fix oben (Semaphore-Vorfall) trat der eigentliche, tiefere Bug zutage: der Timeout selbst war schon behoben, aber EIN einziger fehlgeschlagener Call machte trotzdem die komplette restliche Session unbrauchbar — jede folgende Nachricht scheiterte aus demselben Grund erneut, nicht nur einmalig.
+
+**Root Cause:** `pipeline.py:process_text()` hängt die User-Nachricht SOFORT an `self.history` an (Zeile 163), bevor der LLM-Call überhaupt startet. Scheitert `_run_llm()` komplett (Timeout, API-Fehler, jede Exception) und liefert leeren Response + leere `final_messages`, greift weder der `if final_messages:` noch der `elif response:` Zweig — die eben angehängte User-Nachricht bleibt für immer unbeantwortet in `self.history` stehen. Bei der NÄCHSTEN Nachricht hängt sich eine zweite "user"-Rolle direkt dahinter — zwei aufeinanderfolgende "user"-Turns in Folge, was Anthropics API grundsätzlich mit "roles must alternate" ablehnt. Dieser Fehler landet im selben generischen Exception-Handler, hinterlässt also WIEDER eine unbeantwortete User-Nachricht — ein einziger Erst-Fehler pflanzt sich damit unbegrenzt fort, jede weitere Nachricht in derselben Session scheitert aus genau diesem strukturellen Grund, nicht wegen eines wiederkehrenden Netzwerkproblems.
+
+**Fix:** Neuer `else`-Zweig in `process_text()` — schlägt `_run_llm()` komplett fehl (kein `final_messages`, kein `response`), wird die zuvor angehängte User-Nachricht wieder aus `self.history` entfernt (Rollback auf den Vorzustand). Die nächste Nachricht startet damit wieder sauber alternierend, kein Fortpflanzungseffekt mehr.
+
+Lokal mit vier Szenarien verifiziert (eigene `JarvisPipeline`-Instanz, `_run_llm` gemockt): reiner Fehlschlag → History bleibt leer (kein Orphan); normaler Erfolg → sauberes User/Assistant-Paar; Fehlschlag NACH bestehender guter History → nur die neue Nachricht wird zurückgerollt, der Rest bleibt erhalten; Erfolg direkt nach einem Rollback → volle Alternation über den ganzen Verlauf hinweg wiederhergestellt.
+
+**Zur "Session teilt sich"-Beobachtung:** Vermutlich Simons eigener Workaround (manuell "+ Neuer Chat" nach dem Eindruck JARVIS hänge fest) statt eines automatischen Effekts — mit obigem Fix sollte die Ursache dafür aber ohnehin entfallen, ein einzelner Fehlschlag zieht keine Kaskade mehr nach sich.
+
+---
+
 ## 🔴 Web-Tab-Verlauf übersteht jetzt einen Server-Neustart ✅ (2026-07-22)
 
 **Anlass:** Direkte Folge des Semaphore-Vorfalls oben — nach dem Neustart zeigte der offene jarvis-web-Tab weiterhin den alten Chatverlauf (rein clientseitiges Anzeige-Artefakt), aber JARVIS hatte serverseitig keinen Kontext davon mehr. Simon: *"der Chat sollte schon wieder mitgegeben werden"*.
