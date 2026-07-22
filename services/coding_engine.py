@@ -369,11 +369,14 @@ def _create_pull_request(branch: str, instruction: str, worktree_path: Path) -> 
         return None
 
 
-_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Muss mit einem Buchstaben/einer Zahl beginnen — sonst wären Namen wie ".."
+# oder "." gültig (nur erlaubte Zeichen, aber Verzeichnis-Traversal-Risiko für
+# den lokalen Checkout-Pfad unter config.PROJECTS_ROOT).
+_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def create_repo(name: str, description: str = "", private: bool = True) -> str:
-    """Von tools.execute() aufgerufen ('create_github_repo'). Kehrt SOFORT zurück
+def create_project(name: str, description: str = "", private: bool = True) -> str:
+    """Von tools.execute() aufgerufen ('create_project'). Kehrt SOFORT zurück
     und macht die eigentliche Arbeit (Freigabe abwarten, dann anlegen) in einem
     Hintergrund-Thread — analog zu start_task(). Nötig weil tools.execute() hier
     synchron innerhalb von pipeline.process_text() läuft, das server.py per
@@ -383,28 +386,74 @@ def create_repo(name: str, description: str = "", private: bool = True) -> str:
     Bash-Eskalationen der Coding-Engine, die in ihrem eigenen, komplett
     losgelösten Task-Thread laufen."""
     if not config.GITHUB_TOKEN:
-        return "Kein GITHUB_TOKEN konfiguriert — ich kann kein Repo anlegen."
+        return "Kein GITHUB_TOKEN konfiguriert — ich kann kein Projekt anlegen."
 
     if not name or not _REPO_NAME_RE.match(name):
-        return f"Ungültiger Repo-Name '{name}' — erlaubt sind nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich."
+        return f"Ungültiger Projekt-Name '{name}' — erlaubt sind nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich."
 
-    threading.Thread(target=_create_repo_thread, args=(name, description, private), daemon=True).start()
-    return "Ich frage kurz im Dashboard nach, ob ich das Repo anlegen darf — Ergebnis kommt per Notification."
+    if (config.PROJECTS_ROOT / name).exists():
+        return f"Ordner '{name}' existiert unter {config.PROJECTS_ROOT} bereits — anderen Namen wählen."
+
+    threading.Thread(target=_create_project_thread, args=(name, description, private), daemon=True).start()
+    return "Ich frage kurz im Dashboard nach, ob ich das Projekt anlegen darf — Ergebnis kommt per Notification."
 
 
-def _create_repo_thread(name: str, description: str, private: bool) -> None:
+def _create_project_thread(name: str, description: str, private: bool) -> None:
     """Fragt IMMER zuerst Simons Freigabe über denselben Dashboard-Modal-Flow wie
-    riskante Coding-Task-Aktionen — ein neues Repo ist nach außen sichtbar (bei
-    public) und nicht mit einem einfachen Undo rückgängig zu machen, anders als
-    eine einzelne Datei-Änderung (2026-07-22: 'jarvis soll auch repos erstellen')."""
+    riskante Coding-Task-Aktionen — ein neues Projekt ist nach außen sichtbar
+    (GitHub, bei public) und nicht mit einem einfachen Undo rückgängig zu
+    machen (2026-07-22: 'ich will jarvis sagen können, erstell mir Projekt xy').
+    Legt danach GitHub-Repo + lokalen Checkout unter config.PROJECTS_ROOT an —
+    einem festen, begrenzten Ordner, damit JARVIS nirgendwo sonst auf dem
+    Server neue Verzeichnisse anlegen kann."""
+    local_path = config.PROJECTS_ROOT / name
     visibility = "privat" if private else "öffentlich"
-    summary = f"Neues GitHub-Repo anlegen: {name} ({visibility})"
-    detail = f"Name: {name}\nSichtbarkeit: {visibility}\nBeschreibung: {description or '(keine)'}"
-    if not _request_approval_sync("CreateRepo", summary, detail):
-        _notify(f"Repo-Erstellung '{name}' nicht freigegeben.", priority="normal")
+    summary = f"Neues Projekt anlegen: {name} ({visibility})"
+    detail = (
+        f"Name: {name}\nSichtbarkeit: {visibility}\nBeschreibung: {description or '(keine)'}\n"
+        f"Lokal auf dem Server: {local_path}"
+    )
+    if not _request_approval_sync("CreateProject", summary, detail):
+        _notify(f"Projekt-Erstellung '{name}' nicht freigegeben.", priority="normal")
         return
 
-    body = json.dumps({"name": name, "description": description, "private": private}).encode("utf-8")
+    repo = _github_create_repo(name, description, private)
+    if repo is None:
+        _notify(f"Projekt-Erstellung '{name}' fehlgeschlagen — Repo konnte nicht angelegt werden (siehe Server-Log).", priority="high")
+        return
+
+    html_url = repo.get("html_url", "?")
+    clone_url = repo.get("clone_url")
+    if not clone_url:
+        _notify(f"Repo '{name}' erstellt ({html_url}), aber keine clone_url erhalten — lokaler Checkout übersprungen.", priority="high")
+        return
+
+    config.PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    push_url = clone_url.replace("https://", f"https://x-access-token:{config.GITHUB_TOKEN}@")
+    try:
+        subprocess.run(
+            ["git", "clone", push_url, str(local_path)],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[coding_engine] Lokaler Checkout fehlgeschlagen: {e.stderr}", flush=True)
+        _notify(f"Repo '{name}' erstellt ({html_url}), aber lokaler Checkout auf dem Server fehlgeschlagen (siehe Server-Log).", priority="high")
+        return
+    except Exception as e:
+        print(f"[coding_engine] Lokaler Checkout Fehler: {e}", flush=True)
+        _notify(f"Repo '{name}' erstellt ({html_url}), aber lokaler Checkout auf dem Server fehlgeschlagen: {e}", priority="high")
+        return
+
+    _notify(f"[JARVIS] Projekt '{name}' angelegt: {html_url} (lokal: {local_path})", priority="high", expires_in_min=1440)
+
+
+def _github_create_repo(name: str, description: str, private: bool) -> dict | None:
+    """Reine GitHub-API-Erstellung (POST /user/repos), kein lokaler Checkout.
+    auto_init=True, damit das Repo sofort einen initialen Commit hat — ein
+    komplett leeres Repo ließe sich sonst nicht klonen ('repository is empty')."""
+    body = json.dumps({
+        "name": name, "description": description, "private": private, "auto_init": True,
+    }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.github.com/user/repos",
         data=body, method="POST",
@@ -417,16 +466,14 @@ def _create_repo_thread(name: str, description: str, private: bool) -> None:
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            url = data.get("html_url", "?")
-            _notify(f"[JARVIS] Neues Repo angelegt: {url}", priority="high", expires_in_min=1440)
+            return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        err_detail = e.read().decode("utf-8", errors="replace")
-        print(f"[coding_engine] Repo-Erstellung fehlgeschlagen ({e.code}): {err_detail[:300]}", flush=True)
-        _notify(f"Repo-Erstellung '{name}' fehlgeschlagen ({e.code}).", priority="high")
+        detail = e.read().decode("utf-8", errors="replace")
+        print(f"[coding_engine] Repo-Erstellung fehlgeschlagen ({e.code}): {detail[:300]}", flush=True)
+        return None
     except Exception as e:
         print(f"[coding_engine] Repo-Erstellung Fehler: {e}", flush=True)
-        _notify(f"Repo-Erstellung '{name}' fehlgeschlagen: {e}", priority="high")
+        return None
 
 
 # ── Freigabe / Eskalation ──────────────────────────────────────────────────────
@@ -487,10 +534,9 @@ def _request_approval_sync(
     """Blockiert den aufrufenden Thread bis Simon per CODING_APPROVAL_RESPONSE
     antwortet (oder Timeout). Gemeinsamer Kern für _escalate() (aus dem
     can_use_tool-Callback der Coding-Engine heraus, dort per run_in_executor
-    entblockt) UND für einzelne riskante Chat-Tools wie create_repo(), die
-    direkt aus tools.execute() aufgerufen werden — das läuft bereits in
-    server.py's eigenem run_in_executor-Thread, blockierendes Warten ist hier
-    also genauso unproblematisch wie bei jedem anderen synchronen Tool-Call."""
+    entblockt) UND für eigene Hintergrund-Threads wie _create_project_thread —
+    beide blockieren hier jeweils einen eigenen, von server.py's Event-Loop
+    losgelösten Thread, nie den Thread der gerade eine Verbindung bedient."""
     approval_id = str(uuid.uuid4())
     event = threading.Event()
     with _approval_lock:

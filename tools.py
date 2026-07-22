@@ -58,26 +58,27 @@ DEFINITIONS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "create_github_repo",
+        "name": "create_project",
         "description": (
-            "Legt ein neues GitHub-Repository unter Simons Account an. Fragt IMMER zuerst eine "
-            "Freigabe im Dashboard an, bevor das Repo wirklich erstellt wird — Repo-Erstellung ist "
-            "nach außen sichtbar und nicht mit einem einfachen Undo rückgängig zu machen. Läuft "
-            "asynchron im Hintergrund — Ergebnis (erstellt/abgelehnt/Fehler) kommt per Notification, "
-            "nicht in dieser Antwort. Nutzen wenn Simon explizit ein neues Repo/Projekt auf GitHub "
-            "haben möchte (z.B. 'leg mir ein neues Repo an für X'), NICHT für Änderungen in einem "
-            "bestehenden Repo — dafür delegate_coding_task."
+            "Legt ein komplett neues Projekt an: GitHub-Repository unter Simons Account PLUS lokaler "
+            "Checkout auf dem HP-Server, in einem festen, begrenzten Projekte-Ordner (JARVIS kann damit "
+            "keine anderen Ordner auf dem Server anfassen). Fragt IMMER zuerst eine Freigabe im Dashboard "
+            "an — nach außen sichtbar (bei public) und nicht mit einem einfachen Undo rückgängig zu "
+            "machen. Läuft asynchron im Hintergrund — Ergebnis (angelegt/abgelehnt/Fehler) kommt per "
+            "Notification, nicht in dieser Antwort. Nutzen wenn Simon ein komplett neues Projekt starten "
+            "will (z.B. 'erstell mir Projekt XY'), NICHT für Änderungen an einem bestehenden Projekt — "
+            "dafür delegate_coding_task."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Repo-Name — nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich.",
+                    "description": "Projekt-/Repo-Name — nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich.",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Kurzbeschreibung des Repos (optional).",
+                    "description": "Kurzbeschreibung des Projekts (optional).",
                 },
                 "private": {
                     "type": "boolean",
@@ -769,8 +770,8 @@ def execute(tool_name: str, tool_input: dict) -> str:
                 return "Es wurde noch nie ein Coding-Task gestartet."
             return json.dumps(status, ensure_ascii=False)
 
-        if tool_name == "create_github_repo":
-            return coding_engine.create_repo(
+        if tool_name == "create_project":
+            return coding_engine.create_project(
                 tool_input["name"],
                 tool_input.get("description", ""),
                 bool(tool_input.get("private", True)),

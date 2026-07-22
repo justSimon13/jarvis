@@ -332,12 +332,20 @@ JARVIS kann jetzt über ein neues Tool `delegate_coding_task` selbst Code im `j.
 
 Beim Testen gefunden und behoben: fehlende Git-Identität auf dem Server (Commits jetzt mit eigener Identität), gemeinsamer Checkout statt isoliertem Worktree (Sicherheitsrisiko — behoben), `query()` erfordert Streaming-Prompt mit `can_use_tool` (auf `ClaudeSDKClient` umgestellt), `allowed_tools` hebelte `can_use_tool` komplett aus (**Freigabe-System lief bis dahin komplett ins Leere** — behoben durch Entfernen aus `allowed_tools` + `disallowed_tools` für Tools außerhalb des Coding-Scopes), Notification-Rate-Limit kollidierte mit Fortschritts-Updates (Fortschritt läuft jetzt nur noch ins Server-Log). Details → `knowledge/programmierung/jarvis_coding_architektur.md`.
 
+**Erweiterung ✅ (2026-07-22):** Vier Punkte aus Simons Feedback umgesetzt ("checkt selbst nicht wenn er fertig ist", "Notifikation zu schnell weg", "PR wäre sinnvoller als direkt main", "ich will auch sehen was ich akzeptiere"):
+- Fertig-Notification jetzt `priority="high"` (blieb vorher nach 8s unbemerkt weg)
+- Freigabe-Anfrage zeigt jetzt den vollen Inhalt (Diff bei Edit, Dateiinhalt bei Write, Befehl bei Bash) statt nur den Pfad — jarvis-web zeigt das in einem vollen Modal statt kleinem Toast
+- `check_coding_task_status`-Tool — JARVIS kann im Gespräch nachschauen ob/was der letzte Task gemacht hat
+- Echte GitHub-PR-Erstellung (`_create_pull_request`, nutzt `GITHUB_TOKEN`) statt Branch ohne Review
+- Notification-Verlauf (Glocke in jarvis-web, `notification_history`-Resource)
+
+Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lokalen Checkout unter `config.PROJECTS_ROOT` (`~/apps`, gleicher Ort wie der bestehende jarvis-web-Checkout) an, ebenfalls immer mit Freigabe-Pflicht. `delegate_coding_task` bleibt weiterhin exklusiv auf das `j.a.r.v.i.s.`-Repo beschränkt — `create_project` deckt "neues Projekt aufsetzen" ab, nicht "Code in einem bestehenden Fremdprojekt schreiben".
+
 **Noch offen:**
 - Eskalations-Freigabe-Flow noch nicht mit einer tatsächlich riskanten Aktion live getestet (bisherige Tests waren alle unkritisch)
 - Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
-- GitHub-Push/PR-Automation (`GITHUB_TOKEN` bleibt vorerst ungenutzt)
 - Konversationelle Konfigurierbarkeit der Eskalationsregeln
-- Nur `j.a.r.v.i.s.`-Repo als Ziel — dashboard/satellite/web noch nicht angebunden
+- `delegate_coding_task` kann nur im `j.a.r.v.i.s.`-Repo Code schreiben — für neu von `create_project` angelegte oder bestehende Fremd-Projekte (dashboard/satellite/web) noch nicht nutzbar
 - Nur 1 Coding-Task gleichzeitig
 
 ---
