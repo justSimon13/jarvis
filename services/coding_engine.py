@@ -15,6 +15,7 @@ eine Antwort auf CODING_APPROVAL_REQUEST liefert.
 import asyncio
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -368,6 +369,66 @@ def _create_pull_request(branch: str, instruction: str, worktree_path: Path) -> 
         return None
 
 
+_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def create_repo(name: str, description: str = "", private: bool = True) -> str:
+    """Von tools.execute() aufgerufen ('create_github_repo'). Kehrt SOFORT zurück
+    und macht die eigentliche Arbeit (Freigabe abwarten, dann anlegen) in einem
+    Hintergrund-Thread — analog zu start_task(). Nötig weil tools.execute() hier
+    synchron innerhalb von pipeline.process_text() läuft, das server.py per
+    run_in_executor auf genau der Verbindung ausführt, über die später auch die
+    Freigabe-Antwort reinkommt: würde hier blockierend auf die Freigabe gewartet,
+    könnte die Antwort nie ankommen (Deadlock) — anders als bei den Write/Edit/
+    Bash-Eskalationen der Coding-Engine, die in ihrem eigenen, komplett
+    losgelösten Task-Thread laufen."""
+    if not config.GITHUB_TOKEN:
+        return "Kein GITHUB_TOKEN konfiguriert — ich kann kein Repo anlegen."
+
+    if not name or not _REPO_NAME_RE.match(name):
+        return f"Ungültiger Repo-Name '{name}' — erlaubt sind nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich."
+
+    threading.Thread(target=_create_repo_thread, args=(name, description, private), daemon=True).start()
+    return "Ich frage kurz im Dashboard nach, ob ich das Repo anlegen darf — Ergebnis kommt per Notification."
+
+
+def _create_repo_thread(name: str, description: str, private: bool) -> None:
+    """Fragt IMMER zuerst Simons Freigabe über denselben Dashboard-Modal-Flow wie
+    riskante Coding-Task-Aktionen — ein neues Repo ist nach außen sichtbar (bei
+    public) und nicht mit einem einfachen Undo rückgängig zu machen, anders als
+    eine einzelne Datei-Änderung (2026-07-22: 'jarvis soll auch repos erstellen')."""
+    visibility = "privat" if private else "öffentlich"
+    summary = f"Neues GitHub-Repo anlegen: {name} ({visibility})"
+    detail = f"Name: {name}\nSichtbarkeit: {visibility}\nBeschreibung: {description or '(keine)'}"
+    if not _request_approval_sync("CreateRepo", summary, detail):
+        _notify(f"Repo-Erstellung '{name}' nicht freigegeben.", priority="normal")
+        return
+
+    body = json.dumps({"name": name, "description": description, "private": private}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.github.com/user/repos",
+        data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {config.GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            url = data.get("html_url", "?")
+            _notify(f"[JARVIS] Neues Repo angelegt: {url}", priority="high", expires_in_min=1440)
+    except urllib.error.HTTPError as e:
+        err_detail = e.read().decode("utf-8", errors="replace")
+        print(f"[coding_engine] Repo-Erstellung fehlgeschlagen ({e.code}): {err_detail[:300]}", flush=True)
+        _notify(f"Repo-Erstellung '{name}' fehlgeschlagen ({e.code}).", priority="high")
+    except Exception as e:
+        print(f"[coding_engine] Repo-Erstellung Fehler: {e}", flush=True)
+        _notify(f"Repo-Erstellung '{name}' fehlgeschlagen: {e}", priority="high")
+
+
 # ── Freigabe / Eskalation ──────────────────────────────────────────────────────
 
 def _make_can_use_tool(workspace_root: Path):
@@ -412,18 +473,32 @@ def _is_risky(tool_name: str, input_data: dict, workspace_root: Path) -> bool:
 
 
 async def _escalate(tool_name: str, input_data: dict) -> bool:
+    summary = _describe_action(tool_name, input_data)
+    detail = _detail_for_action(tool_name, input_data)
+    file_path = input_data.get("file_path") if tool_name in ("Write", "Edit") else None
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _request_approval_sync, tool_name, summary, detail, file_path)
+
+
+def _request_approval_sync(
+    tool_name: str, summary: str, detail: str, file_path: str | None = None,
+    timeout: float = _APPROVAL_TIMEOUT_SEC,
+) -> bool:
+    """Blockiert den aufrufenden Thread bis Simon per CODING_APPROVAL_RESPONSE
+    antwortet (oder Timeout). Gemeinsamer Kern für _escalate() (aus dem
+    can_use_tool-Callback der Coding-Engine heraus, dort per run_in_executor
+    entblockt) UND für einzelne riskante Chat-Tools wie create_repo(), die
+    direkt aus tools.execute() aufgerufen werden — das läuft bereits in
+    server.py's eigenem run_in_executor-Thread, blockierendes Warten ist hier
+    also genauso unproblematisch wie bei jedem anderen synchronen Tool-Call."""
     approval_id = str(uuid.uuid4())
     event = threading.Event()
     with _approval_lock:
         _pending_events[approval_id] = event
 
-    summary = _describe_action(tool_name, input_data)
-    detail = _detail_for_action(tool_name, input_data)
-    file_path = input_data.get("file_path") if tool_name in ("Write", "Edit") else None
     _push_approval_request(approval_id, tool_name, summary, detail, file_path)
 
-    loop = asyncio.get_running_loop()
-    got_response = await loop.run_in_executor(None, event.wait, _APPROVAL_TIMEOUT_SEC)
+    got_response = event.wait(timeout)
 
     with _approval_lock:
         decision = _pending_decisions.pop(approval_id, False)
