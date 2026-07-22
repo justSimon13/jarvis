@@ -27,6 +27,7 @@ JARVIS_SERVER = os.getenv("JARVIS_SERVER", "")  # z.B. "ws://100.x.x.x:8765" —
 
 VERSION = "1.2.0"
 GITHUB_REPO = "justSimon13/jarvis"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")  # für PR-Erstellung durch die Coding-Engine (services/coding_engine.py)
 
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)

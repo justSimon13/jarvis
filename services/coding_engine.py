@@ -18,6 +18,8 @@ import os
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -226,8 +228,13 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
     summary = (result_message.result[:400] if result_message and result_message.result else "(keine Zusammenfassung)")
     error_note = " ⚠️ mit Fehler/Abbruch beendet" if (result_message and result_message.is_error) else ""
 
+    pr_url = None
     if committed:
-        location_note = f"Branch {branch} (Worktree: {worktree_path})"
+        pr_url = _create_pull_request(branch, instruction, worktree_path)
+        if pr_url:
+            location_note = f"PR erstellt: {pr_url}"
+        else:
+            location_note = f"Branch {branch} (Worktree: {worktree_path}) — kein PR (siehe Server-Log)"
     else:
         location_note = f"Branch {branch} — keine Änderungen, Worktree wieder entfernt"
 
@@ -239,7 +246,10 @@ async def _run_task(instruction: str, high_power: bool = False) -> None:
         # verpasst, ist genau so schlimm wie gar keine (2026-07-22 gemeldet).
         priority="high", expires_in_min=1440,
     )
-    _set_status(active=False, last_action="Fertig" if not error_note else "Fehler/Abbruch")
+    _set_status(
+        active=False, last_action="Fertig" if not error_note else "Fehler/Abbruch",
+        pr_url=pr_url,
+    )
 
 
 def _build_prompt(instruction: str) -> str:
@@ -307,6 +317,57 @@ def _remove_worktree(worktree_path: Path, branch: str, delete_branch: bool = Fal
         print(f"[coding_engine] Worktree-Cleanup Fehler: {e.stderr}", flush=True)
 
 
+def _create_pull_request(branch: str, instruction: str, worktree_path: Path) -> str | None:
+    """Pusht den Branch und legt einen echten GitHub-PR an. Committet wird weiterhin
+    ohne Rückfrage (wie bisher) — aber damit die Arbeit nicht einfach auf einem lokalen
+    Branch liegen bleibt, den niemand mehr anschaut, braucht der Merge nach main jetzt
+    Simons bewusste Aktion (PR annehmen). Push nutzt GITHUB_TOKEN direkt in der URL statt
+    sich auf eine vorhandene Git-Credential-Konfiguration zu verlassen. Gibt die PR-URL
+    zurück, oder None wenn kein Token gesetzt ist oder Push/PR fehlschlägt (Ergebnis bleibt
+    dann trotzdem auf dem Branch erhalten, nur ohne PR — kein Datenverlust)."""
+    if not config.GITHUB_TOKEN:
+        print("[coding_engine] Kein GITHUB_TOKEN gesetzt — kein PR, Branch bleibt lokal.", flush=True)
+        return None
+
+    push_url = f"https://x-access-token:{config.GITHUB_TOKEN}@github.com/{config.GITHUB_REPO}.git"
+    try:
+        subprocess.run(
+            ["git", "push", push_url, f"{branch}:{branch}"],
+            cwd=str(worktree_path), check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[coding_engine] Push-Fehler: {e.stderr}", flush=True)
+        return None
+
+    body = json.dumps({
+        "title": f"JARVIS: {instruction[:72]}",
+        "head": branch,
+        "base": "main",
+        "body": f"Automatisch von JARVIS' Coding-Engine erstellt.\n\n**Aufgabe:**\n{instruction}",
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{config.GITHUB_REPO}/pulls",
+        data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {config.GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("html_url")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        print(f"[coding_engine] PR-Erstellung fehlgeschlagen ({e.code}): {detail[:300]}", flush=True)
+        return None
+    except Exception as e:
+        print(f"[coding_engine] PR-Erstellung Fehler: {e}", flush=True)
+        return None
+
+
 # ── Freigabe / Eskalation ──────────────────────────────────────────────────────
 
 def _make_can_use_tool(workspace_root: Path):
@@ -357,7 +418,9 @@ async def _escalate(tool_name: str, input_data: dict) -> bool:
         _pending_events[approval_id] = event
 
     summary = _describe_action(tool_name, input_data)
-    _push_approval_request(approval_id, summary)
+    detail = _detail_for_action(tool_name, input_data)
+    file_path = input_data.get("file_path") if tool_name in ("Write", "Edit") else None
+    _push_approval_request(approval_id, tool_name, summary, detail, file_path)
 
     loop = asyncio.get_running_loop()
     got_response = await loop.run_in_executor(None, event.wait, _APPROVAL_TIMEOUT_SEC)
@@ -380,13 +443,46 @@ def _describe_action(tool_name: str, input_data: dict) -> str:
     return f"{tool_name}: {json.dumps(input_data, ensure_ascii=False)[:200]}"
 
 
-def _push_approval_request(approval_id: str, summary: str) -> None:
+_DETAIL_MAX_CHARS = 4000  # großzügig genug zum wirklich Lesen, aber kein Mega-Payload
+
+
+def _detail_for_action(tool_name: str, input_data: dict) -> str:
+    """Der eigentliche Inhalt, den Simon vor dem Freigeben sehen soll — bisher
+    zeigte die Freigabe-Anfrage nur den Dateipfad, nicht was reingeschrieben wird
+    (2026-07-22 gemeldet: 'ich will auch sehen was ich akzeptiere')."""
+    if tool_name == "Write":
+        content = input_data.get("content", "")
+        if len(content) > _DETAIL_MAX_CHARS:
+            content = content[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(content)} Zeichen insgesamt]"
+        return content or "(leerer Inhalt)"
+
+    if tool_name == "Edit":
+        old = input_data.get("old_string", "")
+        new = input_data.get("new_string", "")
+        detail = f"− ALT:\n{old}\n\n+ NEU:\n{new}"
+        if len(detail) > _DETAIL_MAX_CHARS:
+            detail = detail[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(detail)} Zeichen insgesamt]"
+        return detail
+
+    if tool_name == "Bash":
+        command = input_data.get("command", "")
+        if len(command) > _DETAIL_MAX_CHARS:
+            command = command[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(command)} Zeichen insgesamt]"
+        return command or "(kein Befehl)"
+
+    return json.dumps(input_data, ensure_ascii=False, indent=2)[:_DETAIL_MAX_CHARS]
+
+
+def _push_approval_request(approval_id: str, tool_name: str, summary: str, detail: str, file_path: str | None) -> None:
     if not _manager:
         return
     payload = {
         "type": P.CODING_APPROVAL_REQUEST,
         "id": approval_id,
         "text": f"JARVIS möchte: {summary} — freigeben?",
+        "tool_name": tool_name,
+        "file_path": file_path,
+        "detail": detail,
     }
     for cb, _mode in _manager.get_dashboard_event_callbacks():
         try:
