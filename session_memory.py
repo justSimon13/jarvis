@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime
@@ -70,6 +71,16 @@ def _extract_text(content) -> str:
         return text
     kinds = sorted({b.get("type") for b in content if isinstance(b, dict) and b.get("type")})
     return f"[{', '.join(kinds)}]" if kinds else ""
+
+
+_PLACEHOLDER_RE = re.compile(r"^\[[a-z_]+(?:, [a-z_]+)*\]$")
+
+
+def is_placeholder_text(text: str) -> bool:
+    """True für die von _extract_text() erzeugten Platzhalter (z.B. '[tool_result]') —
+    kein echter Gesprächsinhalt. Beim Session-Restore darf daraus keine Chat-Blase
+    werden (2026-07-23: Simon sah '[tool_result]' als eigene Nachricht im Chat)."""
+    return bool(_PLACEHOLDER_RE.match(text))
 
 
 def _first_user_message(history: list[dict]) -> str:

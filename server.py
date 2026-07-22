@@ -696,8 +696,13 @@ async def handle_connection(websocket):
                 if not text:
                     continue
                 role_ = msg.get("role")
+                # api_hist braucht den Eintrag auch bei einem reinen Tool-Platzhalter
+                # (sonst bricht die Rollen-Abwechslung beim nächsten LLM-Call), aber
+                # disp_hist zeigt sowas nie als eigene Chat-Blase — Platzhalter wie
+                # "[tool_result]" waren nie echter Gesprächsinhalt.
                 api_hist.append({"role": role_, "content": text})
-                disp_hist.append({"role": role_, "content": text, "client": "jarvis-web"})
+                if not session_memory.is_placeholder_text(text):
+                    disp_hist.append({"role": role_, "content": text, "client": "jarvis-web"})
             _set_active_session_id(tab_id, restored["id"])
             print(f"[server] Web-Tab {tab_id[:8]}: {len(api_hist)} Nachrichten aus Session {restored['id']} wiederhergestellt.", flush=True)
 

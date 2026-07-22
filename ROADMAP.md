@@ -445,6 +445,18 @@ Lokal mit einer Test-DB verifiziert: INSERT mit tab_id → UPDATE ohne tab_id (b
 
 ---
 
+## 🔴 Vorfall: "[tool_result]" erschien als eigene Chat-Blase ✅ behoben (2026-07-23)
+
+**Anlass:** Direkte Nachwirkung des Historie-Truncation-Fixes weiter oben (`_extract_text()` gibt seitdem statt `""` einen Platzhalter wie `"[tool_result]"` zurück, damit tool-lastige Turns nicht mehr spurlos verschwinden). Simon zeigte einen Screenshot aus jarvis-web: nach einer normalen Nachricht ("ok") erschienen zwei weitere Chat-Blasen mit dem wörtlichen Text `[tool_result]` — als hätte er das selbst geschrieben.
+
+**Root Cause:** Der Web-Tab-Restore-Codepfad (siehe Abschnitt oben) verwendet denselben `transcript`-Text aus `sessions.db` für ZWEI verschiedene Zwecke gleichzeitig: `api_hist` (LLM-Kontext, muss auch Platzhalter behalten, sonst bricht die Rollen-Abwechslung beim nächsten Anthropic-Call) und `disp_hist` (die eigentliche Chat-Ansicht, wo ein Platzhalter wie `[tool_result]` nie echter Gesprächsinhalt war — live wurden Tool-Aufrufe nie als Text-Blase gerendert, sondern über einen eigenen `tool`-Nachrichtentyp).
+
+**Fix:** Neue Funktion `session_memory.is_placeholder_text(text)` (Regex gegen das von `_extract_text()` erzeugte `[typ, typ]`-Format). Der Restore-Loop in `server.py` schreibt Platzhalter weiterhin in `api_hist`, überspringt sie aber beim Aufbau von `disp_hist`.
+
+Lokal verifiziert: `is_placeholder_text()` erkennt `"[tool_result]"`/`"[tool_use, tool_result]"` korrekt, lässt echten Text (auch mit eckigen Klammern im Inhalt) unangetastet.
+
+---
+
 ## 🔴 Fehlendes Tool: Unterseiten anlegen/bearbeiten ✅ behoben
 
 **Anlass:** Simon zeigte einen Chat-Ausschnitt (Tauri-Desktop-App) — JARVIS behauptete, ein PRD "in Notion" dokumentiert zu haben. Notion existiert in diesem System seit der Ablösung am 2026-07-19 nicht mehr, keine Zeile Code, kein Tool, keine Erwähnung irgendwo im Live-Kontext (geprüft: keine Wissensdatenbank-Treffer, keine Notion-Referenz in irgendeinem Code-Pfad den JARVIS während eines Gesprächs tatsächlich lädt — nur historische Migrations-Doku/Einmal-Skripte, die nie in den System-Prompt geladen werden). Auf Nachfrage gab JARVIS selbst zu: *"Das war meine Annahme, sorry"* — eine Konfabulation ohne erkennbare technische Ursache, vermutlich weil "Doku schreiben" im Trainingsdatensatz stark mit Notion assoziiert ist.
