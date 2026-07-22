@@ -22,7 +22,16 @@ _PRICE_PER_M_CACHE_READ = _PRICE_PER_M_INPUT * 0.10
 def _get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        # Explizites Timeout — ohne das kann ein einzelner hängender Call (Netzwerk-
+        # Stall, API-Problem) den globalen llm_semaphore (server.py, Semaphore(1) für
+        # ALLE Clients) auf unbestimmte Zeit blockieren: die pipeline.py-Fehlerbehandlung
+        # rund um llm.stream() fängt zwar jede Exception ab und gibt den Semaphore
+        # wieder frei, aber nur wenn überhaupt eine Exception kommt — ohne Timeout
+        # wartet der SDK-Default (deutlich länger, im Zweifel unbrauchbar lang für
+        # einen Chat) einfach weiter, und in der Zwischenzeit hängt der komplette
+        # Server für jeden Client fest (2026-07-22 live beobachtet: Chat reagierte
+        # nach einem laufenden Coding-Task minutenlang gar nicht mehr).
+        _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=120.0)
     return _client
 
 

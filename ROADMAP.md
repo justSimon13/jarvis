@@ -365,6 +365,18 @@ Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lo
 
 ---
 
+## 🔴 Vorfall: Chat komplett eingefroren (2026-07-22) ✅ behoben
+
+**Symptom:** Während ein Coding-Task lief, blieb der Chat für JARVIS-web irgendwann komplett stumm — Nachricht kam an (`[context] Module geladen` im Log), aber nie eine Antwort, kein Fehler, keine Notification. WebSocket-Verbindung blieb dabei "verbunden" (grüner Punkt), war also kein Verbindungsproblem.
+
+**Root Cause:** `server.py`s `llm_semaphore = threading.Semaphore(1)` ist global und wird von JEDER Chat-Nachricht (`pipeline.py: with self._llm_semaphore:`) geteilt — pro Prozess kann nur ein LLM-Call gleichzeitig laufen (FIFO). `llm.py`s Anthropic-Client hatte aber **kein explizites Timeout** — SDK-Default ist `read=600s` (10 Minuten!). Ein einzelner hängender Call (Netzwerk-Stall) hätte also bis zu 10 Minuten lang den globalen Semaphore blockiert — für JEDEN Client, nicht nur den betroffenen. `pipeline.py`s Fehlerbehandlung um `llm.stream()` fängt zwar jede Exception ab und gibt den Semaphore korrekt wieder frei, aber eben nur wenn überhaupt eine Exception kommt — bei einem reinen Hänger ohne Exception half das nichts.
+
+**Fix:** `llm._get_client()` setzt jetzt `timeout=120.0` beim Anthropic-Client — ein hängender Call scheitert jetzt spätestens nach 2 statt bis zu 10 Minuten, `pipeline.py`s bestehende Fehlerbehandlung greift dann normal (Semaphore wird frei, Simon bekommt eine Fehlermeldung statt ewiger Stille). Verifiziert: `anthropic==0.117.1`s SDK-Default ist exakt `Timeout(connect=5.0, read=600, write=600, pool=600)` — bestätigt den Verdacht direkt.
+
+**Noch offen:** Der globale `Semaphore(1)` selbst bleibt ein Single Point of Failure für Verzögerungen (ein langsamer Call blockt weiterhin alle anderen Clients, nur eben nicht mehr unbegrenzt lang) — für später denkbar: pro-Client-Semaphore statt global, oder ein Health-Check/Watchdog der einen festhängenden `_llm_semaphore` erkennt und den Prozess automatisch neu startet.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
