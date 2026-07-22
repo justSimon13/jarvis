@@ -475,7 +475,8 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
 
 
 _ENTITY_FIELDS = {
-    "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen"},
+    "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
+                     "source", "external_id", "repo", "body", "labels"},
     "projekte":     {"name", "status", "beschreibung", "typ", "notizen"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
