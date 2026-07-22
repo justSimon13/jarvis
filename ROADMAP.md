@@ -377,6 +377,22 @@ Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lo
 
 ---
 
+## 🔴 Web-Tab-Verlauf übersteht jetzt einen Server-Neustart ✅ (2026-07-22)
+
+**Anlass:** Direkte Folge des Semaphore-Vorfalls oben — nach dem Neustart zeigte der offene jarvis-web-Tab weiterhin den alten Chatverlauf (rein clientseitiges Anzeige-Artefakt), aber JARVIS hatte serverseitig keinen Kontext davon mehr. Simon: *"der Chat sollte schon wieder mitgegeben werden"*.
+
+**Root Cause:** `api_histories["web"]` ist pro Tab isoliert (`dict[tab_id, list]`), aber rein in-memory — ein Neustart löscht das komplett. Der laufend geschriebene Verlauf in `sessions.db` (`session_memory.upsert()`, seit 2026-07-20 für genau solche Fälle gedacht) hatte bisher **keine tab_id-Spalte** — es gab also keine Möglichkeit, eine wiederverbindende `tab_id` einer bestehenden Zeile zuzuordnen. Kommentar im Code von damals ("web hat keine stabile Identität über einen Neustart hinweg") war zu dem Zeitpunkt noch bewusst — jetzt behoben.
+
+**Fix:**
+- `sessions`-Tabelle bekommt eine `tab_id`-Spalte (Migration wie die anderen Spalten via `ALTER TABLE` + try/except).
+- `upsert()` setzt `tab_id` NUR beim allerersten INSERT einer neuen Zeile, rührt sie bei späteren UPDATEs nie wieder an — bestehende Aufrufstellen (SESSION_RESET/SESSION_LOAD/Shutdown), die kein `tab_id` mitgeben, überschreiben dadurch nichts versehentlich mit `None`.
+- Neue Funktion `session_memory.find_active_session(tab_id)` — findet die zuletzt aktualisierte Zeile für eine gegebene `tab_id`.
+- `handle_connection()` in `server.py`: wenn ein Web-Tab mit einer dem Prozess noch unbekannten `tab_id` verbindet (Neustart-Fall, aber auch ein einfacher Page-Reload trifft denselben Codepfad), wird `find_active_session()` aufgerufen und der Verlauf direkt in `api_histories`/`display_histories` zurückgeschrieben, bevor die Pipeline konstruiert wird — JARVIS hat den Kontext dann sofort wieder, ohne dass Simon "Verlauf laden" anklicken muss.
+
+Lokal mit einer Test-DB verifiziert: INSERT mit tab_id → UPDATE ohne tab_id (bleibt erhalten) → `find_active_session()` findet die richtige Zeile mit vollem Transcript, unbekannte tab_id gibt `None`.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

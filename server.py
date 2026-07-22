@@ -220,7 +220,7 @@ def _persist_web_turn(loop, tab_id: str):
     sid = _get_active_session_id(tab_id)
 
     def _do():
-        return session_memory.upsert(sid, hist_snapshot, clients=clients_snapshot, category="web", finalize=False)
+        return session_memory.upsert(sid, hist_snapshot, clients=clients_snapshot, category="web", finalize=False, tab_id=tab_id)
 
     async def _run():
         new_sid = await loop.run_in_executor(None, _do)
@@ -680,6 +680,27 @@ async def handle_connection(websocket):
     # Erst jetzt ist die Kategorie bekannt — Pipeline bekommt die passende History
     # zugewiesen (vorher konstruiert hätte sie fälschlich immer "voice" bekommen).
     category = _category_for_role(role)
+
+    # Web-Tab reconnected mit einer tab_id, die der Prozess noch nicht kennt (z.B.
+    # nach einem Server-Neustart) — Verlauf aus sessions.db zurückholen, statt bei
+    # null anzufangen. Der Tab hatte bisher über einen Neustart hinweg keine stabile
+    # Identität, obwohl der Verlauf durch die laufenden Upserts längst in der DB lag
+    # (2026-07-22: 'der Chat sollte schon wieder mitgegeben werden').
+    if category == "web" and tab_id not in api_histories["web"]:
+        restored = session_memory.find_active_session(tab_id)
+        if restored:
+            api_hist = _get_api_history(category, tab_id)
+            disp_hist = _get_display_history(category, tab_id)
+            for msg in restored["transcript"]:
+                text = msg.get("text", "")
+                if not text:
+                    continue
+                role_ = msg.get("role")
+                api_hist.append({"role": role_, "content": text})
+                disp_hist.append({"role": role_, "content": text, "client": "jarvis-web"})
+            _set_active_session_id(tab_id, restored["id"])
+            print(f"[server] Web-Tab {tab_id[:8]}: {len(api_hist)} Nachrichten aus Session {restored['id']} wiederhergestellt.", flush=True)
+
     pipeline = JarvisPipeline(
         client_id=client_id,
         on_event=send_json,

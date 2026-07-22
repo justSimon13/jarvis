@@ -46,6 +46,11 @@ def _get_db() -> sqlite3.Connection:
         conn.commit()
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN tab_id TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -117,7 +122,7 @@ def save(history: list[dict], clients: list[str] | None = None, category: str | 
 
 
 def upsert(session_id: int | None, history: list[dict], clients: list[str] | None = None,
-           category: str | None = None, finalize: bool = False) -> int | None:
+           category: str | None = None, finalize: bool = False, tab_id: str | None = None) -> int | None:
     """Wie save(), aber schreibt bei jeder Nachricht durch statt erst beim Verbindungsende
     — sonst geht eine Konversation komplett verloren, wenn z.B. ein Browser-Tab einfach
     geschlossen wird, ohne dass ein Neustart oder "+ Neuer Chat" je einen Save auslöst
@@ -126,6 +131,14 @@ def upsert(session_id: int | None, history: list[dict], clients: list[str] | Non
     session_id=None → legt eine neue Zeile an (Titel = erste User-Nachricht), sonst wird
     die bestehende Zeile aktualisiert (Titel bleibt). Gibt die (neue oder bestehende)
     session_id zurück — vom Aufrufer zu merken und beim nächsten Aufruf wieder mitzugeben.
+
+    tab_id wird NUR beim Anlegen der Zeile (session_id=None) gesetzt und danach nie wieder
+    verändert — spätere upsert()-Aufrufe für dieselbe Zeile müssen tab_id nicht mitgeben.
+    Ermöglicht find_active_session(): einen wiederverbindenden Web-Tab nach einem
+    Server-Neustart an seiner letzten Zeile wiederzuerkennen (2026-07-22: 'der Chat
+    sollte schon wieder mitgegeben werden' — vorher hatte ein Web-Tab über einen
+    Neustart hinweg keine stabile Identität, jede neue Verbindung fing bei null an,
+    obwohl der Verlauf die ganze Zeit schon in sessions.db lag).
 
     finalize=True stößt zusätzlich die Lernextraktion an — NUR bei echtem Abschluss
     (Session-Reset, Session-Wechsel, Shutdown), nicht bei jedem Zwischen-Save, sonst
@@ -158,8 +171,8 @@ def upsert(session_id: int | None, history: list[dict], clients: list[str] | Non
         if session_id is None:
             title = _first_user_message(history)
             cur = conn.execute(
-                "INSERT INTO sessions (date, time, title, transcript, clients, category) VALUES (?, ?, ?, ?, ?, ?)",
-                (now.date().isoformat(), now.strftime("%H:%M"), title, transcript_json, clients_json, category)
+                "INSERT INTO sessions (date, time, title, transcript, clients, category, tab_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now.date().isoformat(), now.strftime("%H:%M"), title, transcript_json, clients_json, category, tab_id)
             )
             session_id = cur.lastrowid
         else:
@@ -177,6 +190,24 @@ def upsert(session_id: int | None, history: list[dict], clients: list[str] | Non
             print(f"[session] Learning-Start Fehler: {e}", flush=True)
 
     return session_id
+
+
+def find_active_session(tab_id: str) -> dict | None:
+    """Für die Wiederherstellung eines Web-Tabs nach einem Server-Neustart: findet
+    die zuletzt aktualisierte Session-Zeile für genau diesen tab_id. Gibt {"id",
+    "transcript"} zurück (transcript = Liste von {"role", "text"}, wie von upsert()
+    gespeichert) oder None wenn keine Zeile existiert."""
+    try:
+        with _get_db() as conn:
+            row = conn.execute(
+                "SELECT id, transcript FROM sessions WHERE tab_id = ? ORDER BY id DESC LIMIT 1",
+                (tab_id,),
+            ).fetchone()
+        if row and row[1]:
+            return {"id": row[0], "transcript": json.loads(row[1])}
+    except Exception as e:
+        print(f"[session] find_active_session Fehler: {e}", flush=True)
+    return None
 
 
 def list_sessions(limit: int = 30) -> list[dict]:
