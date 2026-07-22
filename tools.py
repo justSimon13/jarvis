@@ -128,6 +128,36 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "run_command",
+        "description": (
+            "Führt einen beliebigen Shell-Befehl auf dem HP-Server aus — für alles, wofür es kein "
+            "dediziertes Tool gibt (Logs prüfen, Speicherplatz checken, einen anderen Service neu "
+            "starten, ein Paket installieren, etc.). Fragt IMMER zuerst eine Freigabe im Dashboard mit "
+            "dem vollen Befehl an, bevor irgendwas ausgeführt wird — das ist hier die einzige "
+            "Kontrollinstanz, da sich bei einem beliebigen Befehl keine engere Grenze ziehen lässt. "
+            "Läuft asynchron im Hintergrund — Ergebnis (Ausgabe/Exit-Code) kommt per Notification, nicht "
+            "in dieser Antwort. WICHTIG: sudo-Befehle funktionieren nur wenn vorher eine passende "
+            "NOPASSWD-sudoers-Regel eingerichtet wurde (sonst Timeout, da niemand ein Passwort eingeben "
+            "kann) — bei 'permission denied'/Timeout bei sudo-Befehlen Simon genau das erklären. NICHT "
+            "nutzen für Dinge mit eigenem Tool: pullen → sync_project, committen+pushen → "
+            "commit_and_push, programmieren → delegate_coding_task, Projekt/Repo anlegen → create_project."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Der auszuführende Shell-Befehl (vollständig, inkl. Pipes/Flags falls nötig).",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Arbeitsverzeichnis (absoluter Pfad). Weglassen = das j.a.r.v.i.s.-Server-Repo.",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+    {
         "name": "create_project",
         "description": (
             "Legt ein komplett neues Projekt an: GitHub-Repository unter Simons Account PLUS lokaler "
@@ -848,6 +878,9 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "commit_and_push":
             return coding_engine.commit_and_push(tool_input.get("project"), tool_input.get("message"))
+
+        if tool_name == "run_command":
+            return coding_engine.run_command(tool_input["command"], tool_input.get("cwd"))
 
         if tool_name == "create_project":
             return coding_engine.create_project(

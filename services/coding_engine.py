@@ -501,6 +501,64 @@ def _commit_and_push_thread(project_root: Path, label: str, message: str | None)
     _notify(f"[JARVIS] {label}: committet + gepusht auf {branch}.", priority="high", expires_in_min=1440)
 
 
+_RUN_COMMAND_TIMEOUT_SEC = 120
+_RUN_COMMAND_OUTPUT_MAX_CHARS = 800
+
+
+def run_command(command: str, cwd: str | None = None) -> str:
+    """Von tools.execute() aufgerufen ('run_command'). Führt einen beliebigen
+    Shell-Befehl auf dem Server aus — IMMER erst nach Freigabe (voller Befehl im
+    Dialog), da sich hier keine sinnvolle Grenze wie bei create_project/
+    commit_and_push ziehen lässt (ein Befehl kann buchstäblich alles sein).
+    Kein sudo ohne vorher eingerichtete NOPASSWD-Regel (siehe
+    install_auto_update.sh für das Muster) — läuft sonst einfach in einen
+    Passwort-Prompt, der nie beantwortet wird, und danach in den Timeout.
+
+    Kehrt SOFORT zurück, Freigabe + Ausführung laufen im Hintergrund-Thread
+    (gleicher Deadlock-Grund wie create_project: tools.execute() läuft
+    synchron auf der Verbindung, über die später die Freigabe-Antwort
+    reinkäme). Anlass (2026-07-22): 'Es nervt mich gerade immer für jarvis
+    etwas auf dem HP Server auszuführen. Das soll JARVIS selbst können.'"""
+    if not command or not command.strip():
+        return "Kein Befehl angegeben."
+    threading.Thread(target=_run_command_thread, args=(command, cwd), daemon=True).start()
+    return "Ich frage kurz im Dashboard nach Freigabe für diesen Befehl — Ergebnis kommt per Notification."
+
+
+def _run_command_thread(command: str, cwd: str | None) -> None:
+    workdir = cwd or str(WORKSPACE_ROOT)
+    warning = ""
+    lower = command.lower()
+    if any(p in lower for p in _DESTRUCTIVE_PATTERNS) or any(p in lower for p in _SECRET_PATTERNS):
+        warning = "⚠️ Enthält ein bekanntes riskantes Muster (z.B. rm -rf/sudo/Force-Push/Secret-Zugriff) — genau prüfen.\n\n"
+
+    summary = f"Befehl ausführen: {command[:80]}"
+    detail = f"{warning}Verzeichnis: {workdir}\n\nBefehl:\n{command}"
+    if len(detail) > _DETAIL_MAX_CHARS:
+        detail = detail[:_DETAIL_MAX_CHARS] + f"\n… [gekürzt, {len(detail)} Zeichen insgesamt]"
+
+    if not _request_approval_sync("RunCommand", summary, detail):
+        _notify(f"Befehl nicht freigegeben: {command[:80]}", priority="normal")
+        return
+
+    try:
+        result = subprocess.run(
+            command, shell=True, cwd=workdir, capture_output=True, text=True,
+            timeout=_RUN_COMMAND_TIMEOUT_SEC,
+        )
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        if len(output) > _RUN_COMMAND_OUTPUT_MAX_CHARS:
+            output = output[:_RUN_COMMAND_OUTPUT_MAX_CHARS] + f"\n… [gekürzt, {len(output)} Zeichen insgesamt]"
+        output = output or "(keine Ausgabe)"
+        status = "Erfolg" if result.returncode == 0 else f"Exit-Code {result.returncode}"
+        _notify(f"[JARVIS] Befehl fertig ({status}): {command[:80]}\n\n{output}", priority="high", expires_in_min=1440)
+    except subprocess.TimeoutExpired:
+        _notify(f"Befehl abgebrochen (Timeout nach {_RUN_COMMAND_TIMEOUT_SEC}s): {command[:80]}", priority="high")
+    except Exception as e:
+        print(f"[coding_engine] run_command Fehler: {e}", flush=True)
+        _notify(f"Befehl fehlgeschlagen: {command[:80]} ({e})", priority="high")
+
+
 def _create_worktree(project_root: Path, branch: str) -> Path | None:
     """Legt einen neuen git-worktree an, ausgehend vom letzten Commit auf main —
     unabhängig davon, was gerade uncommittet im Haupt-Checkout (project_root)
