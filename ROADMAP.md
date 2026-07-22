@@ -346,6 +346,11 @@ Zusätzlich neues Tool `create_project` (gleicher Anlass): legt GitHub-Repo + lo
 - Neuer optionaler Parameter `auto_mode` — wenn Simon das für einen einzelnen Task ausdrücklich verlangt, überspringt der komplette Task jede Freigabe-Rückfrage (auch bei riskanten Aktionen). Der PR am Ende bleibt trotzdem die einzige Instanz, die tatsächlich nach `main` mergt — auto_mode ändert daran nichts.
 - Nebenbei behoben: `create_project`s lokaler `git clone` speicherte den `GITHUB_TOKEN` bisher dauerhaft im Klartext in `.git/config` (Standard-Verhalten von `git clone <url-mit-token>`) — Remote-URL wird jetzt direkt danach auf die tokenlose Variante zurückgesetzt.
 
+**Auto-Update ✅ (2026-07-22):** Simon wollte nicht mehr manuell per SSH `git pull` + `sudo systemctl restart jarvis` ausführen müssen, sobald ein PR gemergt ist ("ich will einfach das jarvis up to date ist auf main", "wäre cool wenn ich nicht immer selbst mit ssh rein müsste"). Neu:
+- `scripts/auto_update.sh` — läuft alle 5 Minuten (systemd-Timer), prüft `origin/main` per `git fetch` (rührt den Working Tree nie an), pullt nur `--ff-only` wenn der Checkout sauber UND auf `main` ist, startet danach `jarvis.service` neu. Ist der Checkout gerade nicht sauber (z.B. weil Simon oder Claude Code über den SMB-Mount mittendrin sind) oder nicht fast-forward-fähig, wird der Durchlauf übersprungen statt irgendwas zu riskieren.
+- `install_auto_update.sh` — einmaliger Installer (wie `install_server.sh`): richtet eine schmal geschnittene, passwortlose sudoers-Regel ein (**nur** `systemctl restart jarvis.service`, kein voller sudo-Zugriff) sowie `jarvis-auto-update.service`/`.timer`. Muss einmal per SSH auf dem HP-Server ausgeführt werden — danach kein SSH mehr nötig für reguläre Updates.
+- Bewusst **kein** LLM-Tool/Chat-Befehl dafür — das ist unabhängige Server-Infrastruktur neben JARVIS' eigenem Python-Prozess, kein Coding-Engine-Task der sich selbst neu startet (würde aktive Verbindungen/Sessions killen, wenn ein Gespräch gerade läuft).
+
 **Noch offen:**
 - Eskalations-Freigabe-Flow noch nicht mit einer tatsächlich riskanten Aktion live getestet (bisherige Tests waren alle unkritisch)
 - Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
