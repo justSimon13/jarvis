@@ -5,26 +5,22 @@
 Zu Beginn jeder neuen Konversation diese Dateien lesen:
 1. `ROADMAP.md` — aktueller Backlog, Prioritäten, offene Punkte
 2. `ARCHITECTURE.md` — verbindliche Architektur-Referenz (bei technischen Fragen)
+3. `PRODUCT.md` — Produktumfang: was JARVIS können soll, wie, wo, und explizit was NICHT (bei Scope-/Produktfragen)
 
 Bei technischer Implementierungsarbeit zusätzlich:
-3. `TECHNICAL_PLAN.md` — Idealzustand aller Komponenten (Sollzustand)
-4. `GAP_ANALYSIS.md` — was existiert, was fehlt, was muss repariert werden
+4. `CODE_REFERENCE.md` — Datei-für-Datei-Code-Referenz (Funktionen, Zeilennummern, bekannte Ecken)
+5. `TOOLS.md` — vollständige LLM-Tool- und MCP-Tool-Referenz
+6. `TECHNICAL_PLAN.md` + `GAP_ANALYSIS.md` — **veraltet (Stand 2026-05-04)**, nur noch als historischer Ideal-Entwurf relevant, siehe Hinweis-Banner in den Dateien selbst
 
 Danach kurz bestätigen was der aktuelle Stand ist, bevor mit der Arbeit begonnen wird.
 
-## ⚠️ Aktueller Fokus (Stand 2026-05-04)
+## ⚠️ Aktueller Fokus (Stand 2026-07-24)
 
-Review und Planung sind abgeschlossen. `TECHNICAL_PLAN.md` + `GAP_ANALYSIS.md` sind fertig.
+Von den ursprünglich fünf Punkten aus `GAP_ANALYSIS.md` ist nur noch einer offen:
 
-**Jetzt: Umsetzung nach Plan.** Reihenfolge aus `GAP_ANALYSIS.md`:
+1. **Mode Playbook** — `guidelines`/`decision_protocol`/`quality_rules` in `brain.modules.modes` (bisher nur kurzer Prompt-Text pro Modus). Details: `ROADMAP.md`, Abschnitt "Bestehende offene Punkte".
 
-1. **NotificationDispatcher** — Fundament für echten Push (❌ fehlt komplett)
-2. **Proactive Daemon reparieren** — `pipeline.process_text()` → `dispatcher.notify()` (⚠️ falsch implementiert)
-3. **Brain Memory Schema** — Timestamps, Aging, Dedup (⚠️ kein Schema)
-4. **Mode Playbook** — guidelines/decision_protocol/quality_rules in brain.modules (⚠️ nur kurzer Text)
-5. **Context Modularisierung** — ContextLoader + Keyword-Classifier (⚠️ lädt immer alles)
-
-Details zu jedem Punkt in `ROADMAP.md` und `TECHNICAL_PLAN.md`.
+NotificationDispatcher, Proactive-Daemon-Reparatur, Brain-Memory-Schema und Context-Modularisierung sind fertig und verifiziert (siehe `ROADMAP.md` "✅ Fertig", `ARCHITECTURE.md`, `CODE_REFERENCE.md`). Seitdem zusätzlich umgesetzt: Notion-Ablösung, Wissensdatenbank inkl. Wiki-Verlinkung, Coding Engine, Ticket-Integration Phase 1, MCP-Server, jarvis-web als drittes Frontend, Tailscale-Zugriff — vollständige, laufend gepflegte Liste in `ROADMAP.md`.
 
 ---
 
@@ -39,6 +35,7 @@ Kein Chatbot. Ein **persönliches Betriebssystem** für Simons Alltag — lokal 
 | Repo | Pfad (lokal) | Rolle |
 |---|---|---|
 | `j.a.r.v.i.s.` | `~/Documents/Arbeit/.../Apps/j.a.r.v.i.s.` | Server/Core — **dieses Repo** |
+| `jarvis-web` | `~/Documents/Arbeit/.../Apps/jarvis-web` | Vue 3 (Tauri-Desktop-App) — Chat/Wissen/Todos/Projekte/Kontakte/Kalender/Tracking |
 | `jarvis-dashboard` | `~/Documents/Arbeit/.../Apps/jarvis-dashboard` | Vue 3 PWA (iPad) |
 | `jarvis-satellite` | `~/Documents/Arbeit/.../Apps/jarvis-satellite` | Headless Audio-Client (Linux) |
 

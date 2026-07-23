@@ -1,6 +1,9 @@
 # J.A.R.V.I.S. — Gap-Analyse
 
-Erstellt: 2026-05-04  
+Erstellt: 2026-05-04
+
+> ⚠️ **Veraltet.** Fast alle hier als ⚠️/❌ geführten Punkte sind inzwischen umgesetzt (NotificationDispatcher, Proactive Daemon, Brain Memory Schema, Context Modularisierung, Session-Memory-Härtung u.a.) — siehe `ROADMAP.md` ("✅ Fertig") für den aktuellen Stand. Diese Datei bleibt als historischer Schnappschuss erhalten, ist aber keine verbindliche Referenz mehr.
+
 Basis: `TECHNICAL_PLAN.md` vs. aktueller Codestand
 
 Legende: ✅ vorhanden und passt · ⚠️ vorhanden aber falsch/unvollständig · ❌ fehlt komplett

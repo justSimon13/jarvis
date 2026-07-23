@@ -2,6 +2,8 @@
 
 Letzte Überarbeitung: 2026-05-04
 
+> ⚠️ **Veraltet.** Die meisten hier als Ideal/offen beschriebenen Punkte (NotificationDispatcher, Proactive-Daemon-Umbau, Brain-Memory-Schema, Context-Modularisierung, Tool-Idempotenz, Wissensdatenbank) sind inzwischen umgesetzt. Aktueller Stand: `ROADMAP.md` ("✅ Fertig"), `ARCHITECTURE.md`, `CODE_REFERENCE.md`. Dieses Dokument bleibt als historischer Ideal-Entwurf erhalten, ist aber keine verbindliche Referenz mehr.
+
 Dieses Dokument beschreibt, wie JARVIS **sein soll** — unabhängig davon, was aktuell implementiert ist.
 Es ist die Grundlage für den nächsten Entwicklungsschritt: Gap-Analyse und priorisierter Umbau.
 
