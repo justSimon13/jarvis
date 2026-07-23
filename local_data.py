@@ -131,6 +131,28 @@ def list_todos(tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
+def list_arbeit_tickets(status_filter: str | None = None) -> list[dict]:
+    """Todos mit source='github' (D35-Ticket-Integration, services/github_issues.py) —
+    dünner Filter auf dieselben Spalten wie list_todos(), aber ohne dessen
+    Erledigt/Archiviert-Ausschluss und Datums-Cutoff, damit auch geschlossene
+    Tickets sichtbar bleiben."""
+    conn = _get_db()
+    query = """SELECT id, name, status, datum, prioritaet, bereich, aufwand, notizen, externe_id,
+                      source, external_id, repo, body, labels FROM todos
+               WHERE source = 'github'"""
+    params: tuple = ()
+    if status_filter:
+        query += " AND status = ?"
+        params = (status_filter,)
+    query += """ ORDER BY CASE prioritaet WHEN 'Hoch' THEN 0 WHEN 'Mittel' THEN 1
+                 WHEN 'Niedrig' THEN 2 ELSE 3 END, updated_at DESC"""
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen", "externe_id",
+            "source", "external_id", "repo", "body", "labels"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
 def add_todo(name: str, status: str | None = None, datum: str | None = None,
              prioritaet: str | None = None, bereich: str | None = None,
              aufwand: str | None = None, source: str | None = None,

@@ -14,6 +14,7 @@ from services import timer as timer_service
 from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
+from services import github_issues
 
 DEFINITIONS = [
     {
@@ -98,6 +99,18 @@ DEFINITIONS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "sync_arbeit_tickets",
+        "description": (
+            "Holt die aktuellen GitHub Issues aus Simons privatem D35-Firmenrepo und synct sie als "
+            "Todos (source='github'). Kostenlos, kein LLM-Sub-Aufruf. Nutzen wenn Simon fragt 'hol die "
+            "Tickets', 'was gibt's Neues bei D35', 'sync mit GitHub' o.ä. Danach mit data_query "
+            "(database='todos') die Tickets ansehen — sie sind an source='github' erkennbar. Aktualisiert "
+            "NIE Simons eigenen lokal gesetzten Status (z.B. 'In Arbeit') zurück auf 'offen', nur GitHub "
+            "'closed' setzt lokal zwingend 'Erledigt'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "commit_and_push",
@@ -950,6 +963,13 @@ def execute(tool_name: str, tool_input: dict) -> str:
 
         if tool_name == "sync_project":
             return coding_engine.sync_project(tool_input.get("project"))
+
+        if tool_name == "sync_arbeit_tickets":
+            try:
+                r = github_issues.sync_arbeit_tickets()
+                return f"{r['new']} neue, {r['updated']} aktualisierte Tickets ({r['total']} gesamt)."
+            except RuntimeError as e:
+                return str(e)
 
         if tool_name == "commit_and_push":
             return coding_engine.commit_and_push(tool_input.get("project"), tool_input.get("message"))

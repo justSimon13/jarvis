@@ -318,6 +318,14 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": str(e)}
     if resource == "todos":
         return local_data.list_todos()
+    if resource == "arbeit_tickets":
+        return local_data.list_arbeit_tickets()
+    if resource == "sync_arbeit_tickets":
+        try:
+            from services import github_issues
+            return github_issues.sync_arbeit_tickets()
+        except RuntimeError as e:
+            return {"error": str(e)}
     if resource == "projekte":
         return local_data.list_projekte()
     if resource == "kontakte":

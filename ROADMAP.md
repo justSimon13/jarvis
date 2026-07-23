@@ -476,6 +476,27 @@ Verifiziert: Python-seitig (`list_projekte()` liefert `unterseiten` exakt für Z
 
 ---
 
+## 🔴 D35-Ticket-Integration + generisches Lokal-Dispatch (2026-07-23) — Phase 1 ✅, Phase 2+3 offen
+
+**Vision:** Simon will JARVIS als aktiven Planungs-/Umsetzungs-Partner für seine Arbeitstickets (GitHub Issues, privates D35-Firmenrepo) — morgendlicher Prioritäts-Hinweis, gemeinsam planen, auf Zuruf umsetzen lassen. Entscheidender Constraint: Quellcode/Diffs dürfen NIE auf JARVIS' HP-Server landen (Datenschutz/Recht am Werk) — nur Ticket-Metadaten. Die eigentliche Code-Arbeit soll lokal auf Simons Mac laufen (Claude Code CLI unter seinem Arbeits-Account, via die Tauri-App), JARVIS delegiert nur, sieht nie den Code. Passt zur schon länger in diesem Dokument stehenden Vision (Zeile 18: "Arbeit (Digital35-Account): Claude Code → JARVIS MCP (work scope)").
+
+Drei bewusst unabhängig überprüfbare Phasen (voller Plan: `/Users/simon/.claude/plans/parsed-mixing-quilt.md`), Phase 3 (lokale Ausführung auf dem Mac) am riskantesten, deshalb separat.
+
+**Phase 1 (✅ gebaut, noch nicht gegen echte D35-Daten getestet — Simon muss Token+Repo hinterlegen):**
+- `services/github_issues.py` (neu): `fetch_issues()`/`sync_arbeit_tickets()` — holt Issues aus `config.D35_GITHUB_REPO` via eigenem, eng gescoptem `D35_GITHUB_TOKEN` (Issues:Read-only, NICHT den bestehenden breiten `GITHUB_TOKEN` wiederverwenden). Filtert PRs raus (GitHub liefert die über denselben Endpoint mit). Upsert in `todos` (`source='github'`) — Status-Regel einseitig: GitHub `closed` erzwingt lokal `Erledigt`, GitHub `open` überschreibt NIE einen bereits lokal gesetzten Status.
+- `local_data.list_arbeit_tickets()` — Filter auf `source='github'`, sortiert nach Priorität.
+- Neues LLM-Tool `sync_arbeit_tickets` (kostenlos, kein LLM-Sub-Call, wie `sync_project`).
+- `server.py`: `_handle_data_request` Resourcen `arbeit_tickets` (lesen) und `sync_arbeit_tickets` (synchroner Sync-Trigger für den UI-Button, ohne Umweg über den Chat).
+- jarvis-web: neue `ArbeitTicketsView.vue` + `TicketItem.vue`, Route `/tickets`, Nav-Link. Playwright-Smoke-Test bestätigt sauberes Rendering, keine Console-Fehler.
+
+**Offen, bevor Phase 1 live nutzbar ist:** Simon muss einen fine-grained GitHub-PAT (Issues:Read-only, nur das eine D35-Repo) erstellen und `D35_GITHUB_REPO`/`D35_GITHUB_TOKEN` in `.env` setzen, plus D35s echtes Label-Schema für Priorität mitteilen (`_PRIORITY_LABELS` in `github_issues.py` ist aktuell nur ein Platzhalter-Mapping).
+
+**Phase 2 (morgendlicher Prioritäts-Hinweis) und Phase 3 (generisches Lokal-Dispatch, Claude Code auf dem Mac via neue Tauri-Shell-Capability)** — noch nicht begonnen, Details im Plan-Dokument.
+
+Verifiziert (Phase 1): isolierter Python-Test gegen eine Test-DB (Upsert-Logik, PR-Filter, Status-Einseitigkeit, doppelter Sync erzeugt kein Duplikat), `tools.execute("sync_arbeit_tickets", {})` end-to-end mit gefaktem `fetch_issues`, `npm run build` sauber, Playwright-Smoke-Test der neuen `/tickets`-Route.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

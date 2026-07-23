@@ -30,6 +30,12 @@ GITHUB_REPO = "justSimon13/jarvis"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")  # für PR-Erstellung durch die Coding-Engine (services/coding_engine.py)
 PROJECTS_ROOT = Path.home() / "apps"  # begrenzter Sandbox-Ordner für create_project (services/coding_engine.py) — gleicher Ort wie der bestehende jarvis-web-Checkout
 
+# D35-Ticket-Integration (services/github_issues.py) — bewusst EIGENER, eng
+# gescopter Token (nur Issues:Read auf das eine Firmenrepo), NICHT GITHUB_TOKEN
+# (der hat vollen Schreibzugriff auf alle Repos) wiederverwenden.
+D35_GITHUB_REPO = os.getenv("D35_GITHUB_REPO", "")
+D35_GITHUB_TOKEN = os.getenv("D35_GITHUB_TOKEN", "")
+
 JARVIS_DIR = Path.home() / ".jarvis"
 JARVIS_DIR.mkdir(exist_ok=True)
 
