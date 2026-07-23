@@ -179,6 +179,13 @@ def jarvis_read_knowledge(topic: str, file: str) -> str:
         return f"Nicht gefunden: {topic}/{file}.md"
     if not content.strip():
         return f"Datei existiert, ist aber leer: {topic}/{file}.md"
+    links = k.get_links(topic, file)
+    if links["outgoing"] or links["backlinks"]:
+        content += "\n\n---\n"
+        if links["outgoing"]:
+            content += f"Verlinkt mit: {', '.join(links['outgoing'])}\n"
+        if links["backlinks"]:
+            content += f"Verlinkt von: {', '.join(links['backlinks'])}\n"
     return content
 
 
@@ -190,7 +197,9 @@ def jarvis_write_knowledge(topic: str, file: str, content: str, heading: str = "
 
     topic: Themenbereich (z.B. 'programmierung', 'digital35')
     file: Dateiname ohne .md (z.B. 'security', 'worklog', 'standards')
-    content: Markdown-Inhalt
+    content: Markdown-Inhalt — verwandte Dateien mit [[topic/file]] bzw. [[topic/file|Anzeigetext]]
+             verlinken wenn eine echte inhaltliche Beziehung besteht. Backlinks werden automatisch
+             berechnet, nicht selbst pflegen.
     heading: wenn angegeben → als neuer Abschnitt anhängen statt überschreiben
     """
     if not _check_scope(topic):

@@ -314,7 +314,8 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": "topic und file erforderlich"}
         try:
             content = knowledge.read(topic, file)
-            return {"content": content or "", "topic": topic, "file": file}
+            links = knowledge.get_links(topic, file)
+            return {"content": content or "", "topic": topic, "file": file, "links": links}
         except Exception as e:
             return {"error": str(e)}
     if resource == "todos":

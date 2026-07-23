@@ -848,7 +848,10 @@ DEFINITIONS = [
             "sondern das Interesse selbst: z.B. 'Simon interessiert sich für Bitcoin / fragt aktiv nach den Grundlagen' unter finanzen/interessen.md. "
             "Auch aufrufen wenn Simon sagt 'merk dir', 'denk dran', 'ich will', 'ich habe entschieden', 'ab jetzt'. "
             "NUR Prose/Kontext hier — KEINE reinen Zahlenwerte (→ set_goal oder log_entry). "
-            "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben."
+            "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben. "
+            "VERLINKUNG: verwandte Inhalte im Fließtext aktiv mit [[topic/file]] bzw. [[topic/file|Anzeigetext]] verlinken "
+            "(z.B. '[[programmierung/jarvis_projekt|JARVIS-Architektur]]'), wenn eine echte inhaltliche Beziehung zu einer bekannten "
+            "Datei besteht. Backlinks werden automatisch berechnet, nicht selbst pflegen — nur Vorwärtslinks im Text setzen."
         ),
         "input_schema": {
             "type": "object",
@@ -1209,6 +1212,14 @@ def execute(tool_name: str, tool_input: dict) -> str:
             content = knowledge.read(tool_input["topic"], tool_input["file"])
             if not content:
                 return f"Keine Datei gefunden: {tool_input['topic']}/{tool_input['file']}.md"
+            links = knowledge.get_links(tool_input["topic"], tool_input["file"])
+            if links["outgoing"] or links["backlinks"]:
+                footer = "\n\n---\n"
+                if links["outgoing"]:
+                    footer += f"Verlinkt mit: {', '.join(links['outgoing'])}\n"
+                if links["backlinks"]:
+                    footer += f"Verlinkt von: {', '.join(links['backlinks'])}\n"
+                content += footer
             return content
 
         if tool_name == "write_knowledge":
