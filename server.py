@@ -32,6 +32,7 @@ from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
+from services import local_exec
 from services import sleep_coach
 from services import proactive as proactive_service
 from services.notification_dispatcher import NotificationDispatcher
@@ -318,14 +319,11 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": str(e)}
     if resource == "todos":
         return local_data.list_todos()
-    if resource == "arbeit_tickets":
-        return local_data.list_arbeit_tickets()
-    if resource == "sync_arbeit_tickets":
-        try:
-            from services import github_issues
-            return github_issues.sync_arbeit_tickets()
-        except RuntimeError as e:
-            return {"error": str(e)}
+    if resource == "tickets":
+        return local_data.list_tickets()
+    if resource == "sync_tickets":
+        from services import tickets as tickets_service
+        return tickets_service.sync_tickets()
     if resource == "projekte":
         return local_data.list_projekte()
     if resource == "kontakte":
@@ -680,6 +678,7 @@ async def handle_connection(websocket):
                 if name:
                     manager.set_name(client_id, name)
                     manager.set_role(client_id, role)
+                    manager.set_capabilities(client_id, first_data.get("capabilities", []))
                     print(f"[server] Client {addr} heißt: {name!r} (role={role})")
                 pending_msgs.clear()
     except asyncio.TimeoutError:
@@ -767,6 +766,7 @@ async def handle_connection(websocket):
                         if name:
                             manager.set_name(client_id, name)
                             manager.set_role(client_id, r)
+                            manager.set_capabilities(client_id, data.get("capabilities", []))
                 except Exception:
                     pass
 
@@ -816,6 +816,7 @@ async def handle_connection(websocket):
                     if name:
                         manager.set_name(client_id, name)
                         manager.set_role(client_id, role)
+                        manager.set_capabilities(client_id, data.get("capabilities", []))
                         print(f"[server] Client {addr} heißt jetzt: {name!r} (role={role})")
                     if role == "dashboard":
                         mode = data.get("mode", "assistent")
@@ -878,6 +879,8 @@ async def handle_connection(websocket):
                     coding_engine.resolve_approval(data["id"], bool(data.get("approved")))
                 elif data.get("type") == P.CODING_SUDO_PASSWORD_RESPONSE:
                     coding_engine.resolve_sudo_password(data["id"], data.get("password", ""))
+                elif data.get("type") == P.LOCAL_EXEC_RESPONSE:
+                    local_exec.resolve_local_exec(data["id"], data)
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])
@@ -1008,6 +1011,7 @@ async def main():
     sleep_coach.init(manager, alarm_service, dispatcher)
     proactive_service.init(manager, alarm_service, dispatcher)
     coding_engine.init(manager, dispatcher)
+    local_exec.init(manager)
     learning.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
 

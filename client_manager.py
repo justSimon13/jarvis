@@ -13,6 +13,7 @@ class ClientManager:
         self._roles: dict[str, str] = {}               # client_id → role ("client"|"dashboard")
         self._modes: dict[str, str] = {}               # client_id → mode ("assistent"|"coach"|"fokus")
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
+        self._capabilities: dict[str, list[str]] = {}  # client_id → ["local_exec", ...] (z.B. Tauri-Desktop-App)
         self._active: str | None = None
         self._lock = threading.Lock()
 
@@ -70,6 +71,21 @@ class ClientManager:
         with self._lock:
             return self._modes.get(client_id, "assistent")
 
+    def set_capabilities(self, client_id: str, capabilities: list[str]):
+        with self._lock:
+            self._capabilities[client_id] = list(capabilities or [])
+
+    def get_client_with_capability(self, capability: str) -> str | None:
+        """Erster verbundener Client mit einer bestimmten Capability (z.B. 'local_exec' —
+        die Tauri-Desktop-App, im Gegensatz zu einem normalen Browser-Tab). Bei mehreren
+        gleichzeitig verbundenen Clients mit derselben Capability zählt der zuerst gefundene —
+        für ein einzelnes Mac reicht das."""
+        with self._lock:
+            for cid, caps in self._capabilities.items():
+                if capability in caps:
+                    return cid
+            return None
+
     def unregister(self, client_id: str):
         with self._lock:
             self._clients.pop(client_id, None)
@@ -78,6 +94,7 @@ class ClientManager:
             self._roles.pop(client_id, None)
             self._modes.pop(client_id, None)
             self._pipelines.pop(client_id, None)
+            self._capabilities.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
 

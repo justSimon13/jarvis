@@ -29,7 +29,7 @@ TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": boo
                               #   tts=True  → LLM + TTS (Voice-Mode, Default)
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
-CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer", "role": "...", "tab_id": "..." (nur role=dashboard — stabile Tab-Identität aus sessionStorage, isoliert die Web-Chat-History pro Tab)}
+CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer", "role": "...", "tab_id": "..." (nur role=dashboard — stabile Tab-Identität aus sessionStorage, isoliert die Web-Chat-History pro Tab), "capabilities": ["local_exec"] (optional — nur die Tauri-Desktop-App meldet 'local_exec', ein normaler Browser-Tab nicht, siehe LOCAL_EXEC_REQUEST unten)}
 ALARM_SYNC    = "alarm_sync"    # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
 ALARM_RINGING = "alarm_ringing" # {"type": "alarm_ringing", "alarm_id": "...", "label": "..."} — Client → Server wenn Wecker klingelt
 ALARM_DISMISSED = "alarm_dismissed" # {"type": "alarm_dismissed", "alarm_id": "...", "snooze_count": N} — Client → Server wenn Wecker aus
@@ -81,6 +81,12 @@ CODING_APPROVAL_RESPONSE = "coding_approval_response"  # {"type": "coding_approv
 CODING_TASK_STATUS = "coding_task_status"  # {"type": "coding_task_status", "active": bool, "branch": "...", "model": "...", "instruction": "...", "started_at": "...", "last_action": "..."} — Live-Fortschritt, kein Rate-Limit (anders als notification_push)
 CODING_SUDO_PASSWORD_REQUEST  = "coding_sudo_password_request"   # {"type": "coding_sudo_password_request", "id": "...", "text": "..."} — run_command() braucht ein sudo-Passwort (keine passende NOPASSWD-Regel)
 CODING_SUDO_PASSWORD_RESPONSE = "coding_sudo_password_response"  # {"type": "coding_sudo_password_response", "id": "...", "password": "..."} — nur einmalig verwendet, nie serverseitig gespeichert/geloggt
+
+# ── Lokale Ausführung auf einem Client mit 'local_exec'-Capability (z.B. die Tauri-Desktop-App) ──
+# Generisches Primitiv — 'action' bestimmt WAS lokal läuft (z.B. "gh_issue_list", später auch
+# "claude_code_cli"), nicht auf einen einzelnen Anwendungsfall festgelegt.
+LOCAL_EXEC_REQUEST  = "local_exec_request"   # {"type": "local_exec_request", "id": "...", "action": "...", **action-spezifische Felder}
+LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "id": "...", "ok": bool, "data": ..., "error": "..."}
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}

@@ -476,24 +476,30 @@ Verifiziert: Python-seitig (`list_projekte()` liefert `unterseiten` exakt für Z
 
 ---
 
-## 🔴 D35-Ticket-Integration + generisches Lokal-Dispatch (2026-07-23) — Phase 1 ✅, Phase 2+3 offen
+## 🔴 Ticket-Integration + generisches Lokal-Dispatch (2026-07-23) — Phase 1 ✅, Phase 2+3 offen
 
-**Vision:** Simon will JARVIS als aktiven Planungs-/Umsetzungs-Partner für seine Arbeitstickets (GitHub Issues, privates D35-Firmenrepo) — morgendlicher Prioritäts-Hinweis, gemeinsam planen, auf Zuruf umsetzen lassen. Entscheidender Constraint: Quellcode/Diffs dürfen NIE auf JARVIS' HP-Server landen (Datenschutz/Recht am Werk) — nur Ticket-Metadaten. Die eigentliche Code-Arbeit soll lokal auf Simons Mac laufen (Claude Code CLI unter seinem Arbeits-Account, via die Tauri-App), JARVIS delegiert nur, sieht nie den Code. Passt zur schon länger in diesem Dokument stehenden Vision (Zeile 18: "Arbeit (Digital35-Account): Claude Code → JARVIS MCP (work scope)").
+**Vision:** Simon will JARVIS als aktiven Planungs-/Umsetzungs-Partner für seine Arbeitstickets (GitHub Issues, privates Firmenrepo) — morgendlicher Prioritäts-Hinweis, gemeinsam planen, auf Zuruf umsetzen lassen. Entscheidender Constraint: Quellcode/Diffs dürfen NIE auf JARVIS' HP-Server landen (Datenschutz/Recht am Werk) — nur Ticket-Metadaten. Die eigentliche Code-Arbeit soll lokal auf Simons Mac laufen (Claude Code CLI unter seinem Arbeits-Account, via die Tauri-App), JARVIS delegiert nur, sieht nie den Code. Passt zur schon länger in diesem Dokument stehenden Vision (Zeile 18: "Arbeit (Digital35-Account): Claude Code → JARVIS MCP (work scope)").
 
 Drei bewusst unabhängig überprüfbare Phasen (voller Plan: `/Users/simon/.claude/plans/parsed-mixing-quilt.md`), Phase 3 (lokale Ausführung auf dem Mac) am riskantesten, deshalb separat.
 
-**Phase 1 (✅ gebaut, noch nicht gegen echte D35-Daten getestet — Simon muss Token+Repo hinterlegen):**
-- `services/github_issues.py` (neu): `fetch_issues()`/`sync_arbeit_tickets()` — holt Issues aus `config.D35_GITHUB_REPO` via eigenem, eng gescoptem `D35_GITHUB_TOKEN` (Issues:Read-only, NICHT den bestehenden breiten `GITHUB_TOKEN` wiederverwenden). Filtert PRs raus (GitHub liefert die über denselben Endpoint mit). Upsert in `todos` (`source='github'`) — Status-Regel einseitig: GitHub `closed` erzwingt lokal `Erledigt`, GitHub `open` überschreibt NIE einen bereits lokal gesetzten Status.
-- `local_data.list_arbeit_tickets()` — Filter auf `source='github'`, sortiert nach Priorität.
-- Neues LLM-Tool `sync_arbeit_tickets` (kostenlos, kein LLM-Sub-Call, wie `sync_project`).
-- `server.py`: `_handle_data_request` Resourcen `arbeit_tickets` (lesen) und `sync_arbeit_tickets` (synchroner Sync-Trigger für den UI-Button, ohne Umweg über den Chat).
-- jarvis-web: neue `ArbeitTicketsView.vue` + `TicketItem.vue`, Route `/tickets`, Nav-Link. Playwright-Smoke-Test bestätigt sauberes Rendering, keine Console-Fehler.
+**Nachbesserung noch am selben Tag — zwei Architekturentscheidungen von Simon korrigiert, bevor irgendwas live getestet wurde:**
 
-**Offen, bevor Phase 1 live nutzbar ist:** Simon muss einen fine-grained GitHub-PAT (Issues:Read-only, nur das eine D35-Repo) erstellen und `D35_GITHUB_REPO`/`D35_GITHUB_TOKEN` in `.env` setzen, plus D35s echtes Label-Schema für Priorität mitteilen (`_PRIORITY_LABELS` in `github_issues.py` ist aktuell nur ein Platzhalter-Mapping).
+1. *Kein Server-Token.* Der ursprüngliche Plan (Server holt Issues direkt per eigenem `D35_GITHUB_TOKEN`) hätte einen neuen, fine-grained PAT gebraucht — bei einer Firmen-Org landet sowas typischerweise in einer admin-sichtbaren Freigabe-Warteschlange. Simon ist dort kein Admin und wollte diese Sichtbarkeit ("das sollen die auch nicht wissen, dass ich mir Tickets ziehe via API") explizit vermeiden. Fix: Issues werden jetzt über Simons **eigenen, längst autorisierten `gh`-Login auf dem Mac** geholt — kein neues Credential, keine Org-Sichtbarkeit. Dafür wurde das generische "JARVIS führt etwas lokal auf einem Client aus"-Fundament aus Phase 3 vorgezogen (siehe unten).
+2. *Generische Namen, keine Spezialfälle.* Simon: "ich will keine D35 GitHub Issues in meinem Jarvis haben, sondern einfach nur Tickets oder Todos" — kein Repo/Arbeitgeber-Name im Code, mehrere Repos aus unterschiedlichen Projekten möglich (unterschieden über das `repo`-Feld am Ticket, nicht über eine eigene Kategorie). Außerdem: keine separate Tickets-Ansicht — Todos und Tickets sind dasselbe Konzept, GitHub-Issues erscheinen einfach in der normalen Todos-Liste mit Zusatzinfos (Label/Repo-Link), keine zweite Seite.
 
-**Phase 2 (morgendlicher Prioritäts-Hinweis) und Phase 3 (generisches Lokal-Dispatch, Claude Code auf dem Mac via neue Tauri-Shell-Capability)** — noch nicht begonnen, Details im Plan-Dokument.
+**Phase 1 (✅ gebaut, noch nicht gegen echte Daten getestet):**
+- `services/local_exec.py` (neu) — generisches Primitiv: Server schickt `LOCAL_EXEC_REQUEST` an einen Client mit `local_exec`-Capability (aktuell: die Tauri-Desktop-App), blockiert bis `LOCAL_EXEC_RESPONSE` kommt (oder Timeout). `action`-Feld bestimmt WAS läuft — aktuell nur `gh_issue_list`, später auch die eigentliche Claude-Code-Dispatch aus Phase 3.
+- `client_manager.py`: `set_capabilities()`/`get_client_with_capability()` — Browser-Tab und Tauri-App melden sich sonst identisch, das unterscheidet sie.
+- jarvis-web: `client_hello` meldet `capabilities: ['local_exec']` nur wenn `isTauri()`. Neues `src/lib/localExec.js` führt `gh issue list --repo ... --json ...` über `@tauri-apps/plugin-shell` aus (neue Cargo-/npm-Dependency, Capability in `capabilities/default.json` eng auf die `gh`-Binary gescopt — Scope-Syntax verifiziert gegen ein echtes GitHub-Repo-Beispiel, nicht geraten).
+- `services/tickets.py` (vormals `github_issues.py`) — `sync_tickets()` holt Repos aus `brain.config.ticket_repos` (Liste, per Gespräch gesetzt, nicht fest im Code), dispatched pro Repo über `local_exec`, upserted in `todos` (`source='github'`). Status-Regel weiterhin einseitig: GitHub `closed` erzwingt lokal `Erledigt`, GitHub `open` überschreibt nie einen bereits lokal gesetzten Status.
+- `local_data.list_tickets()`, LLM-Tool `sync_tickets` (vormals `sync_arbeit_tickets`), `server.py`-Resourcen `tickets`/`sync_tickets` (vormals `arbeit_tickets`/`sync_arbeit_tickets`).
+- jarvis-web: `TodosView.vue`/`TodoItem.vue` erweitert (GitHub-Link, Labels, Ticket-Nummer als Zusatzinfo pro Zeile, "🎫 Sync"-Button) — die separate `ArbeitTicketsView.vue`/`TicketItem.vue`/Route/Nav-Link von der ersten Fassung sind wieder entfernt.
 
-Verifiziert (Phase 1): isolierter Python-Test gegen eine Test-DB (Upsert-Logik, PR-Filter, Status-Einseitigkeit, doppelter Sync erzeugt kein Duplikat), `tools.execute("sync_arbeit_tickets", {})` end-to-end mit gefaktem `fetch_issues`, `npm run build` sauber, Playwright-Smoke-Test der neuen `/tickets`-Route.
+**Offen, bevor Phase 1 live nutzbar ist:** Simon muss lokal `gh auth status` prüfen/`gh auth login` einrichten, per Gespräch `brain.config.ticket_repos` setzen (z.B. `["digital35/xyz"]`), und das echte Priority-Label-Schema mitteilen (`_PRIORITY_LABELS` in `tickets.py` ist aktuell nur ein Platzhalter). Die Tauri-Shell-Capability-Syntax ist gegen ein reales Beispiel verifiziert, aber noch nicht durch einen eigenen CI-Build bestätigt — nächster Tag/Release-Test zeigt das.
+
+**Phase 2 (morgendlicher Prioritäts-Hinweis) und der Rest von Phase 3 (Claude Code lokal starten)** — noch nicht begonnen, Details im Plan-Dokument.
+
+Verifiziert (Phase 1): isolierte Python-Tests (Capability-Routing inkl. Unregister, lokaler Dispatch/Resolve-Roundtrip inkl. Timeout- und Kein-Client-Fall, `sync_tickets()` Upsert-Logik inkl. Status-Einseitigkeit über eine gefakte `local_exec.dispatch`, `tools.execute("sync_tickets", {})` end-to-end), `npm run build` sauber, Playwright-Smoke-Test der zusammengelegten `/todos`-Ansicht (Sync-Button sichtbar, alter Tickets-Nav-Link weg, keine Console-Fehler), Cargo-/npm-Package-Existenz für `tauri-plugin-shell`/`@tauri-apps/plugin-shell` via crates.io/npm-Registry verifiziert.
 
 ---
 

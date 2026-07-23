@@ -86,8 +86,9 @@ def _get_db() -> sqlite3.Connection:
     for table in ("todos", "projekte", "kontakte"):
         _ensure_column(conn, table, "notizen", "TEXT")
         _ensure_column(conn, table, "externe_id", "TEXT")
-    # D35/externe Issue-Integration: zusätzliche, nullable Felder für todos —
-    # bestehende Zeilen bleiben unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
+    # Externe Ticket-Quellen (z.B. GitHub Issues, siehe services/tickets.py):
+    # zusätzliche, nullable Felder für todos — bestehende Zeilen bleiben
+    # unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
     for column in ("source", "external_id", "repo", "body", "labels"):
         _ensure_column(conn, "todos", column, "TEXT")
     conn.execute("""
@@ -131,11 +132,11 @@ def list_todos(tage_zurueck: int = 7, max_results: int = 20) -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
-def list_arbeit_tickets(status_filter: str | None = None) -> list[dict]:
-    """Todos mit source='github' (D35-Ticket-Integration, services/github_issues.py) —
-    dünner Filter auf dieselben Spalten wie list_todos(), aber ohne dessen
-    Erledigt/Archiviert-Ausschluss und Datums-Cutoff, damit auch geschlossene
-    Tickets sichtbar bleiben."""
+def list_tickets(status_filter: str | None = None) -> list[dict]:
+    """Todos mit source='github' (services/tickets.py) — dünner Filter auf
+    dieselben Spalten wie list_todos(), aber ohne dessen Erledigt/Archiviert-
+    Ausschluss und Datums-Cutoff, damit auch geschlossene Tickets sichtbar
+    bleiben."""
     conn = _get_db()
     query = """SELECT id, name, status, datum, prioritaet, bereich, aufwand, notizen, externe_id,
                       source, external_id, repo, body, labels FROM todos
