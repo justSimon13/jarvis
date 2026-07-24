@@ -215,6 +215,59 @@ def jarvis_write_knowledge(topic: str, file: str, content: str, heading: str = "
 
 
 @mcp.tool()
+def jarvis_move_knowledge(
+    from_topic: str, from_file: str, to_topic: str, to_file: str, content: str = ""
+) -> str:
+    """
+    Verschiebt eine Datei in der Wissensdatenbank an einen neuen Ort — echtes
+    Verschieben, kein Verweis-Stub: die Quelldatei wird danach wirklich gelöscht.
+    Für Themen-Umsortierung/Konsolidierung (z.B. verstreute Dateien in ein
+    gemeinsames Topic zusammenführen) statt Duplikate liegen zu lassen.
+
+    from_topic/from_file: Quelle. to_topic/to_file: Ziel.
+    content: optional — überschreibt den Inhalt vor dem Schreiben (z.B. um
+    [[topic/file]]-Links im Text auf die neuen Adressen anzupassen, wenn
+    mehrere zusammengehörige Dateien in einem Zug verschoben werden). Leer
+    lassen um den bestehenden Inhalt unverändert zu übernehmen.
+
+    Schreibt fremde Dateien NICHT automatisch um — die Antwort listet auf, wer
+    noch auf die alte Adresse verweist, das muss gezielt nachgezogen werden
+    (jarvis_write_knowledge auf die jeweilige Datei).
+    """
+    if not _check_scope(from_topic) or not _check_scope(to_topic):
+        return f"Zugriff verweigert: '{from_topic}' oder '{to_topic}' ist im scope '{SCOPE}' nicht erlaubt."
+
+    import knowledge as k
+    referrers = k.move(from_topic, from_file, to_topic, to_file, content=content or None)
+    msg = f"Verschoben: knowledge/{from_topic}/{from_file}.md -> knowledge/{to_topic}/{to_file}.md"
+    if referrers:
+        msg += f"\nNoch verlinkt von (manuell nachziehen): {', '.join(referrers)}"
+    return msg
+
+
+@mcp.tool()
+def jarvis_delete_knowledge(topic: str, file: str) -> str:
+    """
+    Löscht eine Datei aus der Wissensdatenbank wirklich — kein Verweis-Stub.
+    Für Duplikate oder veraltete Seiten, deren Inhalt bereits vollständig
+    woanders vorhanden ist (nach einem jarvis_move_knowledge oder einer
+    manuellen Zusammenführung).
+
+    Die Antwort listet auf, wer noch auf die gelöschte Adresse verweist — das
+    muss gezielt nachgezogen werden.
+    """
+    if not _check_scope(topic):
+        return f"Zugriff verweigert: topic '{topic}' ist im scope '{SCOPE}' nicht erlaubt."
+
+    import knowledge as k
+    referrers = k.delete(topic, file)
+    msg = f"Gelöscht: knowledge/{topic}/{file}.md"
+    if referrers:
+        msg += f"\nNoch verlinkt von (manuell nachziehen): {', '.join(referrers)}"
+    return msg
+
+
+@mcp.tool()
 def jarvis_log_work(summary: str, topic: str = "digital35") -> str:
     """
     Schnelles Work-Update — was wurde heute erledigt/gelernt.

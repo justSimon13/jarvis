@@ -97,6 +97,8 @@ Scope-gesteuert über `JARVIS_MCP_SCOPE` (`personal` Default, oder `work`). `_WO
 | `jarvis_search_knowledge` | `query` | Wrapper um `knowledge.search()`. | Ergebnisse nachträglich auf `_WORK_TOPICS` gefiltert (work) |
 | `jarvis_read_knowledge` | `topic, file` | Wrapper um `knowledge.read()`. | ✅ `_check_scope()` |
 | `jarvis_write_knowledge` | `topic, file, content, heading?` | Wrapper um `knowledge.write()` (überschreibt) bzw. `knowledge.append_section()` (wenn `heading` gesetzt). | ✅ `_check_scope()` |
+| `jarvis_move_knowledge` | `from_topic, from_file, to_topic, to_file, content?` | Verschiebt eine Datei wirklich (kein Verweis-Stub) — für Themen-Konsolidierung. `content` optional zum Anpassen von `[[...]]`-Links vor dem Schreiben. Schreibt fremde Dateien nicht automatisch um, Antwort listet Backlinks die manuell nachgezogen werden müssen. | ✅ `_check_scope()` auf Quelle und Ziel |
+| `jarvis_delete_knowledge` | `topic, file` | Löscht eine Datei wirklich — für Duplikate/veraltete Seiten. Antwort listet verbleibende Backlinks. | ✅ `_check_scope()` |
 | `jarvis_log_work` | `summary, topic="digital35"` | Hängt einen `## Work-Log {datum}`-Abschnitt an `knowledge/{topic}/worklog.md`. | ⚠️ **kein** `_check_scope()`-Aufruf — siehe `CODE_REFERENCE.md` "Bekannte Ecken" |
 | `jarvis_read_project_file` | `path` | Liest eine Datei direkt aus dem `j.a.r.v.i.s.`-Repo (Path-Traversal-geprüft, 8000-Zeichen-Cap). | **Nur personal Scope** — im `work`-Scope sofortige Ablehnung |
 

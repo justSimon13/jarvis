@@ -165,8 +165,12 @@ def list_available() -> list[dict]
 def search(query: str, max_results: int = 5) -> list[dict]
 def read_summary(topic: str) -> str
 def get_links(topic: str, file: str) -> dict          # {"outgoing": [...], "backlinks": [...]}
+def move(from_topic, from_file, to_topic, to_file, content=None) -> list[str]   # echtes Verschieben, kein Stub
+def delete(topic: str, file: str) -> list[str]        # echtes Löschen, kein Stub
 def rebuild_index()
 ```
+
+`move()`/`delete()` (seit 2026-07-24) geben jeweils die Liste der Backlinks zurück, die noch auf die alte/gelöschte Adresse verweisen — sie schreiben referenzierende Dateien nicht automatisch um, das muss der Aufrufer gezielt nachziehen. Nur über MCP (`jarvis_move_knowledge`/`jarvis_delete_knowledge`) erreichbar, kein LLM-Tool für den Chat/Voice-Pfad.
 
 `search()` matcht ausschließlich gegen `f"{path} {tags} {summary}"` (lowercased, whitespace-getrennte Wörter, reiner Substring-Score) — **nie den vollen Dateiinhalt**, nur die ersten ~150-200 Zeichen (Auto-Summary). `_generate_summary()` läuft unconditionally bei jedem `write()` neu für das ganze Topic (nicht nur die geänderte Datei) — bei größeren Topics ein unnötiger, aber bei der aktuellen Größe irrelevanter Mehraufwand. `_sanitize_segment()` lehnt `topic`/`file`-Werte mit `/`, `..` oder leerem String ab (`read()`/`write()`/`get_links()`) — vorher gab es hier keinerlei Prüfung.
 

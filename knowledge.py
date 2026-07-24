@@ -144,6 +144,79 @@ def get_links(topic: str, file: str) -> dict:
     return {"outgoing": outgoing, "backlinks": backlinks}
 
 
+def move(from_topic: str, from_file: str, to_topic: str, to_file: str, content: str | None = None):
+    """
+    Verschiebt eine Knowledge-Datei an einen neuen Ort — echtes Verschieben,
+    kein Verweis-Stub: Inhalt wird an den neuen Ort geschrieben (neues
+    Frontmatter mit to_topic, updated=heute), die Quelldatei wird wirklich
+    gelöscht (Datei + Index + Link-Einträge).
+
+    content: optional — überschreibt den Body vor dem Schreiben (z.B. um
+    [[...]]-Links im Text auf neue Adressen anzupassen, wenn mehrere Dateien
+    gemeinsam verschoben werden). Ohne Angabe wird der bestehende Body 1:1
+    übernommen.
+
+    Schreibt fremde Dateien NICHT automatisch um — gibt die Liste der
+    Backlinks zurück (wer noch auf die alte Adresse verweist), damit der
+    Aufrufer diese gezielt nachziehen kann.
+    """
+    from_topic = _sanitize_segment(from_topic, "from_topic")
+    from_file = _sanitize_segment(from_file, "from_file")
+    to_topic = _sanitize_segment(to_topic, "to_topic")
+    to_file = _sanitize_segment(to_file, "to_file")
+
+    old_path = f"{from_topic}/{from_file}.md"
+    existing = read(from_topic, from_file)
+    if not existing:
+        raise ValueError(f"Quelle nicht gefunden: {old_path}")
+
+    meta, body = _parse_frontmatter(existing)
+    if content is not None:
+        _, body = _parse_frontmatter(content) if content.startswith("---") else ({}, content)
+    raw_tags = meta.get("tags", "[]").strip("[]")
+    tags = [t.strip().strip('"') for t in raw_tags.split(",") if t.strip()]
+
+    referrers = get_links(from_topic, from_file)["backlinks"]
+
+    write(to_topic, to_file, body, tags=tags)
+
+    old_file_path = _KNOWLEDGE_DIR / from_topic / f"{from_file}.md"
+    if old_file_path.exists():
+        old_file_path.unlink()
+    with _get_db() as conn:
+        conn.execute("DELETE FROM knowledge_index WHERE path = ?", (old_path,))
+        conn.execute("DELETE FROM knowledge_links WHERE from_path = ? OR to_path = ?", (old_path, old_path))
+    _generate_summary(from_topic)
+    print(f"[knowledge] Verschoben: {old_path} -> {to_topic}/{to_file}.md", flush=True)
+
+    return referrers
+
+
+def delete(topic: str, file: str) -> list[str]:
+    """
+    Löscht eine Knowledge-Datei wirklich (Datei + Index + Link-Einträge) — kein
+    Verweis-Stub. Für Duplikate/veraltete Seiten, deren Inhalt bereits woanders
+    vollständig vorhanden ist. Gibt die Liste der Backlinks zurück (wer noch auf
+    die Adresse verweist — muss von Hand nachgezogen werden).
+    """
+    topic = _sanitize_segment(topic, "topic")
+    file = _sanitize_segment(file, "file")
+    path_rel = f"{topic}/{file}.md"
+
+    referrers = get_links(topic, file)["backlinks"]
+
+    file_path = _KNOWLEDGE_DIR / topic / f"{file}.md"
+    if file_path.exists():
+        file_path.unlink()
+    with _get_db() as conn:
+        conn.execute("DELETE FROM knowledge_index WHERE path = ?", (path_rel,))
+        conn.execute("DELETE FROM knowledge_links WHERE from_path = ? OR to_path = ?", (path_rel, path_rel))
+    _generate_summary(topic)
+    print(f"[knowledge] Gelöscht: {path_rel}", flush=True)
+
+    return referrers
+
+
 # ── Öffentliche API ───────────────────────────────────────────────────────────
 
 def read(topic: str, file: str) -> str:
