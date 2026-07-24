@@ -503,6 +503,27 @@ Verifiziert (Phase 1): isolierte Python-Tests (Capability-Routing inkl. Unregist
 
 ---
 
+## 🔴 Vollständige Doku + Wiki-Umbau der Wissensdatenbank (2026-07-24) ✅
+
+**Anlass:** Simon wollte das gesamte System nochmal von Grund auf verstehen können, ohne den Code zu lesen — plus die Wissensdatenbank strukturell wie Wikipedia (mit echten Verlinkungen zwischen Dokumenten statt isolierten Dateien).
+
+**Doku (Repo-Root, `j.a.r.v.i.s.`):**
+- `ARCHITECTURE.md` aufgefrischt — viele als "Ideal" aus `TECHNICAL_PLAN.md` beschriebene Punkte sind inzwischen implementiert (Brain-Memory-Schema, `detect_modules()`, NotificationDispatcher), war vorher nicht als solches dokumentiert.
+- Neu: `CODE_REFERENCE.md` (Datei-für-Datei-Referenz inkl. "Bekannte Ecken" — toter `SYSTEM_PROMPT_BASE`-Import in `brain.py`, Modell-String-Divergenz `llm.py` vs. `config.py`), `TOOLS.md` (vollständige LLM-/MCP-Tool-Referenz), `PRODUCT.md` (Produktumfang inkl. explizitem "was NICHT").
+- `TECHNICAL_PLAN.md`/`GAP_ANALYSIS.md` (Stand 2026-05-04, seither weit überholt) mit Veraltet-Banner versehen statt gelöscht.
+
+**Wiki-Verlinkung (`knowledge.py`):** Inline `[[topic/file]]`/`[[topic/file|Anzeigetext]]`-Syntax, beim Schreiben extrahiert und in neuer Tabelle `knowledge_links` gespeichert. `get_links(topic, file)` liefert ausgehende Links direkt aus dem Text und Backlinks rein berechnet (nie von Hand gepflegt, analog MediaWikis "Linked from"). `server.py`s `knowledge_file`-Resource liefert Links mit, jarvis-web (`KnowledgeView.vue`) rendert sie klickbar + zeigt ein Backlinks-Panel. `write_knowledge`-Tool-Beschreibung (Chat + MCP) weist JARVIS aktiv an, beim Schreiben zu verlinken. Zusätzliche Härtung: `_sanitize_segment()` gegen bis dahin ungeprüfte `topic`/`file`-Werte in Pfad-Konstruktion.
+
+**Echtes move()/delete() statt Verweis-Stubs:** Erste Duplikat-Bereinigungen (angular↔programmierung, devops↔infrastruktur) liefen zunächst über Verweis-Stubs, weil `knowledge.py` keine Lösch-Funktion hatte. Auf Simons Feedback ("das soll nicht so verteilt sein") hin durch echtes `move()`/`delete()` ersetzt (Datei+Index+Links werden wirklich entfernt, kein Karteileichen-Muster mehr) — neue MCP-Tools `jarvis_move_knowledge`/`jarvis_delete_knowledge`, bewusst kein Chat-Tool dafür (kuratierte Aufräum-Aktion, kein beiläufiges Gesprächsverhalten).
+
+**Themen-Konsolidierung:** JARVIS-eigener Content war über 4 Topics verstreut (`devops`, `programmierung`, `simon`, `development`) — auf Simons expliziten Wunsch in ein Topic `jarvis/` zusammengeführt (8 Dateien verschoben, `[[...]]`-Links dabei auf die neuen Pfade angepasst). `jarvis/_overview.md` als Übersichtsseite — Unterstrich-Präfix ist eine bestehende Konvention (wie `simon/_core.md`): sortiert alphabetisch immer zuerst, wird von der Frontend-Gruppierungslogik nicht mitgruppiert.
+
+**MCP-Reconnect-Erkenntnis:** Der bekannte `-32602`-SSE-Bug trat innerhalb dieser Session mehrfach erneut auf, auch nach mehreren Server-Neustarts (`jarvis-mcp.service`) — der eigentliche Fix war ein Client-seitiger Reconnect (`/mcp` in Claude Code), nicht der Server-Neustart. Wichtig für nächstes Mal: bei erneutem Auftreten zuerst `/mcp` probieren, bevor der Server mehrfach neu gestartet wird.
+
+Verifiziert: `knowledge.py`-Link-/Move-/Delete-Logik lokal gegen Scratch-Verzeichnisse getestet (Backlinks korrekt, Dedup, Path-Traversal abgelehnt, `move()` löscht Quelle wirklich); `jarvis-web`-Frontend-Änderungen mit `npm run build` verifiziert; Konsolidierung live gegen die echte Wissensdatenbank durchgeführt und per Suche/Read bestätigt (keine `devops`/`infrastruktur`/`development`-Topics mehr, `jarvis/_overview.md` zeigt alle 7 Geschwister-Dateien als Links UND Backlinks).
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
