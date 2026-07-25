@@ -107,7 +107,7 @@ Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`.
 | Client → Server | `TEXT_INPUT`, `PING`, `CLIENT_HELLO`, `ALARM_SYNC`, `ALARM_RINGING`, `ALARM_DISMISSED` |
 | Server → Client (Alarm/Musik) | `SET_ALARM`, `CANCEL_ALARM`, `SNOOZE_ALARM`, `PLAY_MUSIC`, `STOP_MUSIC` |
 | Server → Dashboard | `DASHBOARD_SYNC`, `DASHBOARD_UPDATE`, `LAYOUT_CONFIG` |
-| Drei-Layer-Protokoll | `DATA_REQUEST`, `DATA_RESPONSE`, `SET_MODE` |
+| Drei-Layer-Protokoll | `DATA_REQUEST`, `DATA_RESPONSE`, `SET_MODE`, `SET_THINKING` (seit 2026-07-25 — `{"type":"set_thinking","enabled":bool}`, schaltet Adaptive Thinking pro Client/Session, aktuell nur von jarvis-web genutzt) |
 | Overlay | `OVERLAY_EVENT` (→Dashboard), `OVERLAY_DISMISS` (→Server) |
 | Session-Management | `SESSION_BREAK`, `SESSION_RESET/LIST_REQUEST/DELETE/LOAD` (→Server), `SESSION_LIST_RESPONSE/DELETE_ACK/LOAD_ACK` (→Client) |
 | Push-Notifications | `NOTIFICATION_PUSH` (→Client), `NOTIFICATION_ACK` (→Server) |
@@ -142,14 +142,14 @@ Ersetzt seit 2026-07-19/23 die alte Notion-Integration. Tabellen: `todos`, `proj
 
 ---
 
-## llm.py (~142 Zeilen) — Anthropic-Wrapper
+## llm.py (~150 Zeilen) — Anthropic-Wrapper
 
-- `MODEL = "claude-sonnet-4-6"` (Z. 6, hardcoded) — **weicht bewusst von `config.CODING_ENGINE_MODEL`s Default `"claude-sonnet-5"` ab**: zwei getrennte Subsysteme (Chat-Pipeline vs. Coding Engine), zwei getrennt gepinnte Modell-Strings, kein Tippfehler.
+- `MODEL = "claude-sonnet-5"` (Z. 6, hardcoded, seit 2026-07-25 — vorher `"claude-sonnet-4-6"`) — **jetzt identisch mit `config.CODING_ENGINE_MODEL`s Default**, die früher dokumentierte Divergenz zwischen Chat-Pipeline und Coding Engine ist damit aufgelöst (Zufall des Upgrades, keine bewusste Vereinheitlichung).
 - `_get_client()` (Z. 22) — Lazy-Singleton, `timeout=120.0` explizit gesetzt (schützt den globalen `llm_semaphore` vor einem unbegrenzt hängenden Call, siehe ROADMAP.md Vorfall 2026-07-22).
-- `compute_cost(usage)` (Z. 38) — USD-Schätzung aus hardcodierten Preisen (Input $3/1M, Output $15/1M, Cache-Write $6/1M, Cache-Read $0.30/1M). Speist `tracking.add_log("chat", "cost_usd", ...)`.
+- `compute_cost(usage)` (Z. 38) — USD-Schätzung aus hardcodierten Preisen (Input $3/1M, Output $15/1M, Cache-Write $6/1M, Cache-Read $0.30/1M — Sonnet-5- und 4.6-Sticker-Preis ist identisch). Speist `tracking.add_log("chat", "cost_usd", ...)`. Thinking-Tokens zählen als normale Output-Tokens, keine separate Abrechnung nötig.
 - `compress_tool_history()`/`_compress_one()` (57, 79) — komprimiert alle `tool_result`-Blöcke außer dem des jeweils neuesten Tool-Turns.
 - `compress_attachment_history()`/`_compress_attachment()` (93, 116) — analog für Bild-/Dokument-Anhänge.
-- `stream(system_static, system_dynamic, messages, tools)` (Z. 124, `@contextmanager`) — `cache_control: {"type":"ephemeral","ttl":"1h"}` auf den statischen Block und die letzte Tool-Definition. `max_tokens=8096` hardcoded, nicht per Env konfigurierbar.
+- `stream(system_static, system_dynamic, messages, tools, thinking=False)` (Z. 124, `@contextmanager`) — `cache_control: {"type":"ephemeral","ttl":"1h"}` auf den statischen Block und die letzte Tool-Definition. Neuer `thinking`-Parameter (seit 2026-07-25): `False` → `{"type":"disabled"}` + `max_tokens=8096` (Default, unverändertes Verhalten), `True` → `{"type":"adaptive"}` + `max_tokens=16000` (mehr Headroom, da Thinking-Tokens beim selben Cap mitzählen). Gesteuert pro Client/Session über `pipeline.set_thinking()` (neue WS-Nachricht `set_thinking`, siehe `protocol.py`) — in jarvis-web als 🧠-Toggle direkt in der Chat-Eingabeleiste, standardmäßig aus (Latenz für Sprachclients bleibt unverändert schnell).
 
 ---
 
@@ -227,7 +227,7 @@ SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — h
 Ehrlich dokumentierte Unsauberkeiten — nichts davon ist aktuell ein aktives Problem, aber alle sind gute Kandidaten für spätere Aufräumarbeit:
 
 1. **`brain.py:400`** — `from config import SYSTEM_PROMPT_BASE` schlägt fehl (`config.py` exportiert das nicht mehr), abgefangen von `except ImportError: pass`. Effekt: Der Seed-Schritt für `brain.modules` bei einer Neuinstallation ist ein stiller No-Op.
-2. **`llm.py` vs. `config.py`** — `MODEL="claude-sonnet-4-6"` (Chat-Pipeline) vs. `CODING_ENGINE_MODEL="claude-sonnet-5"` (Coding Engine). Zwei bewusst getrennte, leicht verwechselbare Modell-Strings.
+2. ~~`llm.py` vs. `config.py` Modell-Divergenz~~ — **behoben 2026-07-25**: `llm.py`s `MODEL` wurde von `claude-sonnet-4-6` auf `claude-sonnet-5` angehoben, jetzt identisch mit `config.CODING_ENGINE_MODEL`s Default.
 3. **`session_memory.load_for_prompt()`** — explizit als Legacy-Stub markiert (eigene Docstring), Body gibt nur `""` zurück. Nicht aufgerufen.
 4. **Tote Imports** — `context.py` importiert `config`/`session_memory` ungenutzt, `session_memory.py` importiert `config` ungenutzt. Harmlos, nur Lesbarkeits-Rauschen.
 5. **`brain.apply_aging()`** — läuft nur beim Serverstart (`brain.sync()`), nicht periodisch. Gewichte können zwischen zwei Neustarts veralten.

@@ -831,6 +831,8 @@ async def handle_connection(websocket):
                     manager.set_mode(client_id, new_mode)
                     pipeline.set_mode(new_mode)
                     send_json({"type": P.LAYOUT_CONFIG, **_build_layout_config(new_mode)})
+                elif data.get("type") == P.SET_THINKING:
+                    pipeline.set_thinking(bool(data.get("enabled")))
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
                     result = await loop.run_in_executor(None, _handle_data_request, resource, data, category, tab_id)

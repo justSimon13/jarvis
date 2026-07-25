@@ -50,6 +50,7 @@ LAYOUT_CONFIG    = "layout_config"    # {"type": "layout_config", "cards": [...]
 DATA_REQUEST  = "data_request"   # {"type": "data_request", "resource": "todos"|"calendar"|"alarms"|"followups"|"clients"|"btc"}
 DATA_RESPONSE = "data_response"  # {"type": "data_response", "resource": "...", "data": ...}
 SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coach"|"fokus"}
+SET_THINKING  = "set_thinking"   # {"type": "set_thinking", "enabled": bool} — Adaptive Thinking pro Client/Session (Default aus)
 
 # ── Event-Overlay (Server → Dashboard) ───────────────────────────────────────
 OVERLAY_EVENT   = "overlay_event"   # {"type": "overlay_event", "event_id": "...", "title": "...", "icon": "...", "send": "...", "snooze_minutes": 10}

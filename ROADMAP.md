@@ -524,6 +524,23 @@ Verifiziert: `knowledge.py`-Link-/Move-/Delete-Logik lokal gegen Scratch-Verzeic
 
 ---
 
+## 🔴 Sonnet-5-Umstieg + umschaltbares Adaptive Thinking (2026-07-25) ✅
+
+**Anlass:** Simon fand die Qualität von Claude Code (Sonnet 5) gut und wollte dieselbe Qualität für JARVIS selbst — bei laufender Diskussion um Token-Verbrauch (siehe Vorfälle weiter oben zu Kosten/Latenz).
+
+**Modell-Umstieg:** `llm.py`s `MODEL` von `claude-sonnet-4-6` auf `claude-sonnet-5` — dieselbe Sticker-Preisklasse ($3/$15 pro 1M Tokens, aktuell sogar Einführungsrabatt bis 2026-08-31), löst nebenbei die bisherige Modell-String-Divergenz zu `config.CODING_ENGINE_MODEL` auf (war schon vorher `claude-sonnet-5`). Zu bedenken: Sonnet 5 nutzt einen neuen Tokenizer (~30% mehr Tokens für denselben Text als 4.6) — nach Ablauf des Rabatts real ca. 30% teurer pro gleichwertigem Gespräch, aktuell durch den Rabatt ungefähr ausgeglichen.
+
+**Wichtigster Fund beim Umstieg:** Sonnet 5 aktiviert Adaptive Thinking automatisch, wenn der `thinking`-Parameter fehlt (bei 4.6 bedeutete das Fehlen "kein Thinking") — ein reiner Modell-String-Swap hätte also für JEDE Antwort (Voice + Web) stillschweigend eine Denkpause vor der Antwort eingeführt, inkl. höherem Tokenverbrauch. Für Voice (STT→LLM→TTS) besonders unerwünscht, da JARVIS bewusst auf ein schnelles Antwortgefühl optimiert ist (`greet()` umgeht deshalb sogar ganz das LLM).
+
+**Lösung — Thinking bleibt standardmäßig aus, aber jetzt einstellbar statt hartcodiert:**
+- `llm.stream()` neuer Parameter `thinking: bool` — `False` (Default) → `{"type":"disabled"}` + `max_tokens=8096` (unverändertes Verhalten), `True` → `{"type":"adaptive"}` + `max_tokens=16000` (mehr Headroom, da Thinking-Tokens mit ins `max_tokens`-Limit zählen).
+- Neue WS-Nachricht `set_thinking` (`protocol.py`), `pipeline.set_thinking()` hält den Zustand pro Client-Session (analog zu `set_mode`).
+- jarvis-web: neuer 🧠-Toggle direkt in der Chat-Eingabeleiste (`ChatView.vue`) — Simons Wunsch war explizit, das *"je nach Situation selbst"* umschalten zu können, nicht nur einen globalen Schalter. Bewusst nur im Web-Chat, nicht in jarvis-dashboard/Voice — dort ist Latenz kritisch, im getippten Web-Chat nicht.
+
+Verifiziert: `llm.py`-Logik lokal gegen einen Fake-Client getestet (thinking=False/True/Default-Fall liefern jeweils korrekte `thinking`-Config und `max_tokens`), `npm run build` für die jarvis-web-Änderungen sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

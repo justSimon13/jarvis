@@ -3,7 +3,7 @@ import anthropic
 import config
 
 _client = None
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-sonnet-5"
 
 # Preise in USD je 1M Tokens (Sonnet-Tarif, deckt sowohl 4.6 als auch 5 ab —
 # identische Preise). 1h-Cache-TTL statt der 5-Minuten-Default: Nachrichten im
@@ -122,7 +122,15 @@ def _compress_attachment(item: dict) -> dict:
 
 
 @contextmanager
-def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None):
+def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None,
+           thinking: bool = False):
+    """
+    thinking: Adaptive Thinking an/aus (Sonnet 5 — bei claude-sonnet-4-6 gab es das Feld
+    nicht, dort war "kein Thinking" schlicht das einzige Verhalten). Default aus, damit
+    sich am bisherigen schnellen Antwortverhalten (Voice) nichts stillschweigend ändert.
+    max_tokens wird bei aktivem Thinking angehoben, da Thinking-Tokens dort mit hineinzählen
+    — bei 8096 könnte eine Antwort sonst mitten im Denkprozess abgeschnitten werden.
+    """
     system = [
         {"type": "text", "text": system_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": system_dynamic},
@@ -132,9 +140,13 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
     if tools:
         cached_tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
 
+    thinking_config = {"type": "adaptive"} if thinking else {"type": "disabled"}
+    max_tokens = 16000 if thinking else 8096
+
     with _get_client().messages.stream(
         model=MODEL,
-        max_tokens=8096,
+        max_tokens=max_tokens,
+        thinking=thinking_config,
         system=system,
         messages=messages,
         **({"tools": cached_tools} if cached_tools else {}),

@@ -90,6 +90,11 @@ class JarvisPipeline:
         self._executed_tool_ids: dict[str, str] = {}  # call_id → result
         # Context-Module: beim ersten Turn erkannt, für die Session gespeichert
         self._active_modules: set[str] | None = None
+        # Adaptive Thinking — per Client/Session umschaltbar (z.B. an im Web-Chat wo
+        # Latenz egal ist, aus bei Voice wo STT→LLM→TTS schnell bleiben muss). Default
+        # aus, damit sich das Antwortverhalten beim Sonnet-5-Umstieg nicht stillschweigend
+        # ändert (Sonnet 5 denkt sonst per Default, anders als das bisherige Sonnet 4.6).
+        self._thinking_enabled: bool = False
 
     def set_room(self, room: str):
         self._room = room
@@ -97,6 +102,9 @@ class JarvisPipeline:
     def set_mode(self, mode: str):
         self._mode = mode
         self._active_modules = None  # Neue Session bei Modus-Wechsel
+
+    def set_thinking(self, enabled: bool):
+        self._thinking_enabled = bool(enabled)
 
     def greet(self, text: str = "Bereit."):
         """Begrüßung beim Connect eines Sprach-Clients — bewusst OHNE LLM-Call.
@@ -262,7 +270,8 @@ class JarvisPipeline:
             t_first_token = None
 
             try:
-                with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS) as s:
+                with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS,
+                                 thinking=self._thinking_enabled) as s:
                     for chunk in s.text_stream:
                         if not response_started:
                             self._emit(P.RESPONSE_START)
