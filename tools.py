@@ -263,7 +263,8 @@ DEFINITIONS = [
             "todos: name (Pflicht), status, datum (YYYY-MM-DD), prioritaet (Niedrig/Mittel/Hoch), bereich, aufwand. "
             "projekte: name (Pflicht), status, beschreibung, typ, geschaetzter_wert (Zahl, geschätzter Auftragswert "
             "in Euro — speist die Finanzen-Übersicht in der Tracking-View als 'geschätzter Gewinn', nur für nicht "
-            "abgeschlossene Projekte relevant)."
+            "abgeschlossene Projekte relevant), erwartetes_abschlussdatum (YYYY-MM-DD, für bekannte anstehende "
+            "Projektabschlüsse — speist den Gewinn-Trend-Chart als 'Pipeline'-Balken im jeweiligen Monat)."
         ),
         "input_schema": {
             "type": "object",
@@ -962,6 +963,23 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "delete_log_entry",
+        "description": (
+            "Löscht einen einzelnen Tracking-Log-Eintrag per id (aus einem vorherigen "
+            "get_logs/get_progress bekannt) — z.B. um einen doppelten oder falsch "
+            "erfassten Eintrag zu korrigieren. Funktioniert für jedes Topic, nicht nur "
+            "Finanzen. Vor dem Löschen kurz bestätigen was gelöscht wird (Datum, Wert, "
+            "notes), damit nichts versehentlich Falsches verschwindet."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "id des Log-Eintrags"},
+            },
+            "required": ["entry_id"],
+        },
+    },
+    {
         "name": "generate_document",
         "description": (
             "Erstellt ein PDF- oder Word-Dokument aus einem Projekt, Todo, Kontakt oder einer "
@@ -1311,6 +1329,10 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
         if tool_name == "get_progress":
             result = tracking.get_progress(tool_input["topic"])
             return json.dumps(result, ensure_ascii=False)
+
+        if tool_name == "delete_log_entry":
+            ok = tracking.delete_log(tool_input["entry_id"])
+            return "Eintrag gelöscht." if ok else "Kein Eintrag mit dieser id gefunden."
 
         if tool_name == "generate_document":
             try:

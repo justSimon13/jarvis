@@ -90,6 +90,10 @@ def _get_db() -> sqlite3.Connection:
     # Summe über alle nicht abgeschlossenen Projekte ergibt den "geschätzten
     # Gewinn", als Gegenstück zu den tatsächlichen tracking.py-Gewinn-Logs.
     _ensure_column(conn, "projekte", "geschaetzter_wert", "REAL")
+    # Erwartetes Abschlussdatum (YYYY-MM-DD, seit 2026-07-27) — für den Gewinn-
+    # Trend-Chart: bekannte Pipeline-Projekte werden im jeweiligen Monat als
+    # erwarteter Zufluss eingebucht statt nur pauschal in die Gesamtschätzung.
+    _ensure_column(conn, "projekte", "erwartetes_abschlussdatum", "TEXT")
     # Externe Ticket-Quellen (z.B. GitHub Issues, siehe services/tickets.py):
     # zusätzliche, nullable Felder für todos — bestehende Zeilen bleiben
     # unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
@@ -234,21 +238,21 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
     conn = _get_db()
     if status_filter is None:
         rows = conn.execute(
-            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert FROM projekte ORDER BY id"
+            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte ORDER BY id"
         ).fetchall()
     elif isinstance(status_filter, str):
         rows = conn.execute(
-            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert FROM projekte WHERE status = ? ORDER BY id",
+            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte WHERE status = ? ORDER BY id",
             (status_filter,)
         ).fetchall()
     else:
         placeholders = ",".join("?" * len(status_filter))
         rows = conn.execute(
-            f"SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert FROM projekte WHERE status IN ({placeholders}) ORDER BY id",
+            f"SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte WHERE status IN ({placeholders}) ORDER BY id",
             list(status_filter)
         ).fetchall()
     conn.close()
-    cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "externe_id", "geschaetzter_wert"]
+    cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "externe_id", "geschaetzter_wert", "erwartetes_abschlussdatum"]
     results = [dict(zip(cols, r)) for r in rows]
     # Gleicher Hinweis wie in query() (LLM-Pfad) — sonst hat das Frontend keine
     # Möglichkeit zu wissen ob es Unterseiten gibt, ohne pro Projekt einen
@@ -265,12 +269,15 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
 
 
 def add_projekt(name: str, status: str | None = None, beschreibung: str | None = None,
-                 typ: str | None = None, geschaetzter_wert: float | None = None) -> int:
+                 typ: str | None = None, geschaetzter_wert: float | None = None,
+                 erwartetes_abschlussdatum: str | None = None) -> int:
     conn = _get_db()
     now = _now()
     cur = conn.execute(
-        "INSERT INTO projekte (name, status, beschreibung, typ, geschaetzter_wert, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (name, status, beschreibung, typ, geschaetzter_wert, now, now)
+        """INSERT INTO projekte (name, status, beschreibung, typ, geschaetzter_wert,
+                                  erwartetes_abschlussdatum, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum, now, now)
     )
     conn.commit()
     projekt_id = cur.lastrowid
@@ -280,7 +287,7 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 
 def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
-    allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"}
+    allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -383,7 +390,7 @@ def query(database: str, search: str | None = None, status: str | None = None, l
         table = "todos"
         default_limit = 10
     elif database == "projekte":
-        cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"]
+        cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"]
         table = "projekte"
         default_limit = 200
     else:
@@ -424,7 +431,7 @@ def write(database: str, properties: dict) -> int:
                                      "source", "external_id", "repo", "body", "labels"}})
     if database == "projekte":
         return add_projekt(**{k: v for k, v in properties.items()
-                               if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert"}})
+                               if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert", "erwartetes_abschlussdatum"}})
     raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
 
 

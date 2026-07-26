@@ -47,6 +47,28 @@ def _get_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_topic_key ON logs (topic, key, date)")
+
+    # Einmalige Bereinigung (2026-07-27): 3 pauschale Gewinneinträge (Datum =
+    # Anlage-Tag, nicht echtes Zahlungsdatum) wurden durch feiner aufgeteilte,
+    # korrekt datierte Einträge ersetzt (knowHere: 6800€ -> 4800+800+1200€ an den
+    # echten Rechnungsdaten; Ticketsystem: 10900€ -> 10000+900€; Michelle: blieb
+    # bei 0€). Die alten Pauschal-Einträge blieben liegen und hätten den
+    # tatsächlichen Gesamtgewinn doppelt gezählt. Exakter id-Match statt Datums-/
+    # Wert-Kriterium, damit garantiert nur genau diese drei bereits identifizierten
+    # Zeilen betroffen sind, nie ein künftiger, unabhängiger Eintrag mit ähnlichem
+    # Datum/Wert. Idempotent (SELECT vor DELETE, Log nur beim ersten Treffer).
+    _STALE_GEWINN_LOG_IDS = (
+        "921f7cd5-22d0-48f8-b131-436c5a090bdf",  # knowHere Theme, 2026-07-26, 6800€
+        "1f1a5d25-ae40-469a-838e-117f52c4887f",  # Ticketsystem, 2026-07-26, 10900€
+        "e65b28a5-bd28-477a-877d-6e892fe5e1ce",  # Michelle Webseite, 2026-07-26, 0€
+    )
+    for stale_id in _STALE_GEWINN_LOG_IDS:
+        row = conn.execute("SELECT topic, key, date, value, notes FROM logs WHERE id = ?", (stale_id,)).fetchone()
+        if row:
+            print(f"[tracking] Bereinigung: lösche veralteten Pauschal-Gewinneintrag {stale_id} "
+                  f"(topic={row[0]!r} key={row[1]!r} date={row[2]!r} value={row[3]!r} notes={row[4]!r})", flush=True)
+            conn.execute("DELETE FROM logs WHERE id = ?", (stale_id,))
+
     conn.commit()
     return conn
 
@@ -127,6 +149,34 @@ def get_logs(topic: str, key: str | None = None,
 def get_last_log(topic: str, key: str) -> dict | None:
     logs = get_logs(topic, key=key, limit=1)
     return logs[0] if logs else None
+
+
+def delete_log(entry_id: str) -> bool:
+    """Löscht einen einzelnen Log-Eintrag per id. Generisch für jedes Topic —
+    z.B. um einen doppelten/fehlerhaften Eintrag zu korrigieren. Gibt True zurück,
+    wenn eine Zeile betroffen war."""
+    with _get_db() as conn:
+        cur = conn.execute("DELETE FROM logs WHERE id = ?", (entry_id,))
+    return cur.rowcount > 0
+
+
+def get_monthly_series(topic: str, key: str, months: list[str]) -> dict[str, float]:
+    """Summiert 'value' pro Kalendermonat (YYYY-MM) für eine explizite Liste von
+    Monaten. Generisch (kein Finanzen-Bezug) — reine Zeitreihen-Aggregation über
+    logs, wiederverwendbar für jedes Topic/Key (Gewinn, aber genauso z.B. ein
+    Sport- oder Ausgaben-Trend). Monate ohne Einträge fehlen im Ergebnis (nicht 0)
+    — der Aufrufer entscheidet, wie er fehlende Monate behandelt."""
+    if not months:
+        return {}
+    with _get_db() as conn:
+        placeholders = ",".join("?" * len(months))
+        rows = conn.execute(
+            f"""SELECT substr(date, 1, 7) AS month, SUM(value) FROM logs
+                WHERE topic = ? AND key = ? AND substr(date, 1, 7) IN ({placeholders})
+                GROUP BY month""",
+            (topic, key, *months),
+        ).fetchall()
+    return {r[0]: r[1] or 0.0 for r in rows}
 
 
 # ── Fortschritt ───────────────────────────────────────────────────────────────

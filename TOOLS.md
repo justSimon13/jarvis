@@ -30,7 +30,7 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | Tool | Parameter | Verhalten |
 |---|---|---|
 | `data_query` | `database("todos"\|"projekte"), search?, status?, limit?` | Lesen/Filtern. Ohne `limit` kommt praktisch die komplette Liste (Default 200 bei `projekte`, 10 bei `todos` — seit 2026-07-27, vorher hart 10 für beide, Projekte wurden dadurch silently abgeschnitten). |
-| `data_write` | `database, properties` | Neuer Eintrag. `projekte.geschaetzter_wert` (Zahl, seit 2026-07-26) — geschätzter Auftragswert, speist die Finanzen-Übersicht in der Tracking-View. |
+| `data_write` | `database, properties` | Neuer Eintrag. `projekte.geschaetzter_wert` (Zahl, seit 2026-07-26) — geschätzter Auftragswert, speist die Finanzen-Übersicht in der Tracking-View. `projekte.erwartetes_abschlussdatum` (YYYY-MM-DD, seit 2026-07-27) — bekannter Pipeline-Abschluss, speist den Gewinn-Trend-Chart als "Pipeline"-Balken im jeweiligen Monat. |
 | `data_update` | `id, database, properties` | Bestehenden Eintrag ändern. |
 | `data_delete` | `id, database` | Löschen. |
 | `read_seite` | `seite_id` | Lazy-Load des vollen Inhalts einer Unterseite (Listen liefern nur Titel+ID, aus Token-Kostengründen). |
@@ -65,6 +65,7 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | `set_goal` | `topic, key, value, unit?, label?` | Strukturiertes Ziel — nur Zahlenwerte mit Einheit, keine Prosa. |
 | `log_entry` | `topic, key, value?, text_value?, unit?, notes?, date?` | **Sofort aufrufen**, parallel zur Antwort, bei jedem messbaren Ereignis (Training, Gewicht, Kalorien, Schlaf, Ausgaben) — nie erst um Erlaubnis fragen. Feste Konvention `topic="finanzen", key="gewinn"` für realisierte Gewinne (seit 2026-07-26) — Gegenstück zu `geschaetzter_wert` an Projekten, beides zusammen ergibt die Finanzen-Übersicht (`finanzen_overview`). |
 | `get_progress` | `topic` | Ziel + letzter Log-Wert + Trend. |
+| `delete_log_entry` | `entry_id` | Löscht einen einzelnen Log-Eintrag (seit 2026-07-27) — generisch für jedes Topic, z.B. um einen doppelten/falschen Eintrag zu korrigieren. Vorher kurz bestätigen was gelöscht wird. |
 
 ### Kalender (`services/calendar.py`)
 

@@ -661,6 +661,30 @@ Verifiziert: Playwright-Testlauf gegen den echten laufenden jarvis-web-Dev-Serve
 
 ---
 
+## 🔴 Gewinn-Trend-Chart + Pipeline/Hochrechnung + Datenbereinigung (2026-07-27) ✅
+
+**Anlass:** Feature-Spec kam von JARVIS selbst (Simon hat sie 1:1 weitergereicht) — Trend-Chart für die Finanzen-Übersicht mit echter Pipeline (bekannte Projektabschlüsse) und Hochrechnung für den Rest, plus eine dringende Datenbereinigung (3 doppelt zählende Gewinn-Einträge). Simons ausdrücklicher Zusatz: *"sehe das nicht als spezielles Financing Feature, das soll generell abbildbar sein"* — die generische Zeitreihen-Aggregation muss wiederverwendbar bleiben, nicht Finanzen-spezifisch fest verdrahtet.
+
+**Architekturentscheidung für die Generalisierung:** neues, eigenständiges Modul `finanzen.py` — kombiniert `local_data` (Projekte) mit `tracking.py` (Logs), aber `tracking.py` selbst bleibt komplett domänen-neutral. Neue generische Funktionen dort: `get_monthly_series(topic, key, months)` (Summe pro Kalendermonat für eine beliebige Monatsliste, kein Finanzen-Bezug) und `delete_log(entry_id)` (Log-Eintrag per id löschen, jedes Topic). Die Finanzen-spezifische Komposition (Pipeline aus Projekt-Abschlussdaten, Hochrechnung, kumulierte Summe) sitzt bewusst in `finanzen.py`, nicht in `tracking.py` — jemand könnte `get_monthly_series()`/`delete_log()` morgen genauso gut für einen Sport- oder Ausgaben-Trend nutzen.
+
+**1. Datenbereinigung (zuerst, wie von Simon verlangt):** Live-Daten vor dem Löschen per Read-only-Check exakt verifiziert (nicht blind auf die Beschreibung verlassen) — bestätigt drei pauschale Alt-Einträge (Datum = Anlage-Tag 26.07.2026, nicht echtes Zahlungsdatum): knowHere Theme 6.800€, Ticketsystem 10.900€, Michelle Webseite 0€. Diese wurden durch feiner aufgeteilte, korrekt datierte Einträge ersetzt (knowHere: 4.800€/2025-03-03 + 800€/2025-05-05 + 1.200€/2025-10-08 = 6.800€; Ticketsystem: 10.000€/2025-11-08 + 900€/2025-12-11 = 10.900€ — beide Summen exakt bestätigt). Bereinigung als einmalige, geloggte Migration in `tracking.py`s `_get_db()` — Löschung per **exaktem id-Match** der drei konkreten UUIDs (nicht per Datum/Wert-Kriterium), damit garantiert nie ein unabhängiger künftiger Eintrag mit zufällig gleichem Datum/Wert betroffen ist. Live-Test mit einem extra "unrelated"-Log am selben Datum bestätigt: übersteht die Bereinigung unangetastet.
+
+**2. Neues Feld `projekte.erwartetes_abschlussdatum`** (YYYY-MM-DD) — für bekannte Pipeline-Projekte. Durchgängig verdrahtet wie `geschaetzter_wert` vorher (list/add/update/write/`_ENTITY_FIELDS`/Tool-Beschreibung).
+
+**3. `finanzen.compute_overview()`:** jetzt zusätzlich `gesamtpotenzial` = geschätzter + tatsächlicher Gewinn, neben den beiden bestehenden Einzelwerten.
+
+**4. `finanzen.compute_trend(months, today)`:** Fenster **symmetrisch um den aktuellen Monat** (12 → 6 zurück + aktuell + 5 voraus; 24 → 12+12) — zeigt also immer sowohl Vergangenheit als auch Zukunft. Vergangene/aktuelle Monate: reale Summe. Zukünftige Monate mit bekanntem `erwartetes_abschlussdatum` (nicht abgeschlossene Projekte): deren `geschaetzter_wert` als Pipeline. Übrige Zukunftsmonate: Hochrechnung = Gesamtsumme bisheriger Gewinne ÷ Monate seit ältestem Eintrag. Laufende kumulierte Summe übers ganze Fenster. Neue Server-Resource `finanzen_trend` (`months`-Param, nur 12/24 gültig).
+
+**5. `TrendChart.vue`** (neu, `dataviz`-Skill-Leitlinien angewendet) — hand-gerolltes SVG (kein neuer Chart-Library-Dependency, passt zur "einfacher Deploy"-Linie): ein Balken pro Monat (Ist/Pipeline/Prognose farblich unterschieden, Prognose zusätzlich gestrichelt+abgeschwächt), überlagerte kumulierte Linie (gestrichelt im Prognose-Bereich), **eine** gemeinsame Y-Achse (nie zwei Skalen), sparsame Achsenbeschriftung, Legende, Hover/Fokus-Detailzeile mit allen Werten des angeklickten Monats (kein reines Line-Hover-Gefummel), 12/24-Monats-Umschalter. Als generische, wiederverwendbare Komponente gebaut (Props: `title`, `data`, `months`, `avgPerMonth`), nicht Gewinn-Text hartcodiert im Kern.
+
+**Live-Deployment-Erkenntnis:** der `auto_update.sh`-Timer hatte in der Zwischenzeit tatsächlich bereits mehrere frühere Commits dieser Session automatisch auf den HP-Server gezogen (bestätigt per Live-Read gegen die reale `finanzen_overview`-Resource) — die "Backend braucht erst Deploy"-Einschränkung der letzten Runden ist also kein Dauerzustand, nur eine Verzögerung von einigen Stunden bis zum nächsten Idle-Fenster.
+
+**Noch offen:** `erwartetes_abschlussdatum` für die zwei echten Pipeline-Projekte (halbautomaten – WordPress Relaunch: 8.625€ → Oktober 2026; Digital Mindset: 10.950€ → Dezember 2026) muss noch live gesetzt werden, sobald der Server auch *dieses* Feld kennt (Feld ist neu in diesem Commit, noch nicht deployed) — nachträglicher Schritt, siehe nächster Eintrag.
+
+Verifiziert: `finanzen.py` per Standalone-Testskript gegen die realen Zahlen nachgebaut und Hochrechnung von Hand nachgerechnet (17.700€ / 17 Monate = 1.041,18€/Monat, exakt bestätigt), 12- und 24-Monats-Fenster-Grenzen geprüft, Erledigt-Projekte korrekt von der Pipeline ausgeschlossen. Bereinigungs-Migration gegen nachgebaute Testdaten verifiziert (inkl. "unrelated same-date entry survives"-Check). `TrendChart.vue` per Playwright mit realistischen Testdaten visuell geprüft (Balken/Linie/Legende/Hover/12↔24-Umschaltung), ein echter Label-Kollisions-Bug dabei gefunden und gefixt (letzte zwei Monatsbeschriftungen überlappten). `npm run build` sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

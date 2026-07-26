@@ -21,6 +21,7 @@ import websockets
 import brain
 import config
 import context
+import finanzen
 import knowledge
 import learning
 import protocol as P
@@ -413,26 +414,13 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
         except Exception as e:
             return {"error": str(e)}
     if resource == "finanzen_overview":
-        # Kombiniert lokal_data.projekte (geschätzter Wert, Simons Schätzung pro
-        # Projekt) mit tracking.py's realen Gewinn-Logs (topic="finanzen",
-        # key="gewinn") — zwei getrennte Datenquellen, die sonst nirgends
-        # zusammenlaufen. "Geschätzt" zählt nur nicht abgeschlossene Projekte
-        # (gleiche Konvention wie list_todos()/context.py: Erledigt/Archiviert
-        # raus), sonst würde ein längst abgerechnetes Projekt doppelt zählen
-        # (einmal als Schätzung, einmal als realer Log-Eintrag).
         try:
-            projekte_mit_schaetzung = [
-                {"id": p["id"], "name": p["name"], "status": p.get("status"), "geschaetzter_wert": p["geschaetzter_wert"]}
-                for p in local_data.list_projekte()
-                if p.get("geschaetzter_wert") and p.get("status") not in ("Erledigt", "Archiviert")
-            ]
-            logs = tracking.get_logs("finanzen", key="gewinn", limit=500)
-            return {
-                "geschaetzt_gesamt": sum(p["geschaetzter_wert"] for p in projekte_mit_schaetzung),
-                "projekte": projekte_mit_schaetzung,
-                "tatsaechlich_gesamt": sum(l["value"] for l in logs if l["value"] is not None),
-                "tatsaechlich_verlauf": list(reversed(logs)),
-            }
+            return finanzen.compute_overview()
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "finanzen_trend":
+        try:
+            return finanzen.compute_trend(months=int(req_data.get("months", 12)))
         except Exception as e:
             return {"error": str(e)}
     if resource == "session_transcript":
@@ -514,7 +502,7 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
 _ENTITY_FIELDS = {
     "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
                      "source", "external_id", "repo", "body", "labels"},
-    "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"},
+    "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
 }
