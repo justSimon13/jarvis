@@ -5,18 +5,28 @@ import config
 _client = None
 MODEL = "claude-sonnet-5"
 
-# Preise in USD je 1M Tokens (Sonnet-Tarif, deckt sowohl 4.6 als auch 5 ab —
-# identische Preise). 1h-Cache-TTL statt der 5-Minuten-Default: Nachrichten im
-# normalen Gespräch liegen typischerweise mehrere Minuten auseinander (echtes
-# Reden, keine Automatisierung) — bei 5 Minuten kühlt der Cache ständig ab,
-# jede erneute Nachricht zahlt dann den vollen Neuschreib-Preis für System-
-# Prompt + alle Tool-Schemas. 1h-Schreiben kostet zwar mehr (2× statt 1,25×
-# Grundpreis), aber deutlich seltener — netto günstiger bei diesem Nutzungsmuster.
-# Kein Beta-Header nötig, ttl:"1h" ist inzwischen regulärer API-Standard.
-_PRICE_PER_M_INPUT = 3.00
-_PRICE_PER_M_OUTPUT = 15.00
-_PRICE_PER_M_CACHE_WRITE = _PRICE_PER_M_INPUT * 2.0
-_PRICE_PER_M_CACHE_READ = _PRICE_PER_M_INPUT * 0.10
+# Modelle, die JARVIS' Chat-Pipeline zur Wahl stellt (Preis in USD je 1M Tokens,
+# Input/Output — Stand 2026-07-25, Sonnet-5-Preis inkl. Einführungsrabatt bis
+# 2026-08-31 ($2/$10, danach $3/$15 wie hier hinterlegt). Jedes Modell hat einen
+# eigenen Preis — compute_cost() schlägt darüber nach, nicht mehr fest verdrahtet
+# auf den Sonnet-Tarif, sonst wäre die Kostenanzeige bei Opus/Haiku/Fable falsch.
+MODEL_CATALOG = {
+    "claude-haiku-4-5": {"label": "Haiku 4.5", "input": 1.00, "output": 5.00},
+    "claude-sonnet-5":  {"label": "Sonnet 5",  "input": 3.00, "output": 15.00},
+    "claude-opus-5":    {"label": "Opus 5",    "input": 5.00, "output": 25.00},
+    "claude-fable-5":   {"label": "Fable 5",   "input": 10.00, "output": 50.00},
+}
+
+# 1h-Cache-TTL statt der 5-Minuten-Default: Nachrichten im normalen Gespräch liegen
+# typischerweise mehrere Minuten auseinander (echtes Reden, keine Automatisierung) —
+# bei 5 Minuten kühlt der Cache ständig ab, jede erneute Nachricht zahlt dann den
+# vollen Neuschreib-Preis für System-Prompt + alle Tool-Schemas. 1h-Schreiben kostet
+# zwar mehr (2× statt 1,25× Grundpreis), aber deutlich seltener — netto günstiger bei
+# diesem Nutzungsmuster. Kein Beta-Header nötig, ttl:"1h" ist regulärer API-Standard.
+# Cache-Multiplikatoren sind proportional zum jeweiligen Input-Preis des Modells,
+# siehe compute_cost().
+_CACHE_WRITE_MULT = 2.0
+_CACHE_READ_MULT = 0.10
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -35,21 +45,26 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
-def compute_cost(usage) -> float:
+def compute_cost(usage, model: str | None = None) -> float:
     """Kosten eines einzelnen API-Calls in USD, aus dem usage-Objekt der Anthropic-Antwort.
     Nur eine Schätzung auf Basis der Listenpreise — für die exakte Abrechnung zählt die
-    Anthropic Console (gleiche Einschränkung wie bei der Coding-Engine-Kostenschätzung)."""
+    Anthropic Console (gleiche Einschränkung wie bei der Coding-Engine-Kostenschätzung).
+    model: welches Modell den Call tatsächlich bearbeitet hat — jedes hat einen eigenen
+    Preis (siehe MODEL_CATALOG), Fallback auf MODEL falls unbekannt/nicht angegeben."""
     if not usage:
         return 0.0
+    pricing = MODEL_CATALOG.get(model, MODEL_CATALOG[MODEL])
+    price_in = pricing["input"]
+    price_out = pricing["output"]
     input_tokens = getattr(usage, "input_tokens", 0) or 0
     output_tokens = getattr(usage, "output_tokens", 0) or 0
     cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     cost = (
-        input_tokens * _PRICE_PER_M_INPUT
-        + output_tokens * _PRICE_PER_M_OUTPUT
-        + cache_write * _PRICE_PER_M_CACHE_WRITE
-        + cache_read * _PRICE_PER_M_CACHE_READ
+        input_tokens * price_in
+        + output_tokens * price_out
+        + cache_write * price_in * _CACHE_WRITE_MULT
+        + cache_read * price_in * _CACHE_READ_MULT
     ) / 1_000_000
     return cost
 
@@ -123,14 +138,22 @@ def _compress_attachment(item: dict) -> dict:
 
 @contextmanager
 def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None,
-           thinking: bool = False):
+           thinking: bool = False, model: str | None = None):
     """
-    thinking: Adaptive Thinking an/aus (Sonnet 5 — bei claude-sonnet-4-6 gab es das Feld
-    nicht, dort war "kein Thinking" schlicht das einzige Verhalten). Default aus, damit
-    sich am bisherigen schnellen Antwortverhalten (Voice) nichts stillschweigend ändert.
-    max_tokens wird bei aktivem Thinking angehoben, da Thinking-Tokens dort mit hineinzählen
-    — bei 8096 könnte eine Antwort sonst mitten im Denkprozess abgeschnitten werden.
+    model: eines der Modelle aus MODEL_CATALOG — Fallback auf MODEL bei ungültigem/fehlendem Wert.
+    thinking: Adaptive Thinking an/aus. Default aus, damit sich am bisherigen schnellen
+    Antwortverhalten (Voice) nichts stillschweigend ändert. max_tokens wird bei aktivem
+    Thinking angehoben, da Thinking-Tokens dort mit hineinzählen — bei 8096 könnte eine
+    Antwort sonst mitten im Denkprozess abgeschnitten werden.
+
+    Sonderfall Fable 5: erlaubt kein thinking={"type":"disabled"} (400 bei jedem Versuch,
+    Thinking läuft dort immer). Der thinking-Parameter wird für dieses Modell ignoriert,
+    nicht als Fehler behandelt — die UI deaktiviert den Thinking-Toggle bei Fable-5-Auswahl
+    zusätzlich, das hier ist die serverseitige Absicherung falls trotzdem thinking=False
+    ankommt (z.B. altes Frontend, direkter API-Aufruf).
     """
+    model = model if model in MODEL_CATALOG else MODEL
+
     system = [
         {"type": "text", "text": system_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": system_dynamic},
@@ -140,11 +163,15 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
     if tools:
         cached_tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
 
-    thinking_config = {"type": "adaptive"} if thinking else {"type": "disabled"}
-    max_tokens = 16000 if thinking else 8096
+    if model == "claude-fable-5":
+        thinking_config = {"type": "adaptive"}
+        max_tokens = 16000
+    else:
+        thinking_config = {"type": "adaptive"} if thinking else {"type": "disabled"}
+        max_tokens = 16000 if thinking else 8096
 
     with _get_client().messages.stream(
-        model=MODEL,
+        model=model,
         max_tokens=max_tokens,
         thinking=thinking_config,
         system=system,

@@ -95,6 +95,8 @@ class JarvisPipeline:
         # aus, damit sich das Antwortverhalten beim Sonnet-5-Umstieg nicht stillschweigend
         # ändert (Sonnet 5 denkt sonst per Default, anders als das bisherige Sonnet 4.6).
         self._thinking_enabled: bool = False
+        # LLM-Modell — per Client/Session wählbar (siehe llm.MODEL_CATALOG), Default Sonnet 5.
+        self._model: str = llm.MODEL
 
     def set_room(self, room: str):
         self._room = room
@@ -105,6 +107,10 @@ class JarvisPipeline:
 
     def set_thinking(self, enabled: bool):
         self._thinking_enabled = bool(enabled)
+
+    def set_model(self, model: str):
+        if model in llm.MODEL_CATALOG:
+            self._model = model
 
     def greet(self, text: str = "Bereit."):
         """Begrüßung beim Connect eines Sprach-Clients — bewusst OHNE LLM-Call.
@@ -271,7 +277,7 @@ class JarvisPipeline:
 
             try:
                 with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS,
-                                 thinking=self._thinking_enabled) as s:
+                                 thinking=self._thinking_enabled, model=self._model) as s:
                     for chunk in s.text_stream:
                         if not response_started:
                             self._emit(P.RESPONSE_START)
@@ -299,7 +305,7 @@ class JarvisPipeline:
                                     break
 
                     final = s.get_final_message()
-                    total_cost += llm.compute_cost(final.usage)
+                    total_cost += llm.compute_cost(final.usage, model=self._model)
                     print(f"[pipeline] LLM fertig: {time.monotonic() - t_llm_start:.2f}s, stop={final.stop_reason}", flush=True)
 
             except anthropic.APIStatusError as e:
@@ -323,9 +329,19 @@ class JarvisPipeline:
                 tts_queue.put(None)
 
             tts_done.wait()
+
+            # Sicherheits-Ablehnung (stop_reason="refusal" — v.a. bei Fable 5 möglich,
+            # dessen Klassifikatoren u.a. auf Cyber-/Bio-nahe Themen ansprechen, aber
+            # grundsätzlich auf jedem Modell mit den neueren Sicherheitsfiltern denkbar).
+            # Ohne Sonderbehandlung wäre das weder "end_turn" noch "tool_use" — die
+            # Schleife würde mit unveränderten client_messages einfach erneut denselben
+            # Request stellen, vermutlich erneut mit derselben Ablehnung: Endlosschleife.
+            if final.stop_reason == "refusal" and not turn_text.strip():
+                turn_text = "Diese Anfrage wurde aus Sicherheitsgründen abgelehnt."
+
             self._emit(P.RESPONSE_DONE, text=turn_text)
 
-            if final.stop_reason == "end_turn":
+            if final.stop_reason in ("end_turn", "refusal"):
                 full_response = turn_text
                 if turn_text:
                     client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
