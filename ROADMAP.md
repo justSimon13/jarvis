@@ -602,6 +602,24 @@ Verifiziert: erweitertes Standalone-Testskript deckt jetzt alle vier `quelle_typ
 
 ---
 
+## 🔴 Finanzen-Übersicht in Tracking (geschätzter vs. tatsächlicher Gewinn) (2026-07-27) ✅
+
+**Anlass:** Simon wollte das Tracking-System noch mal anschauen — *"Ich will Dynamisch Statistiken anzeigen lassen, je nach Thema... ich will eine Statistik haben mit allen Gewinnen und auch mögliche Gewinne basierend auf planende Projekte. Auch sport soll getrackt werden."* Vorab-Check ergab: `tracking.py` ist bereits vollständig topic-generisch (Sport lief schon vor dieser Änderung produktiv, ganz ohne Code-Anpassung — bestätigt live: echte Einträge "5km"/"1.4km" unter `topic="sport"`). Es fehlten nur zwei Dinge: (1) eine Datenquelle für "geschätzte/mögliche Gewinne aus planenden Projekten" — Projekte hatten keinen Wertfeld — und (2) eine Kombination aus geschätzt + tatsächlich in der UI. Auf Simons Bestätigung hin bewusst minimal gehalten (*"Zukünftig kann das ausgebaut werden, aber das reicht"*) — keine allgemeine Chart-Library eingeführt, da laut `dataviz`-Skill-Leitlinie "ein paar Kennzahlen" ein KPI-Stat-Tile-Layout verdienen, keinen Chart.
+
+**Neues Feld `projekte.geschaetzter_wert`** (`local_data.py`, REAL, per `_ensure_column`) — geschätzter Auftragswert. Durchgängig verdrahtet: `list_projekte()`/`query()`/`add_projekt()`/`update_projekt()`/`write()`, `_ENTITY_FIELDS["projekte"]` (server.py, für den `entity_action`-Pfad), `data_write`-Tool-Beschreibung.
+
+**Konvention `topic="finanzen", key="gewinn"`** (`tracking.py`, per `log_entry`) für realisierte Gewinne — Gegenstück zum geschätzten Wert an Projekten.
+
+**Neue Server-Resource `finanzen_overview`** (`server.py::_handle_data_request`) — kombiniert beide Quellen: Summe `geschaetzter_wert` über alle nicht abgeschlossenen Projekte (Status `Erledigt`/`Archiviert` ausgeschlossen, gleiche Konvention wie `list_todos()`/`context.py`, sonst würde ein längst abgerechnetes Projekt doppelt zählen) + Summe/Verlauf der `finanzen`/`gewinn`-Logs. `"finanzen"` deshalb aus dem generischen `tracking_topics`-Ergebnis ausgeschlossen (wie `"coding_engine"`) — eigene dedizierte Ansicht statt generischer Topic-Karte.
+
+**Frontend:** neuer Finanzen-Block in `TrackingView.vue` — zwei Stat-Tiles ("Geschätzter Gewinn"/"Tatsächlicher Gewinn", gleiches Muster wie die bestehenden Chat/Coding-Kosten-Tiles) plus zwei Breakdown-Listen (Projekte mit Schätzung, realisierte Gewinn-Einträge). `ProjektItem.vue`/`SeiteView.vue` zeigen `geschaetzter_wert` zusätzlich als Tag, Edit-Formular bekommt ein neues Zahlenfeld.
+
+**Nebenbei gefundener Bug (nicht von Simon gemeldet, beim Live-Testen der neuen Tracking-View aufgefallen):** `store.requestData()` (jarvis-web) matcht ausstehende Antworten nur über den `resource`-Namen, ohne Request-Id — `TrackingView.vue`s bestehender Code feuerte für mehrere Topics gleichzeitig `Promise.all(topics.map(t => requestData('tracking_progress', {topic: t})))` ab, was sich bei ≥2 Topics gegenseitig im internen Callback-Map überschreibt: eine Anfrage bekommt die falschen Daten, die andere hängt bis zum 10s-Timeout fest. Live reproduziert (Tracking-Seite blieb mit den echten Topics "chat"+"sport" dauerhaft auf "Lädt…" hängen). Gefixt durch sequenzielles statt paralleles Abfragen in `TrackingView.vue` — die naheliegendere generelle Lösung (Request-Ids im Protokoll) wäre eine größere, hier nicht gerechtfertigte Änderung an gemeinsam genutzter Infrastruktur gewesen.
+
+Verifiziert: Standalone-Testskript gegen `local_data`/`tracking` (Projekte mit/ohne Schätzung, Status Erledigt korrekt ausgeschlossen, Aggregation stimmt). Playwright gegen den echten laufenden jarvis-web-Dev-Server: Edit-Feld rendert korrekt, Tracking-Seite lädt nach dem Fix zuverlässig und zeigt Chat+Sport mit korrekt zugeordneten (nicht mehr vertauschten) Daten. Finanzen-Block selbst noch nicht live sichtbar getestet — Backend-Teil braucht wie bei den vorherigen Änderungen erst das Auto-Update/manuelle Pip-Install auf dem HP-Server.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

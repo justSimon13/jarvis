@@ -17,7 +17,7 @@ Prozess-Einstieg (`python3 server.py`). Hält alles globale mutable State (Histo
 - `_check_satellite_timeout()` (Z. 178) — 8h-Inaktivitäts-Timeout, nur Voice-Kategorie, rotiert Session, ruft `session_memory.save()`.
 - `_persist_web_turn()` (Z. 213) — nach jedem Web-Text-Turn `session_memory.upsert(..., finalize=False)` im Executor-Thread.
 - `_build_layout_config(mode)` (Z. 270) — berechnet `{cards, quick_actions}` aus `brain.read("modules")`, Fallback `_DEFAULT_QA_IDS`/`_DEFAULT_CARD_IDS`, hängt `alarms`/`followups`-Karten dynamisch an wenn Daten vorhanden. Registrierungen `_QA_REGISTRY` (Z. 234), `_CARD_REGISTRY` (Z. 251).
-- `_handle_data_request(resource, ...)` (Z. 303) — Layer-1-Dispatch ("kein LLM-Umweg"): `knowledge_index`, `knowledge_file`, `todos`, `tickets`, `seite`, `calendar`, `alarms`, `followups`, `history`, `weather`, `clients`, `btc`, Coding-Engine-Status, `tracking_*`, `session_transcript`, `notification_history`.
+- `_handle_data_request(resource, ...)` (Z. 303) — Layer-1-Dispatch ("kein LLM-Umweg"): `knowledge_index`, `knowledge_file`, `todos`, `tickets`, `seite`, `calendar`, `alarms`, `followups`, `history`, `weather`, `clients`, `btc`, Coding-Engine-Status, `tracking_*`, `finanzen_overview` (seit 2026-07-26 — kombiniert `local_data.list_projekte()`s `geschaetzter_wert` mit `tracking.get_logs("finanzen", key="gewinn")`, Details siehe `tracking.py`-Sektion unten), `session_transcript`, `notification_history`.
 - `_do_entity_action()` (Z. 492) — direkte, nicht-LLM CRUD auf Todos/Projekte/Kontakte/Seiten via `local_data.*`.
 - `GENERATE_DOCUMENT_REQUEST`-Handler (seit 2026-07-26, im Dispatch-Loop, kein eigenes benanntes `def`) — ruft `document_export.generate()` direkt über den Executor auf, Layer 1 DATA wie `_do_entity_action`. Antwort: `DOCUMENT_READY` bei Erfolg, `ERROR` bei `ValueError` (unbekannte Quelle/Format). Gleicher Empfänger-Handler im Frontend wie der LLM-Tool-Pfad (`generate_document` in `tools.py`) — beide münden in dieselbe `document_ready`-Nachricht.
 - `_build_dashboard_sync()` (Z. 546) / `_push_dashboard_update()` (Z. 619) — bauen/broadcasten `DASHBOARD_SYNC`/`DASHBOARD_UPDATE`.
@@ -138,6 +138,7 @@ Ersetzt seit 2026-07-19/23 die alte Notion-Integration. Tabellen: `todos`, `proj
 - `todos` — inkl. Ticket-Spalten `source, external_id, repo, body, labels` — GitHub-Tickets sind einfach `WHERE source='github'`-gefilterte Todos (`list_tickets()`, Z. 135), keine eigene Tabelle.
 - `seiten` (Unterseiten, seit 2026-07-23) — `parent_typ`/`parent_id` (Wurzel: Todo/Projekt/Kontakt) XOR `eltern_seite_id` (verschachtelt unter einer anderen Seite).
 - CRUD-Tripel pro Entität: `list_/add_/update_/delete_todo` (117-201), analog `_projekt` (206-275), `_kontakt` (280-341).
+- `projekte.geschaetzter_wert` (REAL, seit 2026-07-26) — geschätzter Auftragswert, speist zusammen mit `tracking.py`s realen `finanzen`/`gewinn`-Logs die Finanzen-Übersicht in `TrackingView.vue` (Server-Resource `finanzen_overview`, siehe server.py). Nur für nicht abgeschlossene Projekte relevant (Status `Erledigt`/`Archiviert` zählt nicht mit).
 - `query/write/update/delete` (347-409) — generischer Dispatch für die LLM-Tool-Schicht (`todos`/`projekte`, nicht `kontakte`/`seiten`).
 - `create_seite()` (Z. 749) — erzwingt genau eine der beiden Eltern-Varianten. Docstring dokumentiert explizit den Bug, den diese Funktion behoben hat: JARVIS behauptete "in Notion" zu schreiben (existiert seit 2026-07-19 nicht mehr), weil es vorher keine Möglichkeit gab, überhaupt eine neue Unterseite anzulegen.
 - `update_seite()`, `get_seite()`, `list_seiten()`, `list_unterseiten()`, `get_seite_breadcrumbs()`, `get_seite_view()`, `read_seite()` (778-890) — Rest der Seiten-API.
@@ -192,7 +193,9 @@ Frontmatter kennt genau drei Felder: `topic`, `updated`, `tags`. Links leben nic
 
 ## tracking.py (~154 Zeilen) — Strukturierte Ziele/Logs
 
-SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — hier nur Zahlenwerte: `set_goal()`, `get_goal()`/`get_goals()`, `add_log()`, `get_logs()`, `get_progress()` (Ziel + letzter Log-Wert + Trend).
+SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — hier nur Zahlenwerte: `set_goal()`, `get_goal()`/`get_goals()`, `add_log()`, `get_logs()`, `get_progress()` (Ziel + letzter Log-Wert + Trend). Topic ist reiner Datenwert, kein Schema-Change für neue Themen nötig (z.B. Sport lief schon vor der Finanzen-Übersicht unten produktiv, ganz ohne Code-Änderung).
+
+**Konvention `topic="finanzen", key="gewinn"`** (seit 2026-07-26) — realisierte Gewinne, Gegenstück zu `projekte.geschaetzter_wert` (`local_data.py`). `server.py`s `finanzen_overview`-Resource kombiniert beides. `"finanzen"` ist deshalb aus dem generischen `tracking_topics`-Ergebnis ausgeschlossen (wie `"coding_engine"`) — hat eine eigene dedizierte Ansicht statt der generischen Topic-Karte.
 
 ---
 

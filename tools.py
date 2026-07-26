@@ -256,7 +256,9 @@ DEFINITIONS = [
             "Erstellt einen neuen Eintrag in Todos oder Projekten. "
             "Verfügbare Datenbanken: 'todos', 'projekte'. "
             "todos: name (Pflicht), status, datum (YYYY-MM-DD), prioritaet (Niedrig/Mittel/Hoch), bereich, aufwand. "
-            "projekte: name (Pflicht), status, beschreibung, typ."
+            "projekte: name (Pflicht), status, beschreibung, typ, geschaetzter_wert (Zahl, geschätzter Auftragswert "
+            "in Euro — speist die Finanzen-Übersicht in der Tracking-View als 'geschätzter Gewinn', nur für nicht "
+            "abgeschlossene Projekte relevant)."
         ),
         "input_schema": {
             "type": "object",
@@ -918,7 +920,11 @@ DEFINITIONS = [
             "Parallel zur Antwort aufrufen — Simon nicht fragen ob er es geloggt haben will. "
             "Beispiele: 'Training gemacht' → log_entry('sport', 'training', text_value='Pull-Day'). "
             "'Ich wiege heute 82kg' → log_entry('sport', 'gewicht', value=82.0, unit='kg'). "
-            "'Hatte heute 2800 kcal' → log_entry('ernaehrung', 'kalorien', value=2800, unit='kcal')."
+            "'Hatte heute 2800 kcal' → log_entry('ernaehrung', 'kalorien', value=2800, unit='kcal'). "
+            "'Habe 500€ Gewinn aus Projekt X gemacht' → log_entry('finanzen', 'gewinn', value=500, unit='€', "
+            "notes='Projekt X') — feste Konvention topic='finanzen'/key='gewinn' für realisierte Gewinne, speist "
+            "den 'tatsächlicher Gewinn'-Teil der Finanzen-Übersicht (Gegenstück: geschaetzter_wert an Projekten "
+            "für den geschätzten/potenziellen Teil, siehe data_write)."
         ),
         "input_schema": {
             "type": "object",

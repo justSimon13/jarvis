@@ -392,8 +392,10 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": str(e)}
     if resource == "tracking_topics":
         try:
-            # coding_engine hat seine eigene dedizierte Ansicht — hier nicht doppelt zeigen
-            return [t for t in tracking.list_topics() if t != "coding_engine"]
+            # coding_engine und finanzen haben je eine eigene dedizierte Ansicht
+            # (finanzen_overview kombiniert es zusätzlich mit Projekt-Schätzungen) —
+            # hier nicht nochmal generisch/doppelt zeigen.
+            return [t for t in tracking.list_topics() if t not in ("coding_engine", "finanzen")]
         except Exception as e:
             return {"error": str(e)}
     if resource == "tracking_progress":
@@ -404,6 +406,29 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             progress = tracking.get_progress(topic)
             progress["logs"] = tracking.get_logs(topic, limit=10)
             return progress
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "finanzen_overview":
+        # Kombiniert lokal_data.projekte (geschätzter Wert, Simons Schätzung pro
+        # Projekt) mit tracking.py's realen Gewinn-Logs (topic="finanzen",
+        # key="gewinn") — zwei getrennte Datenquellen, die sonst nirgends
+        # zusammenlaufen. "Geschätzt" zählt nur nicht abgeschlossene Projekte
+        # (gleiche Konvention wie list_todos()/context.py: Erledigt/Archiviert
+        # raus), sonst würde ein längst abgerechnetes Projekt doppelt zählen
+        # (einmal als Schätzung, einmal als realer Log-Eintrag).
+        try:
+            projekte_mit_schaetzung = [
+                {"id": p["id"], "name": p["name"], "status": p.get("status"), "geschaetzter_wert": p["geschaetzter_wert"]}
+                for p in local_data.list_projekte()
+                if p.get("geschaetzter_wert") and p.get("status") not in ("Erledigt", "Archiviert")
+            ]
+            logs = tracking.get_logs("finanzen", key="gewinn", limit=500)
+            return {
+                "geschaetzt_gesamt": sum(p["geschaetzter_wert"] for p in projekte_mit_schaetzung),
+                "projekte": projekte_mit_schaetzung,
+                "tatsaechlich_gesamt": sum(l["value"] for l in logs if l["value"] is not None),
+                "tatsaechlich_verlauf": list(reversed(logs)),
+            }
         except Exception as e:
             return {"error": str(e)}
     if resource == "session_transcript":
@@ -485,7 +510,7 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
 _ENTITY_FIELDS = {
     "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
                      "source", "external_id", "repo", "body", "labels"},
-    "projekte":     {"name", "status", "beschreibung", "typ", "notizen"},
+    "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
 }
