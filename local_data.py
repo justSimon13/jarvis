@@ -348,16 +348,25 @@ def delete_kontakt(kontakt_id: int) -> None:
 # ── Generischer Dispatch für die LLM-Tools (data_query/write/update/delete) ───
 # Feldnamen sind die lokalen (name/status/datum/prioritaet/...).
 
-def query(database: str, search: str | None = None, status: str | None = None, limit: int = 10) -> list[dict]:
+def query(database: str, search: str | None = None, status: str | None = None, limit: int | None = None) -> list[dict]:
+    """limit=None nutzt einen pro Datenbank sinnvollen Default — Todos können über Jahre auf
+    hunderte anwachsen (10 ist da ein bewusster Kosten-Filter), Projekte sind dagegen eine
+    kleine, begrenzte Liste (typischerweise < 50), ein Default von 10 hätte dort früher
+    stillschweigend ältere/weitere Projekte verschluckt, ohne dass das LLM das je bemerkt hätte
+    (Simon: 'Ich glaube Jarvis hat keine Möglichkeit alle Projekte zu ziehen')."""
     if database == "todos":
         cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
                 "source", "external_id", "repo", "body", "labels"]
         table = "todos"
+        default_limit = 10
     elif database == "projekte":
         cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"]
         table = "projekte"
+        default_limit = 200
     else:
         raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
+    if limit is None:
+        limit = default_limit
 
     sql = f"SELECT {', '.join(cols)} FROM {table} WHERE 1=1"
     params: list = []

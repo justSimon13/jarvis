@@ -224,7 +224,12 @@ DEFINITIONS = [
             "'unterseiten'-Feld (Liste von {id, titel}) — das sind nur die Titel, "
             "kein Inhalt (Kosten-Rücksicht). Volltext einer Unterseite bei Bedarf "
             "mit read_seite(seite_id) nachladen, neue Unterseite anlegen mit "
-            "create_seite, bestehende bearbeiten mit write_seite."
+            "create_seite, bestehende bearbeiten mit write_seite. "
+            "Ohne limit-Angabe kommt bereits praktisch die komplette Liste zurück "
+            "(Default 200 bei 'projekte', 10 bei 'todos' — Projekte sind eine kleine, "
+            "begrenzte Liste, Todos können über Jahre auf sehr viele anwachsen). "
+            "Für 'zeig mir wirklich ALLE Projekte/Todos' trotzdem explizit einen hohen "
+            "limit-Wert (z.B. 500) setzen, um sicherzugehen."
         ),
         "input_schema": {
             "type": "object",
@@ -244,7 +249,7 @@ DEFINITIONS = [
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximale Anzahl Ergebnisse (Standard: 10)",
+                    "description": "Maximale Anzahl Ergebnisse. Weglassen = Default (200 bei 'projekte', 10 bei 'todos').",
                 },
             },
             "required": ["database"],
@@ -1041,7 +1046,7 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
                 database=tool_input["database"],
                 search=tool_input.get("search"),
                 status=tool_input.get("status"),
-                limit=tool_input.get("limit", 10),
+                limit=tool_input.get("limit"),  # None -> passender Default pro Datenbank, siehe local_data.query()
             )
             return json.dumps(results, ensure_ascii=False)
 

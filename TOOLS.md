@@ -29,7 +29,7 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 
 | Tool | Parameter | Verhalten |
 |---|---|---|
-| `data_query` | `database("todos"\|"projekte"), search?, status?, limit?` | Lesen/Filtern. |
+| `data_query` | `database("todos"\|"projekte"), search?, status?, limit?` | Lesen/Filtern. Ohne `limit` kommt praktisch die komplette Liste (Default 200 bei `projekte`, 10 bei `todos` — seit 2026-07-27, vorher hart 10 für beide, Projekte wurden dadurch silently abgeschnitten). |
 | `data_write` | `database, properties` | Neuer Eintrag. `projekte.geschaetzter_wert` (Zahl, seit 2026-07-26) — geschätzter Auftragswert, speist die Finanzen-Übersicht in der Tracking-View. |
 | `data_update` | `id, database, properties` | Bestehenden Eintrag ändern. |
 | `data_delete` | `id, database` | Löschen. |

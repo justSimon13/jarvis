@@ -620,6 +620,16 @@ Verifiziert: Standalone-Testskript gegen `local_data`/`tracking` (Projekte mit/o
 
 ---
 
+## 🔴 data_query('projekte') schnitt Listen silently bei 10 ab (2026-07-27) ✅
+
+**Anlass:** Simon: *"Ich glaube Jarvis hat keine Möglichkeit alle Projekte zu ziehen oder?"* — Verdacht bestätigt: `tools.py`s `data_query`-Ausführung reichte `tool_input.get("limit", 10)` durch, `local_data.query()` hatte ebenfalls einen harten Default von `10` für beide Datenbanken. Bei mehr als 10 Projekten (Simon hat aktuell ~10, war also bereits knapp am Rand) hätte JARVIS bei "zeig mir alle Projekte" oder "wie viele Projekte habe ich" silently nur einen Ausschnitt gesehen, ohne jeden Hinweis dass die Liste unvollständig ist.
+
+**Fix:** `local_data.query()`s `limit` ist jetzt `None`-fähig mit einem pro-Datenbank sinnvollen Default statt einem einzigen harten Wert für beide — `todos` bleibt bei 10 (kann über Jahre auf sehr viele Einträge anwachsen, der niedrige Default ist dort ein bewusster Kosten-Filter), `projekte` bekommt 200 (eine kleine, begrenzte Liste — Simons ~10 aktive Projekte passen locker rein, 200 ist praktisch "alle"). `tools.py` reicht `limit` jetzt unverändert durch (`tool_input.get("limit")`, kein hartes `10` mehr) statt den datenbankspezifischen Default zu überschreiben. Tool-Beschreibung ergänzt: JARVIS soll bei explizitem "wirklich ALLE"-Wunsch trotzdem einen hohen Wert wie 500 setzen, als zusätzliche Absicherung.
+
+Verifiziert: Standalone-Testskript gegen 15 angelegte Test-Projekte + 15 Test-Todos — `query("projekte")` ohne `limit` liefert jetzt alle 15 (vorher wären nur 10 gekommen), `query("todos")` bleibt unverändert bei 10, expliziter `limit`-Wert wird weiterhin respektiert. Einziger Call-Site von `local_data.query()` ist `tools.py` — geprüft, keine weiteren Aufrufer betroffen.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
