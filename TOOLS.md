@@ -37,6 +37,12 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | `create_seite` | `titel, inhalt?, parent_typ?, parent_id?, eltern_seite_id?` | Neue Unterseite — entweder an einem Todo/Projekt/Kontakt oder verschachtelt unter einer bestehenden Seite. |
 | `write_seite` | `seite_id, titel?, inhalt?` | Bestehende Seite überschreiben (`inhalt` ersetzt, hängt nicht an). |
 
+### Dokument-Export (`services/document_export.py`, seit 2026-07-26)
+
+| Tool | Parameter | Verhalten |
+|---|---|---|
+| `generate_document` | `quelle_typ("projekt"\|"seite"), quelle_id, format("pdf"\|"docx")` | Baut aus einem Projekt (Beschreibung+Notizen+alle Unterseiten) oder einer Seite (sie selbst+ihre Unterseiten) ein PDF/Word-Dokument und schickt es als `document_ready`-WS-Nachricht (Base64) an den aktuellen Client — nur im Web-Chat wirksam, Sprach-Clients haben keinen Weg, eine Datei entgegenzunehmen. Markdown wird über einen einfachen eigenen Block-Parser gerendert (Überschriften/Absätze/Bullet-Listen/Bold — keine Tabellen/Bilder/Code-Blöcke). |
+
 ### Brain (`brain.py`)
 
 | Tool | Parameter | Verhalten |

@@ -557,6 +557,23 @@ Verifiziert: Fake-Client-Testskript (Fable-5-Override, Opus-5 disabled-thinking,
 
 ---
 
+## 🔴 Dokument-Export: PDF/Word aus Projekten/Seiten (2026-07-26) ✅
+
+**Anlass:** Simon: *"Ich brauche ein Tool für die App. Jarvis sollte das aber allgemein können am besten. Aus den Projekten bzw. den Seiten, muss ich eine PDF oder ein Word Dokument generieren können."* — explizit als generische LLM-Fähigkeit gewollt (jederzeit per Zuruf im Chat auslösbar), nicht als hartkodierter Export-Button in einer einzelnen Frontend-View.
+
+**Neues Tool `generate_document`** (`tools.py`) — `quelle_typ("projekt"|"seite"), quelle_id, format("pdf"|"docx")`. Baut auf `services/document_export.py` (neu):
+- Bei `"projekt"`: Beschreibung + Notizen + alle Unterseiten (rekursiv) zu einem Dokument zusammengefasst. Bei `"seite"`: die Seite selbst + ihre Unterseiten.
+- Ein gemeinsamer, bewusst einfacher Markdown-Block-Parser (Überschriften/Absätze/Bullet-Listen/**Bold**) speist zwei Renderer — `reportlab` für PDF, `python-docx` für Word. Kein HTML-Zwischenschritt, keine Systemabhängigkeiten (anders als z.B. weasyprint/pandoc) — beide Libraries sind pip-only, passt zum "kein Docker"-Grundsatz.
+- Kleiner, beim Testen selbst gefundener Bug: wenn eine Seite ihren Inhalt mit einer Überschrift beginnt, die den eigenen Titel wiederholt (verbreitetes Muster), stand der Titel doppelt im Dokument (einmal als Section-Heading, einmal als erster Content-Block) — `_blocks_for_section()` verwirft eine führende Überschrift, die dem Section-Titel entspricht.
+
+**Auslieferung:** `tools.execute()` bekommt einen neuen optionalen `emit`-Parameter (`pipeline.py` reicht `self._emit` durch) — das generierte Dokument geht als eigene `document_ready`-WS-Nachricht (Base64) direkt an den aufrufenden Client, nicht im `tool_result`-Text (der bliebe sonst als riesiger Blob dauerhaft im Gesprächsverlauf hängen). jarvis-web (`stores/jarvis.js`) löst daraus einen Browser-Download aus (Blob + synthetischer `<a>`-Klick). Funktioniert nur im Web-Chat — Sprach-Clients haben keinen Weg, eine Datei entgegenzunehmen.
+
+**Deployment-Falle gefixt, bevor sie zuschlagen konnte:** `scripts/auto_update.sh` pullte bisher nur `git pull`, ohne je `pip install -r requirements.txt` nachzuziehen — neue Dependencies (hier `python-docx`/`reportlab`) wären auf dem HP-Server nie installiert worden, der nächste Neustart hätte mit `ImportError` den kompletten Server lahmgelegt. Jetzt läuft `pip install -q -r requirements.txt` direkt nach einem erfolgreichen Pull mit.
+
+Verifiziert: Standalone-Testskript gegen monkeypatchte `local_data`-Funktionen (kein Zugriff auf echte Daten) — Projekt- und Seiten-Export für beide Formate, DOCX-Inhalt per `python-docx`-Rückparsen geprüft (alle erwarteten Texte/Abschnitte vorhanden), PDF-Bytes-Header verifiziert und visuell per Rendering geprüft (Überschriften/Bullets/Bold/verschachtelte Unterseiten korrekt, keine doppelten Titel mehr nach dem Fix), Fehlerfälle (unbekanntes Projekt/Format) werfen korrekt `ValueError`. `npm run build` für jarvis-web sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

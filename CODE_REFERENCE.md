@@ -98,9 +98,9 @@ Toter Import: `config` wird importiert, nie referenziert.
 
 ---
 
-## protocol.py (93 Zeilen) — WebSocket-Message-Typen
+## protocol.py (~96 Zeilen) — WebSocket-Message-Typen
 
-Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`. 44 Konstanten:
+Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`. 45 Konstanten:
 
 | Gruppe | Konstanten |
 |---|---|
@@ -116,6 +116,7 @@ Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`.
 | Coding Engine | `CODING_APPROVAL_REQUEST/RESPONSE`, `CODING_TASK_STATUS`, `CODING_SUDO_PASSWORD_REQUEST/RESPONSE` (Passwort nie geloggt/gespeichert) |
 | Local Exec | `LOCAL_EXEC_REQUEST` (→Client mit Capability), `LOCAL_EXEC_RESPONSE` (→Server) |
 | Entity CRUD | `ENTITY_ACTION` (→Server), `ENTITY_ACTION_ACK` (→Client) |
+| Dokument-Export | `DOCUMENT_READY` (→Client, seit 2026-07-26 — `{"type":"document_ready","filename":"...","mime":"...","data_base64":"..."}`, Ergebnis von `generate_document`, jarvis-web löst daraus direkt einen Browser-Download aus) |
 
 ---
 
@@ -180,9 +181,11 @@ Frontmatter kennt genau drei Felder: `topic`, `updated`, `tags`. Links leben nic
 
 ---
 
-## tools.py (~1257 Zeilen) — LLM-Tool-Definitionen + Dispatch
+## tools.py (~1290 Zeilen) — LLM-Tool-Definitionen + Dispatch
 
-`DEFINITIONS` (Anthropic Tool-Use-Schema) + `execute(tool_name, tool_input)` (Try/Except-Wrapper, gibt bei Fehler `f"Fehler bei {tool_name}: {e}"` zurück). Vollständige, gruppierte Tool-Liste → `TOOLS.md`.
+`DEFINITIONS` (Anthropic Tool-Use-Schema) + `execute(tool_name, tool_input, emit=None)` (Try/Except-Wrapper, gibt bei Fehler `f"Fehler bei {tool_name}: {e}"` zurück). Vollständige, gruppierte Tool-Liste → `TOOLS.md`.
+
+`emit`-Parameter (seit 2026-07-26, optional, Default `None`): `pipeline.py`s `_run_llm()` reicht hier `self._emit` durch — für Tools, die dem Client eine eigene Server-Push-Nachricht schicken müssen statt (nur) einen Text-Result für die LLM-Loop zurückzugeben. Aktuell einziger Nutzer: `generate_document` — das erzeugte Dokument geht als `document_ready`-WS-Nachricht raus (siehe `services/document_export.py`), nicht im `tool_result`-Text, der würde sonst als riesiger Base64-Blob dauerhaft im Gesprächsverlauf hängen bleiben (auch nach `compress_tool_history()`, die nur Text >400 Zeichen kürzt, nicht auf Base64-Inhalte prüft).
 
 ---
 
@@ -211,6 +214,7 @@ SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — h
 | `btc.py` | Bitcoin-Preis | CoinGecko | 15-Min-Cache `btc_cache.json` |
 | `client_music.py` | Musik-Routing an Satellite (mpv+YouTube) | keine | In-Memory Room-Handoff-State |
 | `coding_engine.py` | Delegierte Coding-Tasks | Claude Agent SDK, GitHub REST + `git` CLI | Budgets aus `config.CODING_*`, Worktrees unter `~/.jarvis/coding_worktrees` |
+| `document_export.py` | PDF/Word aus Projekt/Seite generieren (seit 2026-07-26) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
 | `google_auth.py` | Gemeinsame Google-OAuth | `google-auth`/`google-auth-oauthlib` | Token `google_token.json` |
 | `local_exec.py` | "Führ das auf dem Client aus"-Primitiv | keine (WS-Routing) | 60s Timeout, aktuell nur Action `gh_issue_list` |
 | `notification_dispatcher.py` | Push, unabhängig von Pipelines | keine | SQLite `notifications.db`, Rate-Limit 3/h |

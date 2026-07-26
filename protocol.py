@@ -93,3 +93,6 @@ LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
 ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "..."}
+
+# ── Dokument-Export (Server → Client) ─────────────────────────────────────────
+DOCUMENT_READY = "document_ready"  # {"type": "document_ready", "filename": "...", "mime": "...", "data_base64": "..."} — Ergebnis von generate_document (tools.py), Client löst Browser-Download aus

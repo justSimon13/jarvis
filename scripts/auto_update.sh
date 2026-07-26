@@ -43,6 +43,12 @@ if [ "$LOCAL_REV" != "$REMOTE_REV" ]; then
     fi
     log "Neue Commits gefunden ($LOCAL_REV -> $REMOTE_REV), pulle..."
     git pull --ff-only origin main
+    # Ohne das: neue/geänderte requirements.txt-Einträge (z.B. python-docx/
+    # reportlab für den Dokument-Export) bleiben im venv ungetan liegen, bis
+    # jemand manuell per SSH nachinstalliert — der Neustart weiter unten würde
+    # dann sofort mit ImportError abstürzen. -q hält das Log ruhig, wenn sich
+    # nichts geändert hat (der Normalfall bei den meisten Updates).
+    "$REPO_DIR/.venv/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
     mkdir -p "$JARVIS_DIR"
     touch "$RESTART_MARKER"
 fi

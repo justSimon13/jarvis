@@ -1,4 +1,5 @@
 import json
+import protocol as P
 import brain
 import knowledge
 import tracking
@@ -15,6 +16,7 @@ from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
 from services import tickets as tickets_service
+from services import document_export
 
 DEFINITIONS = [
     {
@@ -948,10 +950,47 @@ DEFINITIONS = [
             "required": ["topic"],
         },
     },
+    {
+        "name": "generate_document",
+        "description": (
+            "Erstellt ein PDF- oder Word-Dokument aus einem Projekt oder einer Seite und "
+            "schickt es zum Download an den aktuellen Chat-Client (funktioniert nur im "
+            "Web-Chat, nicht bei Sprach-Clients). Bei quelle_typ='projekt' werden Beschreibung "
+            "+ Notizen + alle Unterseiten zu einem Dokument zusammengefasst, bei 'seite' die "
+            "Seite selbst + ihre Unterseiten. Nutzen wenn Simon sagt 'exportier mir X als PDF', "
+            "'mach mir ein Word-Dokument aus Projekt Y' o.ä. id vorher per data_query/read_seite "
+            "ermitteln."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "quelle_typ": {
+                    "type": "string",
+                    "enum": ["projekt", "seite"],
+                    "description": "Ob die id ein Projekt oder eine einzelne Seite referenziert.",
+                },
+                "quelle_id": {
+                    "type": "integer",
+                    "description": "id des Projekts (aus data_query) oder der Seite (aus read_seite/data_query 'unterseiten').",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["pdf", "docx"],
+                    "description": "Zielformat.",
+                },
+            },
+            "required": ["quelle_typ", "quelle_id", "format"],
+        },
+    },
 ]
 
 
-def execute(tool_name: str, tool_input: dict) -> str:
+def execute(tool_name: str, tool_input: dict, emit=None) -> str:
+    """emit: optionaler Callback (self._emit der aufrufenden JarvisPipeline) für Tools,
+    die dem Client direkt eine Server-Push-Nachricht schicken müssen statt nur den
+    Text-Result für die LLM-Loop zurückzugeben (aktuell nur generate_document — das
+    generierte Dokument geht als eigene WS-Nachricht raus, nicht im tool_result-Text,
+    der bliebe sonst als riesiger Base64-Blob im Gesprächsverlauf hängen)."""
     try:
         if tool_name == "delegate_coding_task":
             return coding_engine.start_task(
@@ -1262,6 +1301,20 @@ def execute(tool_name: str, tool_input: dict) -> str:
         if tool_name == "get_progress":
             result = tracking.get_progress(tool_input["topic"])
             return json.dumps(result, ensure_ascii=False)
+
+        if tool_name == "generate_document":
+            try:
+                filename, mime, data_b64 = document_export.generate(
+                    quelle_typ=tool_input["quelle_typ"],
+                    quelle_id=tool_input["quelle_id"],
+                    format=tool_input["format"],
+                )
+            except ValueError as e:
+                return f"Fehler: {e}"
+            if not emit:
+                return f"'{filename}' wurde erstellt, aber es ist kein Web-Chat verbunden, an den ich es schicken könnte."
+            emit(P.DOCUMENT_READY, filename=filename, mime=mime, data_base64=data_b64)
+            return f"'{filename}' wurde erstellt und zum Download an den Chat geschickt."
 
         return f"Unbekanntes Tool: {tool_name}"
     except Exception as e:

@@ -360,7 +360,7 @@ class JarvisPipeline:
                             result = self._executed_tool_ids[call_id]
                             print(f"[pipeline] Tool-Dedup: {block.name} ({call_id})", flush=True)
                         else:
-                            result = tools.execute(block.name, block.input)
+                            result = tools.execute(block.name, block.input, emit=self._emit)
                             self._executed_tool_ids[call_id] = result
                         tool_results.append({
                             "type": "tool_result",
