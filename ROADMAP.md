@@ -648,6 +648,19 @@ Verifiziert: Standalone-Testskript reproduziert den Bug gezielt (Todo direkt per
 
 ---
 
+## 🔴 Projekt-Edits raus aus der Liste, rein in die Detail-Seite (2026-07-27, gleicher Tag) ✅
+
+**Anlass:** Simon: *"Warum machst du alle Edits direkt in der Projekt Übersicht??? Mach sie doch IN den Projekten. Alles was man editieren kann raus aus der Liste und rein in die Detail Seite."* — `ProjektItem.vue` hatte bis dahin ein komplettes Inline-Edit-Formular (Name/Status/Typ/Beschreibung/`geschaetzter_wert`), das sich direkt in der Listenzeile aufklappte, während `SeiteView.vue` (die eigentliche Detail-Seite) nur den Freitext-Inhalt (`notizen`) bearbeiten konnte — und war zudem nur für Projekte mit Unterseiten überhaupt anklickbar.
+
+**Frontend-Umbau (jarvis-web, kein Backend betroffen):**
+- `ProjektItem.vue`: komplettes Inline-Formular entfernt (kein `editing`-State, kein `startEdit()`/`save()`, kein Bleistift-Button mehr). Der Projektname ist jetzt **immer** ein Link zur Detail-Seite (`/seite/projekte/:id`) — vorher nur wenn das Projekt bereits Unterseiten oder eine `externe_id` hatte, sonst gab es gar keinen Weg zur Detail-Seite. Liste zeigt jetzt nur noch: Name (Link), Status/Typ/Wert-Tags (read-only), Beschreibung, PDF/Word-Export, Löschen — alles Nicht-Editierende bleibt, alles Editierende ist raus.
+- `SeiteView.vue`: Bearbeiten-Formular erweitert — bei `page.typ === 'projekte'` erscheinen zusätzlich zum bestehenden Notizen-Textfeld Eingabefelder für Name/Status/Typ/`geschaetzter_wert`/Beschreibung, alle in einem gemeinsamen `entity_action`-Update-Call gespeichert. Für Todos/Kontakte/einzelne Unterseiten unverändert (nur Notizen-Bearbeitung, kein Scope-Creep — nicht angefragt).
+- `ProjekteView.vue`: totes `edit()` + `@save`-Wiring entfernt (kein Konsument mehr).
+
+Verifiziert: Playwright-Testlauf gegen den echten laufenden jarvis-web-Dev-Server — Test-Projekt angelegt, bestätigt dass kein Bleistift-Button mehr in der Liste existiert, per Klick auf den Namen zur Detail-Seite navigiert, dort Status/Wert/Beschreibung/Notizen gemeinsam gesetzt und gespeichert, nach vollem Seiten-Reload (nicht nur lokaler State) alle vier Werte weiterhin korrekt sichtbar. `npm run build` sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
