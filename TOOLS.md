@@ -41,7 +41,7 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 
 | Tool | Parameter | Verhalten |
 |---|---|---|
-| `generate_document` | `quelle_typ("projekt"\|"seite"), quelle_id, format("pdf"\|"docx")` | Baut aus einem Projekt (Beschreibung+Notizen+alle Unterseiten) oder einer Seite (sie selbst+ihre Unterseiten) ein PDF/Word-Dokument und schickt es als `document_ready`-WS-Nachricht (Base64) an den aktuellen Client — nur im Web-Chat wirksam, Sprach-Clients haben keinen Weg, eine Datei entgegenzunehmen. Markdown wird über einen einfachen eigenen Block-Parser gerendert (Überschriften/Absätze/Bullet-Listen/Bold — keine Tabellen/Bilder/Code-Blöcke). |
+| `generate_document` | `quelle_typ("projekt"\|"seite"), quelle_id, format("pdf"\|"docx")` | Baut aus einem Projekt (Beschreibung+Notizen+alle Unterseiten) oder einer Seite (sie selbst+ihre Unterseiten) ein PDF/Word-Dokument und schickt es als `document_ready`-WS-Nachricht (Base64) an den aktuellen Client — nur im Web-Chat wirksam, Sprach-Clients haben keinen Weg, eine Datei entgegenzunehmen. Markdown wird über einen einfachen eigenen Block-Parser gerendert: #-Überschriften, Absätze, Bullet-Listen, horizontale Linien (`---`), Zitate (`>`), GFM-Pipe-Tabellen, **Bold**/*Kursiv* — keine nummerierten/verschachtelten Listen, Code-Blöcke, Links, Bilder. Gleicher Renderer wird auch vom PDF/Word-Knopf direkt in `ProjekteView.vue` genutzt (dort ohne LLM, über `generate_document_request`, siehe `protocol.py`/`CODE_REFERENCE.md`). |
 
 ### Brain (`brain.py`)
 

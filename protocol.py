@@ -94,5 +94,6 @@ LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
 ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "..."}
 
-# ── Dokument-Export (Server → Client) ─────────────────────────────────────────
-DOCUMENT_READY = "document_ready"  # {"type": "document_ready", "filename": "...", "mime": "...", "data_base64": "..."} — Ergebnis von generate_document (tools.py), Client löst Browser-Download aus
+# ── Dokument-Export (Client → Server, Server → Client) ────────────────────────
+GENERATE_DOCUMENT_REQUEST = "generate_document_request"  # {"type": "generate_document_request", "quelle_typ": "projekt"|"seite", "quelle_id": int, "format": "pdf"|"docx"} — Client → Server, Layer 1 DATA (kein LLM-Umweg, z.B. Export-Knopf in ProjekteView.vue). Antwort kommt als document_ready (Erfolg) oder error (Fehlschlag).
+DOCUMENT_READY = "document_ready"  # {"type": "document_ready", "filename": "...", "mime": "...", "data_base64": "..."} — Ergebnis von generate_document (tools.py, LLM-Pfad) ODER generate_document_request (Direkt-Pfad), Client löst Browser-Download aus

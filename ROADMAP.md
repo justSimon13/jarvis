@@ -574,6 +574,22 @@ Verifiziert: Standalone-Testskript gegen monkeypatchte `local_data`-Funktionen (
 
 ---
 
+## 🔴 Dokument-Export: Markdown-Lücken + Direkt-Button an Projekten (2026-07-26, gleicher Tag) ✅
+
+**Anlass:** Simon testete den frisch gebauten Export mit echtem Seiten-Content (Screenshots eines realen PRD-Dokuments) und meldete zwei Lücken: *"Das Dokument hat aber teilweise noch so Markdown Elemente. Und Tabellen werden auch nicht übernommen."* Sichtbar im PDF: rohe `---`-Zeilen, rohe `> Zitat`-Präfixe, rohe `*kursiv*`-Sternchen, und eine ganze GFM-Pipe-Tabelle als unformatierter `| a | b |`-Text.
+
+**Markdown-Parser erweitert** (`services/document_export.py`, `_parse_blocks`/`_split_inline`):
+- Horizontale Linie (`---`/`***`/`___` allein auf einer Zeile) → eigener Block-Typ `hr`, gerendert als `HRFlowable` (PDF) bzw. Absatz mit unterem Rahmen via rohem OOXML (`_add_horizontal_rule`, Word hat kein eingebautes HR-Element).
+- Zitat (`> Text`, mehrzeilig zusammengeführt) → Block-Typ `quote`, kursiv + eingerückt (PDF: eigener `ParagraphStyle`; Word: eingebaute `"Quote"`-Formatvorlage, Fallback auf manuellen Einzug falls das Template sie nicht enthält).
+- GFM-Pipe-Tabellen (Kopfzeile + `|---|---|`-Trennzeile + Datenzeilen) → Block-Typ `table`, gerendert als echte `reportlab.Table` (PDF, mit grauem Grid + fett/grau hinterlegter Kopfzeile) bzw. `document.add_table()` (Word, Formatvorlage `"Table Grid"`).
+- Inline-Kursiv (`*Text*`/`_Text_`) zusätzlich zu **Bold** — `_split_inline()` ersetzt `_split_bold()`, Regex-Alternation prüft `**fett**` immer vor `*kursiv*` (sonst würde ein Bold-Sternchenpaar als zwei Kursiv-Marker fehlinterpretiert).
+
+**Direkter Export-Button an Projekten** (ohne Chat/LLM): Simon wollte zusätzlich *"ein Download direkt bei den Projekten, also ein Knopf"* — nicht jedes Mal erst tippen müssen. Neuer WS-Typ `generate_document_request` (Client→Server, Layer 1 DATA analog zu `entity_action`/`data_request` — `server.py` ruft `document_export.generate()` direkt über den Executor auf, kein LLM-Turn nötig) liefert dieselbe `document_ready`-Antwort wie der Chat-Tool-Pfad, das Frontend braucht dafür keinen zweiten Handler. Zwei neue Hover-Buttons "PDF"/"Word" in `ProjektItem.vue`, `stores/jarvis.js` bekommt `generateDocument(quelleTyp, quelleId, format)`.
+
+Verifiziert: neues Standalone-Testskript mit Content, der die genauen aus den Screenshots gemeldeten Muster nachbildet (Tabelle, Zitat, hr, Inline-Kursiv+Bold gemischt) — DOCX per Rückparsen geprüft (keine rohen `**`/`*`/`>`/`---`-Marker mehr im Text, Tabellenzellen exakt), PDF visuell gerendert und geprüft. Button-Pfad per Playwright gegen den echten laufenden jarvis-web-Dev-Server geklickt (Konsole fehlerfrei) — der volle Server-Roundtrip war zu diesem Zeitpunkt noch nicht live testbar, weil die Backend-Änderungen dafür erst per Auto-Update/manuellem Pip-Install auf den HP-Server müssen (siehe Abschnitt oben).
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

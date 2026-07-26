@@ -32,6 +32,7 @@ from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
+from services import document_export
 from services import local_exec
 from services import sleep_coach
 from services import proactive as proactive_service
@@ -860,6 +861,18 @@ async def handle_connection(websocket):
                         asyncio.create_task(_push_dashboard_update())
                     except Exception as e:
                         send_json({"type": P.ENTITY_ACTION_ACK, "ok": False, "entity": entity, "action": action, "error": str(e)})
+                elif data.get("type") == P.GENERATE_DOCUMENT_REQUEST:
+                    # Layer 1 DATA, kein LLM-Umweg — z.B. der Export-Knopf direkt in
+                    # ProjekteView.vue. Gleiche document_ready-Antwort wie der LLM-Tool-Pfad
+                    # (generate_document in tools.py), damit das Frontend nur EINEN Handler braucht.
+                    try:
+                        filename, mime, data_b64 = await loop.run_in_executor(
+                            None, document_export.generate,
+                            data.get("quelle_typ", ""), data.get("quelle_id"), data.get("format", ""),
+                        )
+                        send_json({"type": P.DOCUMENT_READY, "filename": filename, "mime": mime, "data_base64": data_b64})
+                    except ValueError as e:
+                        send_json({"type": P.ERROR, "message": str(e)})
                 elif data.get("type") == P.ALARM_SYNC:
                     client_name = manager.get_name(client_id) or ""
                     alarm_service.sync_from_client(client_name, data.get("alarms", []))

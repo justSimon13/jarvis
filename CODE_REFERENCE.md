@@ -19,6 +19,7 @@ Prozess-Einstieg (`python3 server.py`). Hält alles globale mutable State (Histo
 - `_build_layout_config(mode)` (Z. 270) — berechnet `{cards, quick_actions}` aus `brain.read("modules")`, Fallback `_DEFAULT_QA_IDS`/`_DEFAULT_CARD_IDS`, hängt `alarms`/`followups`-Karten dynamisch an wenn Daten vorhanden. Registrierungen `_QA_REGISTRY` (Z. 234), `_CARD_REGISTRY` (Z. 251).
 - `_handle_data_request(resource, ...)` (Z. 303) — Layer-1-Dispatch ("kein LLM-Umweg"): `knowledge_index`, `knowledge_file`, `todos`, `tickets`, `seite`, `calendar`, `alarms`, `followups`, `history`, `weather`, `clients`, `btc`, Coding-Engine-Status, `tracking_*`, `session_transcript`, `notification_history`.
 - `_do_entity_action()` (Z. 492) — direkte, nicht-LLM CRUD auf Todos/Projekte/Kontakte/Seiten via `local_data.*`.
+- `GENERATE_DOCUMENT_REQUEST`-Handler (seit 2026-07-26, im Dispatch-Loop, kein eigenes benanntes `def`) — ruft `document_export.generate()` direkt über den Executor auf, Layer 1 DATA wie `_do_entity_action`. Antwort: `DOCUMENT_READY` bei Erfolg, `ERROR` bei `ValueError` (unbekannte Quelle/Format). Gleicher Empfänger-Handler im Frontend wie der LLM-Tool-Pfad (`generate_document` in `tools.py`) — beide münden in dieselbe `document_ready`-Nachricht.
 - `_build_dashboard_sync()` (Z. 546) / `_push_dashboard_update()` (Z. 619) — bauen/broadcasten `DASHBOARD_SYNC`/`DASHBOARD_UPDATE`.
 - `handle_connection(websocket)` (Z. 633) — kompletter Verbindungs-Lifecycle: wartet bis 1.5s auf `CLIENT_HELLO` (Z. 670), stellt bei unbekannter `tab_id` die Web-Historie aus `sessions.db` wieder her (`session_memory.find_active_session()`, Z. 696 — Post-Restart-Recovery), konstruiert eine `JarvisPipeline`, sendet `DASHBOARD_SYNC` bzw. spielt `pipeline.greet()`, dann Dispatch-Loop über ~20 Message-Typen.
 - `_save_all_sessions_on_shutdown()` (Z. 971), `main()` (Z. 1004) — Startup: `brain.sync()`, `knowledge.rebuild_index()`, History laden, STT-Modell laden, alle `services/*`-Singletons initialisieren. Shutdown archiviert offene Sessions.
@@ -116,7 +117,7 @@ Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`.
 | Coding Engine | `CODING_APPROVAL_REQUEST/RESPONSE`, `CODING_TASK_STATUS`, `CODING_SUDO_PASSWORD_REQUEST/RESPONSE` (Passwort nie geloggt/gespeichert) |
 | Local Exec | `LOCAL_EXEC_REQUEST` (→Client mit Capability), `LOCAL_EXEC_RESPONSE` (→Server) |
 | Entity CRUD | `ENTITY_ACTION` (→Server), `ENTITY_ACTION_ACK` (→Client) |
-| Dokument-Export | `DOCUMENT_READY` (→Client, seit 2026-07-26 — `{"type":"document_ready","filename":"...","mime":"...","data_base64":"..."}`, Ergebnis von `generate_document`, jarvis-web löst daraus direkt einen Browser-Download aus) |
+| Dokument-Export | `GENERATE_DOCUMENT_REQUEST` (→Server, seit 2026-07-26 — `{"type":"generate_document_request","quelle_typ":"projekt"\|"seite","quelle_id":N,"format":"pdf"\|"docx"}`, Layer 1 DATA ohne LLM-Umweg, z.B. der PDF/Word-Knopf in `ProjektItem.vue`), `DOCUMENT_READY` (→Client — `{"type":"document_ready","filename":"...","mime":"...","data_base64":"..."}`, Ergebnis von `generate_document` (LLM-Tool-Pfad) ODER `generate_document_request` (Direkt-Pfad), jarvis-web löst daraus direkt einen Browser-Download aus) |
 
 ---
 
@@ -214,7 +215,7 @@ SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — h
 | `btc.py` | Bitcoin-Preis | CoinGecko | 15-Min-Cache `btc_cache.json` |
 | `client_music.py` | Musik-Routing an Satellite (mpv+YouTube) | keine | In-Memory Room-Handoff-State |
 | `coding_engine.py` | Delegierte Coding-Tasks | Claude Agent SDK, GitHub REST + `git` CLI | Budgets aus `config.CODING_*`, Worktrees unter `~/.jarvis/coding_worktrees` |
-| `document_export.py` | PDF/Word aus Projekt/Seite generieren (seit 2026-07-26) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
+| `document_export.py` | PDF/Word aus Projekt/Seite generieren (seit 2026-07-26, Markdown-Parser deckt #-Überschriften/Absätze/Bullets/hr/Zitate/GFM-Tabellen/**Bold**/*Kursiv* ab) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
 | `google_auth.py` | Gemeinsame Google-OAuth | `google-auth`/`google-auth-oauthlib` | Token `google_token.json` |
 | `local_exec.py` | "Führ das auf dem Client aus"-Primitiv | keine (WS-Routing) | 60s Timeout, aktuell nur Action `gh_issue_list` |
 | `notification_dispatcher.py` | Push, unabhängig von Pipelines | keine | SQLite `notifications.db`, Rate-Limit 3/h |
