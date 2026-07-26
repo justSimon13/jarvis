@@ -541,6 +541,22 @@ Verifiziert: `llm.py`-Logik lokal gegen einen Fake-Client getestet (thinking=Fal
 
 ---
 
+## 🔴 LLM-Modellauswahl im Chat (2026-07-25/26) ✅
+
+**Anlass:** Direkte Weiterentwicklung des Sonnet-5-Umstiegs oben. Simon fragte, ob man das LLM auch "on the fly" wechseln könne, ohne Kontextverlust — Antwort: ja, die Anthropic-API ist zustandslos, `client_messages` werden unverändert an das neue Modell weitergereicht, einzige Nebenwirkung ist ein Prompt-Cache-Neuschreib beim ersten Call nach dem Wechsel (anderes Modell = anderer Cache-Namespace). Simons explizite Entscheidung: *"Hau alle rein und mach eine Info text rein on hover"* — alle vier verfügbaren Modelle zur Wahl, mit Hover-Beschreibung statt einem reinen Label.
+
+**Backend:**
+- `llm.py`: `MODEL_CATALOG` (Dict `model_id → {label, input, output}`) für alle vier Modelle (Haiku 4.5, Sonnet 5, Opus 5, Fable 5), jeweils eigener Preis. `compute_cost(usage, model=None)` und `stream(..., model=None)` schlagen den Preis/das Modell hier nach statt fest auf Sonnet verdrahtet zu sein — sonst wäre die Kostenanzeige bei den anderen drei Modellen falsch.
+- **Sonderfall Fable 5:** lehnt `thinking={"type":"disabled"}` mit HTTP 400 ab (denkt immer). `stream()` erzwingt für dieses Modell immer `{"type":"adaptive"}` + `max_tokens=16000`, unabhängig vom `thinking`-Argument.
+- Neue WS-Nachricht `set_llm_model` (`protocol.py`), `pipeline.set_model()` validiert gegen `MODEL_CATALOG` und ignoriert ungültige Werte still (analog zu `set_thinking`).
+- **Nebenbei gefundener Bug (nicht von Simon gemeldet, beim Lesen von `_run_llm()` vor dieser Änderung entdeckt):** `stop_reason` kannte bisher nur `end_turn`/`tool_use` — `refusal` (Sicherheits-Ablehnung, bei Fable 5 real möglich) wurde nicht behandelt und hätte die Tool-Loop mit unveränderten `client_messages` endlos denselben Request wiederholen lassen. Jetzt wie `end_turn` behandelt (Turn beendet, Platzhaltertext falls `turn_text` leer). War vorher nur ein theoretisches Risiko, mit Fable 5 als wählbarem Modell real.
+
+**Frontend (jarvis-web):** natives `<select>` neben dem 🧠-Thinking-Toggle in `ChatView.vue`, vier `<option>`s mit `title`-Attribut als Hover-Info (Preis + Charakterisierung je Modell), gespiesen aus `LLM_MODELS` (`stores/jarvis.js`, gleiche vier Einträge wie `llm.py`s `MODEL_CATALOG` — bei Preisänderungen beide Stellen pflegen). Thinking-Toggle wird bei Fable-5-Auswahl deaktiviert (clientseitig, Backend erzwingt es ohnehin serverseitig).
+
+Verifiziert: Fake-Client-Testskript (Fable-5-Override, Opus-5 disabled-thinking, unbekanntes Modell fällt auf Sonnet 5 zurück, `compute_cost()` liefert korrekte, unterschiedliche Kosten pro Modell), `npm run build` für jarvis-web sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
