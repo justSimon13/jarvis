@@ -22,6 +22,7 @@ import brain
 import config
 import context
 import finanzen
+import finanzen_import
 import knowledge
 import learning
 import protocol as P
@@ -329,6 +330,23 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
         return tickets_service.sync_tickets()
     if resource == "projekte":
         return local_data.list_projekte()
+    if resource == "rechnungen":
+        return local_data.list_rechnungen()
+    if resource == "ausgaben":
+        return local_data.list_ausgaben()
+    if resource == "import_csv":
+        kind = req_data.get("kind", "")
+        csv_text = req_data.get("csv_text", "")
+        if not csv_text:
+            return {"ok": False, "error": "csv_text erforderlich"}
+        try:
+            if kind == "rechnungen":
+                return {"ok": True, "result": finanzen_import.import_invoices(csv_text)}
+            if kind == "ausgaben":
+                return {"ok": True, "result": finanzen_import.import_vouchers(csv_text)}
+            return {"ok": False, "error": f"Unbekannte Art: {kind}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
     if resource == "kontakte":
         return local_data.list_kontakte()
     if resource == "seite":
@@ -505,11 +523,35 @@ _ENTITY_FIELDS = {
     "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
+    "rechnungen":   {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
+                     "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"},
+    "ausgaben":     {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
+                     "faellig_am", "bezahlt_am", "offener_betrag", "betrag"},
+}
+
+# 'add' braucht pro Entität einen Pflicht-Bezeichner — bei den meisten 'name', bei
+# den aus SevDesk importierten Typen die jeweilige SevDesk-eigene Nummer.
+_ENTITY_REQUIRED_FIELD = {
+    "todos": "name", "projekte": "name", "kontakte": "name",
+    "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer",
+}
+_ENTITY_ADD_FN = {
+    "todos": local_data.add_todo, "projekte": local_data.add_projekt, "kontakte": local_data.add_kontakt,
+    "rechnungen": local_data.add_rechnung, "ausgaben": local_data.add_ausgabe,
+}
+_ENTITY_UPDATE_FN = {
+    "todos": local_data.update_todo, "projekte": local_data.update_projekt, "kontakte": local_data.update_kontakt,
+    "seite": local_data.update_seite, "rechnungen": local_data.update_rechnung, "ausgaben": local_data.update_ausgabe,
+}
+_ENTITY_DELETE_FN = {
+    "todos": local_data.delete_todo, "projekte": local_data.delete_projekt, "kontakte": local_data.delete_kontakt,
+    "rechnungen": local_data.delete_rechnung, "ausgaben": local_data.delete_ausgabe,
 }
 
 
 def _do_entity_action(entity: str, action: str, data: dict) -> None:
-    """Blockierende Todos/Projekte/Kontakte(/Seiten)-Mutation — Layer 1 DATA, kein LLM-Umweg."""
+    """Blockierende Mutation für Todos/Projekte/Kontakte/Seiten/Rechnungen/Ausgaben —
+    Layer 1 DATA, kein LLM-Umweg."""
     if entity not in _ENTITY_FIELDS:
         raise ValueError(f"Unbekannte Entität: {entity}")
     fields = {k: v for k, v in data.items() if k in _ENTITY_FIELDS[entity]}
@@ -517,28 +559,19 @@ def _do_entity_action(entity: str, action: str, data: dict) -> None:
     if action == "add":
         if entity == "seite":
             raise ValueError("Seiten werden nur über die Migration angelegt")
-        name = (fields.get("name") or "").strip()
-        if not name:
-            raise ValueError("Name erforderlich")
-        fields["name"] = name
-        if entity == "todos":
-            local_data.add_todo(**fields)
-        elif entity == "projekte":
-            local_data.add_projekt(**fields)
-        else:
-            local_data.add_kontakt(**fields)
+        required_field = _ENTITY_REQUIRED_FIELD[entity]
+        required_val = fields.get(required_field)
+        if isinstance(required_val, str):
+            required_val = required_val.strip()
+        if not required_val:
+            raise ValueError(f"{required_field} erforderlich")
+        fields[required_field] = required_val
+        _ENTITY_ADD_FN[entity](**fields)
     elif action == "update":
         item_id = data.get("id")
         if not item_id:
             raise ValueError("id erforderlich")
-        if entity == "todos":
-            local_data.update_todo(item_id, **fields)
-        elif entity == "projekte":
-            local_data.update_projekt(item_id, **fields)
-        elif entity == "kontakte":
-            local_data.update_kontakt(item_id, **fields)
-        else:
-            local_data.update_seite(item_id, **fields)
+        _ENTITY_UPDATE_FN[entity](item_id, **fields)
     elif action == "complete":
         if entity != "todos":
             raise ValueError(f"'complete' gibt es nur für todos, nicht {entity}")
@@ -552,12 +585,7 @@ def _do_entity_action(entity: str, action: str, data: dict) -> None:
         item_id = data.get("id")
         if not item_id:
             raise ValueError("id erforderlich")
-        if entity == "todos":
-            local_data.delete_todo(item_id)
-        elif entity == "projekte":
-            local_data.delete_projekt(item_id)
-        else:
-            local_data.delete_kontakt(item_id)
+        _ENTITY_DELETE_FN[entity](item_id)
     else:
         raise ValueError(f"Unbekannte Aktion: {action}")
 

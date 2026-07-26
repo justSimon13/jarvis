@@ -218,38 +218,43 @@ DEFINITIONS = [
     {
         "name": "data_query",
         "description": (
-            "Liest Einträge aus Todos oder Projekten. "
-            "Verfügbare Datenbanken: 'todos', 'projekte'. "
-            "Gibt eine Liste von Einträgen zurück. Manche Einträge haben ein "
+            "Liest Einträge aus Todos, Projekten, Rechnungen oder Ausgaben. "
+            "Verfügbare Datenbanken: 'todos', 'projekte', 'rechnungen', 'ausgaben'. "
+            "Gibt eine Liste von Einträgen zurück. Todos/Projekte haben manchmal ein "
             "'unterseiten'-Feld (Liste von {id, titel}) — das sind nur die Titel, "
             "kein Inhalt (Kosten-Rücksicht). Volltext einer Unterseite bei Bedarf "
             "mit read_seite(seite_id) nachladen, neue Unterseite anlegen mit "
             "create_seite, bestehende bearbeiten mit write_seite. "
+            "rechnungen: aus SevDesk importiert, Feld 'projekt_id' zeigt ob/welchem Projekt "
+            "zugeordnet (null = noch nicht zugeordnet — mit data_query('projekte') abgleichen "
+            "und dann per data_update setzen, sonst Simon fragen welches Projekt gemeint ist, "
+            "der Kunde allein reicht nicht da ein Kunde mehrere Projekte haben kann). "
+            "ausgaben: ebenfalls aus SevDesk importiert (Kategorie/Lieferant/Betrag). "
             "Ohne limit-Angabe kommt bereits praktisch die komplette Liste zurück "
-            "(Default 200 bei 'projekte', 10 bei 'todos' — Projekte sind eine kleine, "
-            "begrenzte Liste, Todos können über Jahre auf sehr viele anwachsen). "
-            "Für 'zeig mir wirklich ALLE Projekte/Todos' trotzdem explizit einen hohen "
-            "limit-Wert (z.B. 500) setzen, um sicherzugehen."
+            "(Default 200 bei 'projekte'/'rechnungen'/'ausgaben', 10 bei 'todos' — Todos können "
+            "über Jahre auf sehr viele anwachsen, die anderen sind kleine, begrenzte Listen). "
+            "Für 'zeig mir wirklich ALLE' trotzdem explizit einen hohen limit-Wert (z.B. 500) "
+            "setzen, um sicherzugehen."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte"],
+                    "enum": ["todos", "projekte", "rechnungen", "ausgaben"],
                     "description": "Name der Datenbank",
                 },
                 "search": {
                     "type": "string",
-                    "description": "Suche im Namen (optional)",
+                    "description": "Suche (optional) — im Namen bei todos/projekte, im Betreff bei rechnungen, in der Beschreibung bei ausgaben",
                 },
                 "status": {
                     "type": "string",
-                    "description": "Filtert nach Status-Wert (optional)",
+                    "description": "Filtert nach Status-Wert (optional, nicht für rechnungen verfügbar)",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximale Anzahl Ergebnisse. Weglassen = Default (200 bei 'projekte', 10 bei 'todos').",
+                    "description": "Maximale Anzahl Ergebnisse. Weglassen = Default (200 bei 'projekte'/'rechnungen'/'ausgaben', 10 bei 'todos').",
                 },
             },
             "required": ["database"],
@@ -258,20 +263,26 @@ DEFINITIONS = [
     {
         "name": "data_write",
         "description": (
-            "Erstellt einen neuen Eintrag in Todos oder Projekten. "
-            "Verfügbare Datenbanken: 'todos', 'projekte'. "
+            "Erstellt einen neuen Eintrag in Todos, Projekten, Rechnungen oder Ausgaben. "
+            "Verfügbare Datenbanken: 'todos', 'projekte', 'rechnungen', 'ausgaben'. "
             "todos: name (Pflicht), status, datum (YYYY-MM-DD), prioritaet (Niedrig/Mittel/Hoch), bereich, aufwand. "
             "projekte: name (Pflicht), status, beschreibung, typ, geschaetzter_wert (Zahl, geschätzter Auftragswert "
             "in Euro — speist die Finanzen-Übersicht in der Tracking-View als 'geschätzter Gewinn', nur für nicht "
             "abgeschlossene Projekte relevant), erwartetes_abschlussdatum (YYYY-MM-DD, für bekannte anstehende "
-            "Projektabschlüsse — speist den Gewinn-Trend-Chart als 'Pipeline'-Balken im jeweiligen Monat)."
+            "Projektabschlüsse — speist den Gewinn-Trend-Chart als 'Pipeline'-Balken im jeweiligen Monat). "
+            "rechnungen: rechnungsnummer (Pflicht), rechnungsdatum, faellig_am, bezahlt_am (alle YYYY-MM-DD), "
+            "betreff, betrag_netto, betrag_brutto, offener_betrag (Zahlen), kunde, projekt_id (Zahl, id aus "
+            "data_query('projekte')), notizen. Normalerweise per CSV-Import angelegt, nicht manuell — dieses "
+            "Tool eher für Korrekturen/Einzelfälle. "
+            "ausgaben: belegnummer (Pflicht), status, lieferant, kategorie, beschreibung, datum, faellig_am, "
+            "bezahlt_am (YYYY-MM-DD), offener_betrag, betrag (Zahlen)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte"],
+                    "enum": ["todos", "projekte", "rechnungen", "ausgaben"],
                     "description": "Name der Datenbank",
                 },
                 "properties": {
@@ -286,7 +297,8 @@ DEFINITIONS = [
         "name": "data_update",
         "description": (
             "Aktualisiert einen bestehenden Eintrag per id. "
-            "id aus einem vorherigen data_query entnehmen."
+            "id aus einem vorherigen data_query entnehmen. Für rechnungen ist das der übliche "
+            "Weg, um projekt_id zu setzen/korrigieren, nachdem geklärt wurde welches Projekt gemeint ist."
         ),
         "input_schema": {
             "type": "object",
@@ -297,7 +309,7 @@ DEFINITIONS = [
                 },
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte"],
+                    "enum": ["todos", "projekte", "rechnungen", "ausgaben"],
                     "description": "Name der Datenbank",
                 },
                 "properties": {
@@ -311,7 +323,7 @@ DEFINITIONS = [
     {
         "name": "data_delete",
         "description": (
-            "Löscht einen Eintrag aus Todos oder Projekten per id. "
+            "Löscht einen Eintrag aus Todos, Projekten, Rechnungen oder Ausgaben per id. "
             "id aus einem vorherigen data_query entnehmen."
         ),
         "input_schema": {
@@ -323,7 +335,7 @@ DEFINITIONS = [
                 },
                 "database": {
                     "type": "string",
-                    "enum": ["todos", "projekte"],
+                    "enum": ["todos", "projekte", "rechnungen", "ausgaben"],
                     "description": "Name der Datenbank",
                 },
             },
@@ -963,10 +975,28 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "list_log_entries",
+        "description": (
+            "Listet Tracking-Log-Einträge eines Topics mit ihren ids auf (get_progress "
+            "zeigt nur Ziele + letzten Wert, keine vollständige Liste mit ids). Vorher "
+            "aufrufen bevor delete_log_entry — man braucht die id, um gezielt einen "
+            "bestimmten Eintrag zu löschen, statt zu raten."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Themenbereich, z.B. 'finanzen', 'sport'"},
+                "key": {"type": "string", "description": "Optional: nur Einträge mit diesem Schlüssel, z.B. 'gewinn'"},
+                "limit": {"type": "integer", "description": "Maximale Anzahl Ergebnisse (Standard: 30)"},
+            },
+            "required": ["topic"],
+        },
+    },
+    {
         "name": "delete_log_entry",
         "description": (
             "Löscht einen einzelnen Tracking-Log-Eintrag per id (aus einem vorherigen "
-            "get_logs/get_progress bekannt) — z.B. um einen doppelten oder falsch "
+            "list_log_entries/get_progress bekannt) — z.B. um einen doppelten oder falsch "
             "erfassten Eintrag zu korrigieren. Funktioniert für jedes Topic, nicht nur "
             "Finanzen. Vor dem Löschen kurz bestätigen was gelöscht wird (Datum, Wert, "
             "notes), damit nichts versehentlich Falsches verschwindet."
@@ -1329,6 +1359,14 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
         if tool_name == "get_progress":
             result = tracking.get_progress(tool_input["topic"])
             return json.dumps(result, ensure_ascii=False)
+
+        if tool_name == "list_log_entries":
+            entries = tracking.get_logs(
+                tool_input["topic"],
+                key=tool_input.get("key"),
+                limit=tool_input.get("limit", 30),
+            )
+            return json.dumps(entries, ensure_ascii=False)
 
         if tool_name == "delete_log_entry":
             ok = tracking.delete_log(tool_input["entry_id"])

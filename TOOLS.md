@@ -25,17 +25,19 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | `create_project` | `name, description?, private?` | Neues GitHub-Repo + lokaler Checkout unter `~/apps`. Immer Freigabe-Pflicht. |
 | `sync_tickets` | — | Holt GitHub-Issues über Simons eigenen `gh`-CLI-Login auf dem Mac (`local_exec.dispatch`, nie Server-Token), upserted als Todos (`source="github"`). GitHub `closed` erzwingt lokal `Erledigt`, `open` überschreibt nie einen lokal gesetzten Status. |
 
-### Todos / Projekte / Kontakte / Unterseiten (`local_data.py`)
+### Todos / Projekte / Kontakte / Unterseiten / Rechnungen / Ausgaben (`local_data.py`)
 
 | Tool | Parameter | Verhalten |
 |---|---|---|
-| `data_query` | `database("todos"\|"projekte"), search?, status?, limit?` | Lesen/Filtern. Ohne `limit` kommt praktisch die komplette Liste (Default 200 bei `projekte`, 10 bei `todos` — seit 2026-07-27, vorher hart 10 für beide, Projekte wurden dadurch silently abgeschnitten). |
-| `data_write` | `database, properties` | Neuer Eintrag. `projekte.geschaetzter_wert` (Zahl, seit 2026-07-26) — geschätzter Auftragswert, speist die Finanzen-Übersicht in der Tracking-View. `projekte.erwartetes_abschlussdatum` (YYYY-MM-DD, seit 2026-07-27) — bekannter Pipeline-Abschluss, speist den Gewinn-Trend-Chart als "Pipeline"-Balken im jeweiligen Monat. |
-| `data_update` | `id, database, properties` | Bestehenden Eintrag ändern. |
+| `data_query` | `database("todos"\|"projekte"\|"rechnungen"\|"ausgaben"), search?, status?, limit?` | Lesen/Filtern. Ohne `limit` kommt praktisch die komplette Liste (Default 200 bei `projekte`/`rechnungen`/`ausgaben`, 10 bei `todos`). `rechnungen` durchsucht `betreff`, `ausgaben` durchsucht `beschreibung`. |
+| `data_write` | `database, properties` | Neuer Eintrag. `projekte.geschaetzter_wert` (Zahl, seit 2026-07-26) — geschätzter Auftragswert, speist die Finanzen-Übersicht in der Tracking-View. `projekte.erwartetes_abschlussdatum` (YYYY-MM-DD, seit 2026-07-27) — bekannter Pipeline-Abschluss, speist den Gewinn-Trend-Chart als "Pipeline"-Balken im jeweiligen Monat. `rechnungen`/`ausgaben` (seit 2026-07-27) entstehen normalerweise per CSV-Import (siehe unten), können hier aber auch manuell angelegt werden — Pflichtfeld ist `rechnungsnummer`/`belegnummer`, nicht `name`. |
+| `data_update` | `id, database, properties` | Bestehenden Eintrag ändern. **Wichtigster Anwendungsfall seit 2026-07-27:** `rechnungen.projekt_id` setzen — CSV-Import lässt das Feld absichtlich leer (Kundenname → Projekt ist keine zuverlässige Zuordnung, ein Kunde kann mehrere unterschiedlich benannte Projekte haben). Erst `data_query('rechnungen')` um unzugeordnete Rechnungen zu finden, dann **aktiv bei Simon nachfragen** welchem Projekt sie zuzuordnen sind, nie raten, dann hiermit setzen. |
 | `data_delete` | `id, database` | Löschen. |
 | `read_seite` | `seite_id` | Lazy-Load des vollen Inhalts einer Unterseite (Listen liefern nur Titel+ID, aus Token-Kostengründen). |
 | `create_seite` | `titel, inhalt?, parent_typ?, parent_id?, eltern_seite_id?` | Neue Unterseite — entweder an einem Todo/Projekt/Kontakt oder verschachtelt unter einer bestehenden Seite. |
 | `write_seite` | `seite_id, titel?, inhalt?` | Bestehende Seite überschreiben (`inhalt` ersetzt, hängt nicht an). |
+
+**CSV-Import ist kein Tool, sondern automatische Anhang-Verarbeitung** (`pipeline.py::_attachment_to_block`, seit 2026-07-27): lädt Simon im Web-Chat eine `.csv`-Datei hoch (SevDesk-Export, Rechnungen oder Ausgaben), läuft sie serverseitig direkt durch `finanzen_import.detect_and_import()` (Format wird am CSV-Header erkannt) statt roh als Text in den Kontext zu gehen. JARVIS bekommt nur eine fertige Zusammenfassung als Text-Block zu sehen (created/updated/total, bei Rechnungen zusätzlich eine Vorschau der noch unzugeordneten Einträge) — daraus soll aktiv das Gespräch über die Projekt-Zuordnung (`data_update`, siehe oben) angestoßen werden. Alternativ: dedizierte Rechnungen-/Ausgaben-Seite in jarvis-web mit eigenem Upload-Button (`import_csv`-Resource, Layer 1 DATA, kein LLM-Umweg — siehe `CODE_REFERENCE.md`).
 
 ### Dokument-Export (`services/document_export.py`, seit 2026-07-26)
 
@@ -63,8 +65,9 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | Tool | Parameter | Verhalten |
 |---|---|---|
 | `set_goal` | `topic, key, value, unit?, label?` | Strukturiertes Ziel — nur Zahlenwerte mit Einheit, keine Prosa. |
-| `log_entry` | `topic, key, value?, text_value?, unit?, notes?, date?` | **Sofort aufrufen**, parallel zur Antwort, bei jedem messbaren Ereignis (Training, Gewicht, Kalorien, Schlaf, Ausgaben) — nie erst um Erlaubnis fragen. Feste Konvention `topic="finanzen", key="gewinn"` für realisierte Gewinne (seit 2026-07-26) — Gegenstück zu `geschaetzter_wert` an Projekten, beides zusammen ergibt die Finanzen-Übersicht (`finanzen_overview`). |
-| `get_progress` | `topic` | Ziel + letzter Log-Wert + Trend. |
+| `log_entry` | `topic, key, value?, text_value?, unit?, notes?, date?` | **Sofort aufrufen**, parallel zur Antwort, bei jedem messbaren Ereignis (Training, Gewicht, Kalorien, Schlaf) — nie erst um Erlaubnis fragen. Frühere Konvention `topic="finanzen", key="gewinn"` (seit 2026-07-26) ist **seit 2026-07-27 nicht mehr die Quelle der Finanzen-Übersicht** — die kommt jetzt aus echten importierten Rechnungen/Ausgaben (siehe oben), `log_entry` bleibt aber für andere Topics unverändert der richtige Weg. |
+| `get_progress` | `topic` | Ziel + letzter Log-Wert + Trend, **kein** vollständiges Log mit ids. |
+| `list_log_entries` | `topic, key?, limit?` | Vollständige Log-Liste mit ids (seit 2026-07-27) — vor `delete_log_entry` aufrufen, um die id eines bestimmten Eintrags zu finden statt zu raten. |
 | `delete_log_entry` | `entry_id` | Löscht einen einzelnen Log-Eintrag (seit 2026-07-27) — generisch für jedes Topic, z.B. um einen doppelten/falschen Eintrag zu korrigieren. Vorher kurz bestätigen was gelöscht wird. |
 
 ### Kalender (`services/calendar.py`)

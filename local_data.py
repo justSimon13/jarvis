@@ -112,6 +112,47 @@ def _get_db() -> sqlite3.Connection:
             updated_at      TEXT
         )
     """)
+    # Rechnungen/Ausgaben (seit 2026-07-27) — Import aus SevDesk-CSV-Exports
+    # (keine API-Anbindung, würde extra kosten). rechnungsnummer/belegnummer sind
+    # SevDesks eigene, stabile IDs — UNIQUE + Upsert-Ziel beim (wiederholten)
+    # Import, damit ein erneuter CSV-Export nie Duplikate erzeugt.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rechnungen (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            rechnungsnummer TEXT NOT NULL UNIQUE,
+            rechnungsdatum  TEXT,
+            faellig_am      TEXT,
+            bezahlt_am      TEXT,      -- NULL = noch nicht bezahlt
+            betreff         TEXT,
+            betrag_netto    REAL,
+            betrag_brutto   REAL,
+            offener_betrag  REAL,
+            kunde           TEXT,      -- SevDesks Empfänger-Adresse (Kunde) — bestimmt NICHT
+                                        -- zuverlässig das Projekt, ein Kunde kann mehrere
+                                        -- Projekte haben (siehe projekt_id)
+            projekt_id      INTEGER,   -- FK auf projekte.id, manuell/von JARVIS gesetzt
+            notizen         TEXT,
+            created_at      TEXT,
+            updated_at      TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ausgaben (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            belegnummer     TEXT NOT NULL UNIQUE,
+            status          TEXT,      -- z.B. 'bezahlt', 'Entwurf'
+            lieferant       TEXT,
+            kategorie       TEXT,
+            beschreibung    TEXT,
+            datum           TEXT,
+            faellig_am      TEXT,
+            bezahlt_am      TEXT,      -- NULL = noch nicht bezahlt
+            offener_betrag  REAL,
+            betrag          REAL,
+            created_at      TEXT,
+            updated_at      TEXT
+        )
+    """)
     # Einmalige Reparatur (seit 2026-07-27): update_todo() schrieb bisher ein leeres
     # Datumsfeld als '' statt NULL (Frontend füllt <input type="date"> beim Bearbeiten
     # mit '' statt None vor, das ging beim Speichern unverändert durch). list_todos()s
@@ -375,36 +416,196 @@ def delete_kontakt(kontakt_id: int) -> None:
     conn.close()
 
 
+# ── Rechnungen ────────────────────────────────────────────────────────────────
+
+_RECHNUNGEN_COLS = ["id", "rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
+                    "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"]
+
+
+def list_rechnungen(projekt_id: int | None = None) -> list[dict]:
+    conn = _get_db()
+    if projekt_id is None:
+        rows = conn.execute(f"SELECT {', '.join(_RECHNUNGEN_COLS)} FROM rechnungen ORDER BY rechnungsdatum DESC").fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {', '.join(_RECHNUNGEN_COLS)} FROM rechnungen WHERE projekt_id = ? ORDER BY rechnungsdatum DESC",
+            (projekt_id,)
+        ).fetchall()
+    conn.close()
+    return [dict(zip(_RECHNUNGEN_COLS, r)) for r in rows]
+
+
+def add_rechnung(rechnungsnummer: str, rechnungsdatum: str | None = None, faellig_am: str | None = None,
+                  bezahlt_am: str | None = None, betreff: str | None = None, betrag_netto: float | None = None,
+                  betrag_brutto: float | None = None, offener_betrag: float | None = None,
+                  kunde: str | None = None, projekt_id: int | None = None, notizen: str | None = None) -> int:
+    conn = _get_db()
+    now = _now()
+    cur = conn.execute(
+        """INSERT INTO rechnungen (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff,
+                                    betrag_netto, betrag_brutto, offener_betrag, kunde, projekt_id, notizen,
+                                    created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff, betrag_netto, betrag_brutto,
+         offener_betrag, kunde, projekt_id, notizen, now, now)
+    )
+    conn.commit()
+    rechnung_id = cur.lastrowid
+    conn.close()
+    return rechnung_id
+
+
+def update_rechnung(rechnung_id: int, **fields) -> None:
+    fields = _normalize_fields(fields)
+    allowed = {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff", "betrag_netto",
+               "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"}
+    sets = [f"{k} = ?" for k in fields if k in allowed]
+    values = [v for k, v in fields.items() if k in allowed]
+    if not sets:
+        return
+    sets.append("updated_at = ?")
+    values.append(_now())
+    values.append(rechnung_id)
+    conn = _get_db()
+    conn.execute(f"UPDATE rechnungen SET {', '.join(sets)} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def delete_rechnung(rechnung_id: int) -> None:
+    conn = _get_db()
+    conn.execute("DELETE FROM rechnungen WHERE id = ?", (rechnung_id,))
+    conn.commit()
+    conn.close()
+
+
+def upsert_rechnung(rechnungsnummer: str, **fields) -> int:
+    """Für den CSV-Import: legt neu an oder aktualisiert per rechnungsnummer (SevDesks
+    stabile ID) — ein wiederholter Export/Import derselben Rechnung erzeugt nie ein
+    Duplikat. projekt_id wird bei einem Update NIE überschrieben, wenn bereits gesetzt
+    (manuelle/JARVIS-Zuordnung soll ein erneuter Import nicht wieder wegwischen)."""
+    conn = _get_db()
+    row = conn.execute("SELECT id, projekt_id FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,)).fetchone()
+    conn.close()
+    if row is None:
+        return add_rechnung(rechnungsnummer, **fields)
+    existing_id, existing_projekt_id = row
+    fields.pop("projekt_id", None) if existing_projekt_id is not None else None
+    update_rechnung(existing_id, **fields)
+    return existing_id
+
+
+# ── Ausgaben ──────────────────────────────────────────────────────────────────
+
+_AUSGABEN_COLS = ["id", "belegnummer", "status", "lieferant", "kategorie", "beschreibung",
+                  "datum", "faellig_am", "bezahlt_am", "offener_betrag", "betrag"]
+
+
+def list_ausgaben() -> list[dict]:
+    conn = _get_db()
+    rows = conn.execute(f"SELECT {', '.join(_AUSGABEN_COLS)} FROM ausgaben ORDER BY datum DESC").fetchall()
+    conn.close()
+    return [dict(zip(_AUSGABEN_COLS, r)) for r in rows]
+
+
+def add_ausgabe(belegnummer: str, status: str | None = None, lieferant: str | None = None,
+                kategorie: str | None = None, beschreibung: str | None = None, datum: str | None = None,
+                faellig_am: str | None = None, bezahlt_am: str | None = None,
+                offener_betrag: float | None = None, betrag: float | None = None) -> int:
+    conn = _get_db()
+    now = _now()
+    cur = conn.execute(
+        """INSERT INTO ausgaben (belegnummer, status, lieferant, kategorie, beschreibung, datum,
+                                  faellig_am, bezahlt_am, offener_betrag, betrag, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (belegnummer, status, lieferant, kategorie, beschreibung, datum, faellig_am, bezahlt_am,
+         offener_betrag, betrag, now, now)
+    )
+    conn.commit()
+    ausgabe_id = cur.lastrowid
+    conn.close()
+    return ausgabe_id
+
+
+def update_ausgabe(ausgabe_id: int, **fields) -> None:
+    fields = _normalize_fields(fields)
+    allowed = {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
+               "faellig_am", "bezahlt_am", "offener_betrag", "betrag"}
+    sets = [f"{k} = ?" for k in fields if k in allowed]
+    values = [v for k, v in fields.items() if k in allowed]
+    if not sets:
+        return
+    sets.append("updated_at = ?")
+    values.append(_now())
+    values.append(ausgabe_id)
+    conn = _get_db()
+    conn.execute(f"UPDATE ausgaben SET {', '.join(sets)} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def delete_ausgabe(ausgabe_id: int) -> None:
+    conn = _get_db()
+    conn.execute("DELETE FROM ausgaben WHERE id = ?", (ausgabe_id,))
+    conn.commit()
+    conn.close()
+
+
+def upsert_ausgabe(belegnummer: str, **fields) -> int:
+    """Für den CSV-Import: legt neu an oder aktualisiert per belegnummer (SevDesks
+    stabile ID) — ein wiederholter Export/Import derselben Ausgabe erzeugt nie ein
+    Duplikat."""
+    conn = _get_db()
+    row = conn.execute("SELECT id FROM ausgaben WHERE belegnummer = ?", (belegnummer,)).fetchone()
+    conn.close()
+    if row is None:
+        return add_ausgabe(belegnummer, **fields)
+    update_ausgabe(row[0], **fields)
+    return row[0]
+
+
 # ── Generischer Dispatch für die LLM-Tools (data_query/write/update/delete) ───
 # Feldnamen sind die lokalen (name/status/datum/prioritaet/...).
 
+_QUERY_META = {
+    "todos": {
+        "cols": ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
+                 "source", "external_id", "repo", "body", "labels"],
+        "default_limit": 10, "search_col": "name", "status_col": "status", "unterseiten": True,
+    },
+    "projekte": {
+        "cols": ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"],
+        "default_limit": 200, "search_col": "name", "status_col": "status", "unterseiten": True,
+    },
+    "rechnungen": {
+        "cols": _RECHNUNGEN_COLS, "default_limit": 200, "search_col": "betreff", "status_col": None, "unterseiten": False,
+    },
+    "ausgaben": {
+        "cols": _AUSGABEN_COLS, "default_limit": 200, "search_col": "beschreibung", "status_col": "status", "unterseiten": False,
+    },
+}
+
+
 def query(database: str, search: str | None = None, status: str | None = None, limit: int | None = None) -> list[dict]:
     """limit=None nutzt einen pro Datenbank sinnvollen Default — Todos können über Jahre auf
-    hunderte anwachsen (10 ist da ein bewusster Kosten-Filter), Projekte sind dagegen eine
-    kleine, begrenzte Liste (typischerweise < 50), ein Default von 10 hätte dort früher
-    stillschweigend ältere/weitere Projekte verschluckt, ohne dass das LLM das je bemerkt hätte
+    hunderte anwachsen (10 ist da ein bewusster Kosten-Filter), Projekte/Rechnungen/Ausgaben sind
+    dagegen kleine, begrenzte Listen, ein Default von 10 hätte dort früher stillschweigend
+    ältere/weitere Einträge verschluckt, ohne dass das LLM das je bemerkt hätte
     (Simon: 'Ich glaube Jarvis hat keine Möglichkeit alle Projekte zu ziehen')."""
-    if database == "todos":
-        cols = ["id", "name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
-                "source", "external_id", "repo", "body", "labels"]
-        table = "todos"
-        default_limit = 10
-    elif database == "projekte":
-        cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"]
-        table = "projekte"
-        default_limit = 200
-    else:
-        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
+    meta = _QUERY_META.get(database)
+    if meta is None:
+        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: {', '.join(_QUERY_META)}")
+    cols, table = meta["cols"], database
     if limit is None:
-        limit = default_limit
+        limit = meta["default_limit"]
 
     sql = f"SELECT {', '.join(cols)} FROM {table} WHERE 1=1"
     params: list = []
     if search:
-        sql += " AND name LIKE ?"
+        sql += f" AND {meta['search_col']} LIKE ?"
         params.append(f"%{search}%")
-    if status:
-        sql += " AND status = ?"
+    if status and meta["status_col"]:
+        sql += f" AND {meta['status_col']} = ?"
         params.append(status)
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
@@ -415,11 +616,13 @@ def query(database: str, search: str | None = None, status: str | None = None, l
     results = [dict(zip(cols, r)) for r in rows]
 
     # Lazy-Load-Hinweis: nur Titel+id der Unterseiten, kein Inhalt — Volltext
-    # erst über read_seite() bei Bedarf nachladen (Kosten-Rücksicht).
-    for r in results:
-        unterseiten = list_seiten(table, r["id"])
-        if unterseiten:
-            r["unterseiten"] = unterseiten
+    # erst über read_seite() bei Bedarf nachladen (Kosten-Rücksicht). Rechnungen/
+    # Ausgaben unterstützen keine Unterseiten, kein Sinn in der Extra-Abfrage.
+    if meta["unterseiten"]:
+        for r in results:
+            unterseiten = list_seiten(table, r["id"])
+            if unterseiten:
+                r["unterseiten"] = unterseiten
     return results
 
 
@@ -432,7 +635,11 @@ def write(database: str, properties: dict) -> int:
     if database == "projekte":
         return add_projekt(**{k: v for k, v in properties.items()
                                if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert", "erwartetes_abschlussdatum"}})
-    raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
+    if database == "rechnungen":
+        return add_rechnung(**{k: v for k, v in properties.items() if k in set(_RECHNUNGEN_COLS) - {"id"}})
+    if database == "ausgaben":
+        return add_ausgabe(**{k: v for k, v in properties.items() if k in set(_AUSGABEN_COLS) - {"id"}})
+    raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: {', '.join(_QUERY_META)}")
 
 
 def update(item_id: int, database: str, properties: dict) -> None:
@@ -440,8 +647,12 @@ def update(item_id: int, database: str, properties: dict) -> None:
         update_todo(item_id, **properties)
     elif database == "projekte":
         update_projekt(item_id, **properties)
+    elif database == "rechnungen":
+        update_rechnung(item_id, **properties)
+    elif database == "ausgaben":
+        update_ausgabe(item_id, **properties)
     else:
-        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
+        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: {', '.join(_QUERY_META)}")
 
 
 def delete(item_id: int, database: str) -> None:
@@ -449,8 +660,12 @@ def delete(item_id: int, database: str) -> None:
         delete_todo(item_id)
     elif database == "projekte":
         delete_projekt(item_id)
+    elif database == "rechnungen":
+        delete_rechnung(item_id)
+    elif database == "ausgaben":
+        delete_ausgabe(item_id)
     else:
-        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: todos, projekte")
+        raise ValueError(f"Unbekannte Datenbank: {database}. Verfügbar: {', '.join(_QUERY_META)}")
 
 
 def sync_vip_emails() -> list[str]:

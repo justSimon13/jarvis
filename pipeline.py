@@ -38,18 +38,47 @@ def _is_noise(text: str) -> bool:
 
 
 _TEXT_MIME_PREFIXES = ("text/",)
+_CSV_MIME_TYPES = ("text/csv", "application/vnd.ms-excel")
 
 
 def _attachment_to_block(att: dict) -> dict:
     """Wandelt einen Chat-Anhang (jarvis-web) in einen Claude-Content-Block um.
     Bilder/PDFs gehen als base64 direkt an die API; Text-Dateien werden serverseitig
     dekodiert und inline als Text eingefügt (robuster als sich auf Claudes
-    Text-Dokument-Unterstützung zu verlassen)."""
+    Text-Dokument-Unterstützung zu verlassen).
+    CSV-Dateien sind ein Sonderfall: statt roh als Text inline zu gehen (Claude müsste
+    dann selbst parsen/upserten, fehleranfällig und teuer), läuft hier direkt der
+    deterministische SevDesk-Import (finanzen_import.detect_and_import) — Claude
+    bekommt nur die fertige Zusammenfassung und kann bei fehlender Projekt-Zuordnung
+    gezielt nachfragen (siehe data_query/data_update auf 'rechnungen')."""
     import base64
     filename = att.get("filename", "Datei")
     mime_type = att.get("mime_type", "application/octet-stream")
     data_b64 = att.get("data_base64", "")
 
+    if mime_type in _CSV_MIME_TYPES or filename.lower().endswith(".csv"):
+        try:
+            text = base64.b64decode(data_b64).decode("utf-8-sig", errors="replace")
+            import finanzen_import
+            result = finanzen_import.detect_and_import(text)
+            kind_label = "Rechnungen" if result["kind"] == "rechnungen" else "Ausgaben"
+            summary = (
+                f"[CSV-Import: {filename}] Erkannt als {kind_label}-Export: "
+                f"{result['created']} neu, {result['updated']} aktualisiert (von {result['total']})."
+            )
+            unmatched = result.get("unmatched") or []
+            if unmatched:
+                preview = ", ".join(
+                    f"{u['rechnungsnummer']} ({u['kunde']}, {u['betrag_netto']}€)" for u in unmatched[:5]
+                )
+                summary += (
+                    f" {len(unmatched)} Rechnungen ohne Projekt-Zuordnung, z.B.: {preview}. "
+                    "Frag Simon aktiv, welchem Projekt diese zuzuordnen sind, und setze "
+                    "projekt_id anschließend über data_update (nie automatisch raten)."
+                )
+        except Exception as e:
+            summary = f"[CSV-Import von {filename} fehlgeschlagen: {e}]"
+        return {"type": "text", "text": summary}
     if mime_type.startswith("image/"):
         return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": data_b64}}
     if mime_type == "application/pdf":

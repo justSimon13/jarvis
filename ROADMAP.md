@@ -679,9 +679,31 @@ Verifiziert: Playwright-Testlauf gegen den echten laufenden jarvis-web-Dev-Serve
 
 **Live-Deployment-Erkenntnis:** der `auto_update.sh`-Timer hatte in der Zwischenzeit tatsächlich bereits mehrere frühere Commits dieser Session automatisch auf den HP-Server gezogen (bestätigt per Live-Read gegen die reale `finanzen_overview`-Resource) — die "Backend braucht erst Deploy"-Einschränkung der letzten Runden ist also kein Dauerzustand, nur eine Verzögerung von einigen Stunden bis zum nächsten Idle-Fenster.
 
-**Noch offen:** `erwartetes_abschlussdatum` für die zwei echten Pipeline-Projekte (halbautomaten – WordPress Relaunch: 8.625€ → Oktober 2026; Digital Mindset: 10.950€ → Dezember 2026) muss noch live gesetzt werden, sobald der Server auch *dieses* Feld kennt (Feld ist neu in diesem Commit, noch nicht deployed) — nachträglicher Schritt, siehe nächster Eintrag.
+**Erledigt (Nachtrag):** `erwartetes_abschlussdatum` für die zwei echten Pipeline-Projekte live gesetzt (halbautomaten – WordPress Relaunch → 2026-10-15; Digital Mindset → 2026-12-15), per direktem `entity_action`-Write gegen den realen Server verifiziert, `finanzen_trend` zeigt seitdem korrekt beide Projekte in der Pipeline.
 
 Verifiziert: `finanzen.py` per Standalone-Testskript gegen die realen Zahlen nachgebaut und Hochrechnung von Hand nachgerechnet (17.700€ / 17 Monate = 1.041,18€/Monat, exakt bestätigt), 12- und 24-Monats-Fenster-Grenzen geprüft, Erledigt-Projekte korrekt von der Pipeline ausgeschlossen. Bereinigungs-Migration gegen nachgebaute Testdaten verifiziert (inkl. "unrelated same-date entry survives"-Check). `TrendChart.vue` per Playwright mit realistischen Testdaten visuell geprüft (Balken/Linie/Legende/Hover/12↔24-Umschaltung), ein echter Label-Kollisions-Bug dabei gefunden und gefixt (letzte zwei Monatsbeschriftungen überlappten). `npm run build` sauber.
+
+---
+
+## 🔴 SevDesk-Import: Rechnungen & Ausgaben, `list_log_entries`-Tool (2026-07-27) ✅
+
+**Anlass:** Simon exportiert Rechnungen/Ausgaben aus SevDesk manuell als CSV (echte API kostet 10€/Monat extra, daher CSV statt API). Ziel: Import an zwei Stellen (Chat-Upload wie bei Bildern, dedizierte Seite mit voller UI), Rechnungen mit Projekten verknüpft, Statistik (Finanzen-Übersicht) auf echte Zahlen umgestellt. Simons expliziter Qualitätsanspruch: *"Bitte nicht wieder so ein halbes UI, was ich nicht bearbeiten und nutzen kann"* — volles CRUD, kein Read-only-Stub.
+
+**0. `list_log_entries`-Tool** (`tools.py`) — Lücke aus vorheriger Runde geschlossen: `get_progress` zeigt nur Ziele + letzten Wert, kein `get_logs`-Äquivalent mit ids existierte. Jetzt vor `delete_log_entry` aufrufbar, um gezielt eine id zu finden statt zu raten.
+
+**1. Datenmodell** (`local_data.py`) — zwei neue Tabellen `rechnungen`/`ausgaben`, jeweils mit SevDesks eigener stabiler Nummer (`rechnungsnummer`/`belegnummer`, UNIQUE) als Identifier. Generischer `query()`/`_QUERY_META`-Dispatch (für `data_query`-Tool) und `_ENTITY_FIELDS`/`_ENTITY_ADD_FN`/`_ENTITY_UPDATE_FN`/`_ENTITY_DELETE_FN`-Dispatch-Dicts (`server.py`, ersetzt wachsende if/elif-Ketten) beide auf 6 Entitäten erweitert.
+
+**2. `finanzen_import.py`** (neu) — Parser für beide SevDesk-Exportformate (`invoices.csv`: eine Zeile pro Rechnung; `voucher.csv`: Kopfzeile + Positionszeilen pro Beleg, hier zu einem flachen Datensatz zusammengefasst). Import ist **idempotent** (upsert per Rechnungsnummer/Belegnummer — wiederholter Import derselben/aktualisierten Datei erzeugt nie Duplikate) und **überschreibt nie eine bereits gesetzte `projekt_id`** bei erneutem Import.
+
+**3. Projekt-Zuordnung bewusst nicht automatisch geraten:** an echten Daten bestätigt, dass ein Kunde mehrere, unterschiedlich benannte interne Projekte haben kann (z.B. "Halbautomaten Kommunikationsdesign Gmbh" least sowohl "Ticketsystem" als auch "knowHere Theme" als auch das separate "halbautomaten – WordPress Relaunch") — Kundenname → Projekt ist keine zuverlässige Heuristik. Stattdessen zwei Wege: manuelles Dropdown auf der neuen Rechnungen-Seite (immer sichtbar, keine Edit-Mode-Hürde) und `data_query`/`data_update` (beide LLM-Tools auf `rechnungen`/`ausgaben` erweitert) — JARVIS klärt offene Zuordnungen aktiv im Gespräch mit Simon.
+
+**4. `finanzen.py` umgestellt:** "tatsächlicher Gewinn" kommt jetzt aus echten bezahlten Rechnungen minus echten bezahlten Ausgaben (`local_data.rechnungen`/`ausgaben`), nicht mehr aus den manuell per `log_entry` gepflegten `tracking.py`-Einträgen (`topic="finanzen"`) — sonst hätte echter Import zu Doppelzählung geführt (Stichprobe zeigte, dass die alten Log-Einträge exakt dieselben Rechnungen abbildeten). `tracking.py` bleibt unverändert für andere Topics (Sport etc.) nutzbar, nur `finanzen.py` liest nicht mehr daraus.
+
+**5. Zwei Upload-Wege:**
+   - **Dedizierte Seite** — neue "Buchhaltung"-Nav-Gruppe (🧾) mit `/rechnungen` + `/ausgaben`, je eigene View + Item-Komponente (voller CRUD: Add-Formular, Inline-Edit, Löschen), CSV-Upload-Button pro Seite. Neue Server-Resource `import_csv` (Layer-1 DATA, `resource`+`kind`+`csv_text`, läuft in `run_in_executor` wie die anderen Resources).
+   - **Chat-Upload** — `.csv` zum Attachment-Picker hinzugefügt (`ChatView.vue`, gleicher Mechanismus wie Bilder). Serverseitig (`pipeline.py:_attachment_to_block`) ein Sonderfall **vor** der generischen `text/`-Behandlung: CSV läuft nicht als Rohtext in den LLM-Kontext, sondern direkt durch `finanzen_import.detect_and_import()` (erkennt Format am Header, ruft die passende Importfunktion) — Claude bekommt nur die fertige Zusammenfassung (created/updated/total, bei Rechnungen zusätzlich eine Vorschau unzugeordneter Einträge) und wird instruiert, die Projekt-Zuordnung aktiv mit Simon zu klären statt zu raten.
+
+Verifiziert: Backend-Logik (Parser, Upsert-Idempotenz, `projekt_id`-Erhalt, `finanzen.py`-Neuberechnung, `detect_and_import`) gegen die echten bereitgestellten CSV-Dateien getestet, nicht gegen synthetische Daten (4 Rechnungen, 174 Ausgaben — Belegnummer-Anzahl unabhängig per `awk` gegengeprüft). Frontend per Playwright gegen einen lokalen Test-Server (echtes `local_data.py`/`finanzen_import.py`, isolierte `HOME`) voll durchgeklickt: leerer Zustand, manuelles Anlegen, CSV-Upload (Erfolgsmeldung + Zeilen erscheinen), erneuter Upload derselben Datei (0 neu, alle aktualisiert, keine Duplikate), Projekt-Zuordnung per Dropdown (persistiert, Zähler "ohne Projekt" sinkt korrekt), Inline-Edit (Notiz gespeichert und nach Reload noch da), Löschen — sowohl für Rechnungen als auch Ausgaben. `npm run build` sauber.
 
 ---
 
@@ -706,7 +728,6 @@ JARVIS läuft 1×/Stunde, wertet Brain + History aus, entscheidet selbst ob Hinw
 - **Hardware-Client (ESP32-S3)** — Plan in `HARDWARE_CLIENT_PLAN.md`, deprioritized
 - **Schlafzimmer-Client** — Orange Pi Zero 2W
 - **Lichtsteuerung** — Philips Hue Bridge API
-- **SevDesk & Steuer** — Erinnerungsschicht + API
 - **Multi-Room Audio** — hängt an Schlafzimmer-Client
 
 ---

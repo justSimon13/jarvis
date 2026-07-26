@@ -30,7 +30,8 @@ JARVIS selbst ist ein einziger Server; was ein Nutzer davon sieht, hängt vom Cl
 - **Chat** — voller Gesprächsverlauf, Session-Liste, Coding-Engine-Status/Freigabe-Dialoge inline, Datei-Anhänge
 - **Wissen** — Markdown-Editor für die Wissensdatenbank direkt im Browser, inkl. Wiki-Verlinkung zwischen Dokumenten (`[[topic/file]]`, klickbare Navigation, automatische Backlinks — siehe `ARCHITECTURE.md`)
 - **Todos / Projekte / Kontakte** — volle CRUD-Views, direkt (nicht über den Chat-Umweg)
-- **Kalender**, **Tracking** (Ziele + Verlaufsgraphen)
+- **Buchhaltung** (Rechnungen / Ausgaben, seit 2026-07-27) — volle CRUD-Views + CSV-Import (SevDesk-Export, kein API-Zugang), Rechnungen mit Projekten verknüpfbar; alternativ auch als Datei-Anhang direkt im Chat hochladbar, läuft dann automatisch durch denselben Import statt in den LLM-Kontext zu gehen
+- **Kalender**, **Tracking** (Ziele + Verlaufsgraphen, Finanzen-Übersicht speist sich aus der Buchhaltung)
 - Meldet als einziger Client die `local_exec`-Capability — dadurch der einzige Ort, über den die Coding Engine lokale Befehle (z.B. `gh issue list`) ausführen lassen kann, ohne dass der Server-seitige Prozess selbst Zugriff auf Simons Mac oder GitHub-Credentials braucht
 
 ### jarvis-dashboard (iPad, PWA) — schlankeres, touch-optimiertes Interface
