@@ -446,8 +446,10 @@ def add_rechnung(rechnungsnummer: str, rechnungsdatum: str | None = None, faelli
                   bezahlt_am: str | None = None, betreff: str | None = None, betrag_netto: float | None = None,
                   betrag_brutto: float | None = None, offener_betrag: float | None = None,
                   kunde: str | None = None, projekt_id: int | None = None, notizen: str | None = None,
-                  gesperrt: bool | int | None = None) -> int:
-    conn = _get_db()
+                  gesperrt: bool | int | None = None, conn: sqlite3.Connection | None = None) -> int:
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     now = _now()
     cur = conn.execute(
         """INSERT INTO rechnungen (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff,
@@ -457,13 +459,14 @@ def add_rechnung(rechnungsnummer: str, rechnungsdatum: str | None = None, faelli
         (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff, betrag_netto, betrag_brutto,
          offener_betrag, kunde, projekt_id, notizen, int(bool(gesperrt)), now, now)
     )
-    conn.commit()
     rechnung_id = cur.lastrowid
-    conn.close()
+    if own_conn:
+        conn.commit()
+        conn.close()
     return rechnung_id
 
 
-def update_rechnung(rechnung_id: int, **fields) -> None:
+def update_rechnung(rechnung_id: int, conn: sqlite3.Connection | None = None, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff", "betrag_netto",
                "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen", "gesperrt"}
@@ -476,10 +479,13 @@ def update_rechnung(rechnung_id: int, **fields) -> None:
     sets.append("updated_at = ?")
     values.append(_now())
     values.append(rechnung_id)
-    conn = _get_db()
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     conn.execute(f"UPDATE rechnungen SET {', '.join(sets)} WHERE id = ?", values)
-    conn.commit()
-    conn.close()
+    if own_conn:
+        conn.commit()
+        conn.close()
 
 
 def delete_rechnung(rechnung_id: int) -> None:
@@ -489,7 +495,7 @@ def delete_rechnung(rechnung_id: int) -> None:
     conn.close()
 
 
-def upsert_rechnung(rechnungsnummer: str, **fields) -> int | None:
+def upsert_rechnung(rechnungsnummer: str, conn: sqlite3.Connection | None = None, **fields) -> int | None:
     """Für den CSV-Import: legt neu an oder aktualisiert per rechnungsnummer (SevDesks
     stabile ID) — ein wiederholter Export/Import derselben Rechnung erzeugt nie ein
     Duplikat. projekt_id wird bei einem Update NIE überschrieben, wenn bereits gesetzt
@@ -497,20 +503,55 @@ def upsert_rechnung(rechnungsnummer: str, **fields) -> int | None:
     Ist die bestehende Zeile 'gesperrt' (manuell markiert, z.B. weil Simon sie von Hand
     korrigiert hat oder sie unabhängig von SevDesk gepflegt wird), wird sie vom Import
     komplett übersprungen — gibt dann None zurück statt der id, damit der Aufrufer das
-    von einem echten Update/Neuanlage unterscheiden kann."""
-    conn = _get_db()
+    von einem echten Update/Neuanlage unterscheiden kann.
+    conn: optionale bestehende Connection (siehe upsert_rechnungen_bulk) — ohne diese
+    öffnet/committed/schließt die Funktion wie gehabt selbst eine eigene."""
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     row = conn.execute(
         "SELECT id, projekt_id, gesperrt FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,)
     ).fetchone()
-    conn.close()
     if row is None:
-        return add_rechnung(rechnungsnummer, **fields)
-    existing_id, existing_projekt_id, gesperrt = row
-    if gesperrt:
-        return None
-    fields.pop("projekt_id", None) if existing_projekt_id is not None else None
-    update_rechnung(existing_id, **fields)
-    return existing_id
+        result = add_rechnung(rechnungsnummer, conn=conn, **fields)
+    else:
+        existing_id, existing_projekt_id, gesperrt = row
+        if gesperrt:
+            result = None
+        else:
+            fields.pop("projekt_id", None) if existing_projekt_id is not None else None
+            update_rechnung(existing_id, conn=conn, **fields)
+            result = existing_id
+    if own_conn:
+        conn.commit()
+        conn.close()
+    return result
+
+
+def upsert_rechnungen_bulk(entries: list[dict]) -> dict:
+    """Für den CSV-Import (finanzen_import.py): EINE Connection + EIN Commit für den
+    ganzen Batch statt einer Connection pro Zeile. upsert_rechnung() pro Zeile aufrufen
+    hätte bei >100 Zeilen zu spürbarer Latenz geführt (jede Zeile öffnet+migriert+
+    committed eine eigene SQLite-Connection inkl. fsync) — live beobachtet: ein
+    174-Zeilen-Ausgaben-Import überschritt dadurch das 10s-Frontend-Timeout und schlug
+    scheinbar grundlos fehl. Gibt {created, updated, skipped_locked} zurück."""
+    conn = _get_db()
+    existing = {r[0] for r in conn.execute("SELECT rechnungsnummer FROM rechnungen").fetchall()}
+    created = updated = skipped_locked = 0
+    for entry in entries:
+        nummer = entry["rechnungsnummer"]
+        is_new = nummer not in existing
+        fields = {k: v for k, v in entry.items() if k != "rechnungsnummer"}
+        result = upsert_rechnung(nummer, conn=conn, **fields)
+        if result is None:
+            skipped_locked += 1
+        elif is_new:
+            created += 1
+        else:
+            updated += 1
+    conn.commit()
+    conn.close()
+    return {"created": created, "updated": updated, "skipped_locked": skipped_locked}
 
 
 # ── Ausgaben ──────────────────────────────────────────────────────────────────
@@ -530,8 +571,10 @@ def add_ausgabe(belegnummer: str, status: str | None = None, lieferant: str | No
                 kategorie: str | None = None, beschreibung: str | None = None, datum: str | None = None,
                 faellig_am: str | None = None, bezahlt_am: str | None = None,
                 offener_betrag: float | None = None, betrag: float | None = None,
-                gesperrt: bool | int | None = None) -> int:
-    conn = _get_db()
+                gesperrt: bool | int | None = None, conn: sqlite3.Connection | None = None) -> int:
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     now = _now()
     cur = conn.execute(
         """INSERT INTO ausgaben (belegnummer, status, lieferant, kategorie, beschreibung, datum,
@@ -540,13 +583,14 @@ def add_ausgabe(belegnummer: str, status: str | None = None, lieferant: str | No
         (belegnummer, status, lieferant, kategorie, beschreibung, datum, faellig_am, bezahlt_am,
          offener_betrag, betrag, int(bool(gesperrt)), now, now)
     )
-    conn.commit()
     ausgabe_id = cur.lastrowid
-    conn.close()
+    if own_conn:
+        conn.commit()
+        conn.close()
     return ausgabe_id
 
 
-def update_ausgabe(ausgabe_id: int, **fields) -> None:
+def update_ausgabe(ausgabe_id: int, conn: sqlite3.Connection | None = None, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
                "faellig_am", "bezahlt_am", "offener_betrag", "betrag", "gesperrt"}
@@ -559,10 +603,13 @@ def update_ausgabe(ausgabe_id: int, **fields) -> None:
     sets.append("updated_at = ?")
     values.append(_now())
     values.append(ausgabe_id)
-    conn = _get_db()
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     conn.execute(f"UPDATE ausgaben SET {', '.join(sets)} WHERE id = ?", values)
-    conn.commit()
-    conn.close()
+    if own_conn:
+        conn.commit()
+        conn.close()
 
 
 def delete_ausgabe(ausgabe_id: int) -> None:
@@ -572,21 +619,52 @@ def delete_ausgabe(ausgabe_id: int) -> None:
     conn.close()
 
 
-def upsert_ausgabe(belegnummer: str, **fields) -> int | None:
+def upsert_ausgabe(belegnummer: str, conn: sqlite3.Connection | None = None, **fields) -> int | None:
     """Für den CSV-Import: legt neu an oder aktualisiert per belegnummer (SevDesks
     stabile ID) — ein wiederholter Export/Import derselben Ausgabe erzeugt nie ein
     Duplikat. Ist die bestehende Zeile 'gesperrt', wird sie übersprungen — gibt dann
-    None zurück statt der id (siehe upsert_rechnung, gleiches Prinzip)."""
-    conn = _get_db()
+    None zurück statt der id (siehe upsert_rechnung, gleiches Prinzip).
+    conn: optionale bestehende Connection (siehe upsert_ausgaben_bulk)."""
+    own_conn = conn is None
+    if own_conn:
+        conn = _get_db()
     row = conn.execute("SELECT id, gesperrt FROM ausgaben WHERE belegnummer = ?", (belegnummer,)).fetchone()
-    conn.close()
     if row is None:
-        return add_ausgabe(belegnummer, **fields)
-    existing_id, gesperrt = row
-    if gesperrt:
-        return None
-    update_ausgabe(existing_id, **fields)
-    return existing_id
+        result = add_ausgabe(belegnummer, conn=conn, **fields)
+    else:
+        existing_id, gesperrt = row
+        if gesperrt:
+            result = None
+        else:
+            update_ausgabe(existing_id, conn=conn, **fields)
+            result = existing_id
+    if own_conn:
+        conn.commit()
+        conn.close()
+    return result
+
+
+def upsert_ausgaben_bulk(entries: list[dict]) -> dict:
+    """Wie upsert_rechnungen_bulk() — EINE Connection/EIN Commit für den ganzen
+    CSV-Import-Batch statt einer pro Zeile. Gibt {created, updated, skipped_locked}
+    zurück."""
+    conn = _get_db()
+    existing = {r[0] for r in conn.execute("SELECT belegnummer FROM ausgaben").fetchall()}
+    created = updated = skipped_locked = 0
+    for entry in entries:
+        belegnummer = entry["belegnummer"]
+        is_new = belegnummer not in existing
+        fields = {k: v for k, v in entry.items() if k != "belegnummer"}
+        result = upsert_ausgabe(belegnummer, conn=conn, **fields)
+        if result is None:
+            skipped_locked += 1
+        elif is_new:
+            created += 1
+        else:
+            updated += 1
+    conn.commit()
+    conn.close()
+    return {"created": created, "updated": updated, "skipped_locked": skipped_locked}
 
 
 # ── Generischer Dispatch für die LLM-Tools (data_query/write/update/delete) ───
