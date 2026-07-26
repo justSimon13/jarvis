@@ -117,7 +117,7 @@ Reine Konstanten, keine Logik, `import protocol as P`, referenziert als `P.XXX`.
 | Coding Engine | `CODING_APPROVAL_REQUEST/RESPONSE`, `CODING_TASK_STATUS`, `CODING_SUDO_PASSWORD_REQUEST/RESPONSE` (Passwort nie geloggt/gespeichert) |
 | Local Exec | `LOCAL_EXEC_REQUEST` (→Client mit Capability), `LOCAL_EXEC_RESPONSE` (→Server) |
 | Entity CRUD | `ENTITY_ACTION` (→Server), `ENTITY_ACTION_ACK` (→Client) |
-| Dokument-Export | `GENERATE_DOCUMENT_REQUEST` (→Server, seit 2026-07-26 — `{"type":"generate_document_request","quelle_typ":"projekt"\|"seite","quelle_id":N,"format":"pdf"\|"docx"}`, Layer 1 DATA ohne LLM-Umweg, z.B. der PDF/Word-Knopf in `ProjektItem.vue`), `DOCUMENT_READY` (→Client — `{"type":"document_ready","filename":"...","mime":"...","data_base64":"..."}`, Ergebnis von `generate_document` (LLM-Tool-Pfad) ODER `generate_document_request` (Direkt-Pfad), jarvis-web löst daraus direkt einen Browser-Download aus) |
+| Dokument-Export | `GENERATE_DOCUMENT_REQUEST` (→Server, seit 2026-07-26 — `{"type":"generate_document_request","quelle_typ":"projekte"\|"todos"\|"kontakte"\|"seite","quelle_id":N,"format":"pdf"\|"docx"}`, Layer 1 DATA ohne LLM-Umweg, z.B. die PDF/Word-Knöpfe in `ProjektItem.vue`/`SeiteView.vue`), `DOCUMENT_READY` (→Client — `{"type":"document_ready","filename":"...","mime":"...","data_base64":"..."}`, Ergebnis von `generate_document` (LLM-Tool-Pfad) ODER `generate_document_request` (Direkt-Pfad), jarvis-web löst daraus direkt einen Browser-Download aus) |
 
 ---
 
@@ -215,7 +215,7 @@ SQLite (`config.TRACKING_DB`). Bewusst getrennt von `knowledge.py` (Prose) — h
 | `btc.py` | Bitcoin-Preis | CoinGecko | 15-Min-Cache `btc_cache.json` |
 | `client_music.py` | Musik-Routing an Satellite (mpv+YouTube) | keine | In-Memory Room-Handoff-State |
 | `coding_engine.py` | Delegierte Coding-Tasks | Claude Agent SDK, GitHub REST + `git` CLI | Budgets aus `config.CODING_*`, Worktrees unter `~/.jarvis/coding_worktrees` |
-| `document_export.py` | PDF/Word aus Projekt/Seite generieren (seit 2026-07-26, Markdown-Parser deckt #-Überschriften/Absätze/Bullets/hr/Zitate/GFM-Tabellen/**Bold**/*Kursiv* ab) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
+| `document_export.py` | PDF/Word aus jeder Seite generieren — Projekt/Todo/Kontakt-Wurzelseite oder einzelne Unterseite, via `local_data.get_seite_view()` (seit 2026-07-26, Markdown-Parser deckt #-Überschriften/Absätze/Bullets/hr/Zitate/GFM-Tabellen/**Bold**/*Kursiv* ab) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
 | `google_auth.py` | Gemeinsame Google-OAuth | `google-auth`/`google-auth-oauthlib` | Token `google_token.json` |
 | `local_exec.py` | "Führ das auf dem Client aus"-Primitiv | keine (WS-Routing) | 60s Timeout, aktuell nur Action `gh_issue_list` |
 | `notification_dispatcher.py` | Push, unabhängig von Pipelines | keine | SQLite `notifications.db`, Rate-Limit 3/h |

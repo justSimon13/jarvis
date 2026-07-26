@@ -590,6 +590,18 @@ Verifiziert: neues Standalone-Testskript mit Content, der die genauen aus den Sc
 
 ---
 
+## 🔴 Dokument-Export: Button an jeder Seite statt nur an Projekten (2026-07-26, gleicher Tag) ✅
+
+**Anlass:** Deutliches Feedback von Simon: *"Okay jetzt hast du irgendwie komplett dumm implentiert. Warum nur bei der Projekt übersicht und warum nur PDF? Mach doch einfach IN jeder Seite ein Download Button, sodass ich auch einzelne Seiten herunterladen kann. Und immer Beides, PDF und Word."* Der Button saß bis dahin nur in der Projekte-**Liste** (`ProjektItem.vue`) — eine einzelne Unterseite (z.B. ein PRD unter einem Projekt) ließ sich darüber gar nicht exportieren, nur das ganze Projekt.
+
+**Backend generalisiert** (`services/document_export.py`, `_sections_for()`): nutzt jetzt `local_data.get_seite_view(typ, id)` — exakt dieselbe Funktion, die `SeiteView.vue` im Frontend zum Anzeigen verwendet — statt einer eigenen, nur auf Projekte zugeschnittenen Lookup-Logik. Ein einziger Codepfad für alle vier Quelltypen (`projekte`/`todos`/`kontakte`/`seite`) statt zwei Sonderfällen. `quelle_typ`-Werte umbenannt von `"projekt"` auf `"projekte"` (gleiche Konvention wie überall sonst im System, z.B. `data_query`s `database`-Parameter) — die Vereinheitlichung kam quasi kostenlos mit, weil `get_seite_view()` schon alles abdeckt, worüber das Frontend sowieso navigiert (Todos/Kontakte eingeschlossen, nicht nur Projekte, obwohl nicht explizit gefordert — aber der naheliegende nächste Schritt bei dieser Generalisierung).
+
+**Frontend:** PDF/Word-Buttons jetzt zusätzlich direkt in `SeiteView.vue` (nicht nur in der Projekt-Liste) — funktioniert für jede dort angezeigte Seite: Projekt-Wurzelseite, Todo, Kontakt, oder eine einzelne Unterseite, alles über denselben generischen `exportDoc(format)`, der `page.value.typ`/`page.value.id` direkt weiterreicht. Immer beide Formate als zwei Buttons nebeneinander, nie nur eines. Die Liste-Buttons in `ProjektItem.vue` bleiben zusätzlich bestehen (einzige Möglichkeit, ein Projekt OHNE eigene Unterseiten zu exportieren, das hat ja keinen anklickbaren Link zu `SeiteView.vue`).
+
+Verifiziert: erweitertes Standalone-Testskript deckt jetzt alle vier `quelle_typ`-Werte ab (inkl. Regressionscheck, dass Projekt-Beschreibung weiterhin mit exportiert wird, da `get_seite_view()` sie separat in `meta` statt in `inhalt` liefert). Playwright-Screenshot bestätigt: Buttons erscheinen korrekt sowohl auf der Projekt-Wurzelseite als auch beim Öffnen einer einzelnen Unterseite, sauber rechtsbündig gruppiert (kein CSS-Bug durch mehrere `margin-left:auto`-Elemente im selben Flex-Container). `npm run build` sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

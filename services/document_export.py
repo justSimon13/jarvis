@@ -1,6 +1,9 @@
 """
-Erzeugt PDF- oder Word-Dokumente aus einem Projekt oder einer Seite (lokales
-local_data-Schema, siehe local_data.py: projekte/seiten-Tabellen).
+Erzeugt PDF- oder Word-Dokumente aus jeder in SeiteView.vue anzeigbaren Seite —
+Wurzel-Seite eines Projekts/Todos/Kontakts oder eine einzelne Unterseite (lokales
+local_data-Schema, siehe local_data.py: projekte/todos/kontakte/seiten-Tabellen,
+_sections_for() nutzt local_data.get_seite_view() — dieselbe Funktion wie das
+Frontend zum Anzeigen).
 
 Ein gemeinsamer, bewusst einfacher Markdown-Block-Parser (_parse_blocks) speist
 zwei Renderer — reportlab für PDF, python-docx für Word. Kein HTML-Zwischenschritt
@@ -171,28 +174,26 @@ def _collect_seite_tree(seite_id: int, depth: int = 1) -> list[tuple[str, str, i
 
 
 def _sections_for(quelle_typ: str, quelle_id: int) -> tuple[str, str, list[tuple[str, str, int]]]:
-    """Gibt (Dokumenttitel, Intro-Markdown, [(Abschnittstitel, Inhalt, Tiefe), ...]) zurück."""
-    if quelle_typ == "projekt":
-        projekt = next((p for p in local_data.list_projekte() if p["id"] == quelle_id), None)
-        if not projekt:
-            raise ValueError(f"Projekt {quelle_id} nicht gefunden.")
-        intro = projekt.get("beschreibung") or ""
-        if projekt.get("notizen"):
-            intro = (intro + "\n\n" + projekt["notizen"]).strip()
-        children = []
-        for kind in local_data.list_seiten("projekte", quelle_id):
-            children.extend(_collect_seite_tree(kind["id"]))
-        return projekt["name"], intro, children
+    """Gibt (Dokumenttitel, Intro-Markdown, [(Abschnittstitel, Inhalt, Tiefe), ...]) zurück.
+    quelle_typ: dieselben Werte wie überall sonst im System — 'projekte'/'todos'/'kontakte'
+    (Wurzel-Seite eines Eintrags) oder 'seite' (eine einzelne Unterseite). Ein einziger
+    Codepfad für alle vier über local_data.get_seite_view() — das ist exakt dieselbe
+    Funktion, die auch SeiteView.vue im Frontend zum Anzeigen nutzt, also automatisch
+    für jede dort sichtbare Seite nutzbar, nicht nur für Projekte."""
+    view = local_data.get_seite_view(quelle_typ, quelle_id)
+    if not view:
+        raise ValueError(f"{quelle_typ} {quelle_id} nicht gefunden.")
 
-    if quelle_typ == "seite":
-        tree = _collect_seite_tree(quelle_id, depth=0)
-        if not tree:
-            raise ValueError(f"Seite {quelle_id} nicht gefunden.")
-        titel, inhalt, _ = tree[0]
-        children = [(t, c, max(d, 1)) for (t, c, d) in tree[1:]]
-        return titel, inhalt, children
+    intro = view["inhalt"] or ""
+    beschreibung = (view.get("meta") or {}).get("beschreibung")
+    if beschreibung:
+        intro = (beschreibung + "\n\n" + intro).strip()
 
-    raise ValueError(f"Unbekannter quelle_typ: {quelle_typ} (erlaubt: projekt, seite)")
+    children = []
+    for kind in view["unterseiten"]:
+        children.extend(_collect_seite_tree(kind["id"]))
+
+    return view["titel"] or "Dokument", intro, children
 
 
 # ── PDF (reportlab) ───────────────────────────────────────────────────────────

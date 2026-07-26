@@ -953,25 +953,24 @@ DEFINITIONS = [
     {
         "name": "generate_document",
         "description": (
-            "Erstellt ein PDF- oder Word-Dokument aus einem Projekt oder einer Seite und "
-            "schickt es zum Download an den aktuellen Chat-Client (funktioniert nur im "
-            "Web-Chat, nicht bei Sprach-Clients). Bei quelle_typ='projekt' werden Beschreibung "
-            "+ Notizen + alle Unterseiten zu einem Dokument zusammengefasst, bei 'seite' die "
-            "Seite selbst + ihre Unterseiten. Nutzen wenn Simon sagt 'exportier mir X als PDF', "
-            "'mach mir ein Word-Dokument aus Projekt Y' o.ä. id vorher per data_query/read_seite "
-            "ermitteln."
+            "Erstellt ein PDF- oder Word-Dokument aus einem Projekt, Todo, Kontakt oder einer "
+            "einzelnen Seite und schickt es zum Download an den aktuellen Chat-Client (funktioniert "
+            "nur im Web-Chat, nicht bei Sprach-Clients). Fasst die Wurzel-Seite (Beschreibung+"
+            "Notizen) + alle Unterseiten rekursiv zu einem Dokument zusammen. Nutzen wenn Simon "
+            "sagt 'exportier mir X als PDF', 'mach mir ein Word-Dokument aus Projekt Y' o.ä. id "
+            "vorher per data_query/read_seite ermitteln."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "quelle_typ": {
                     "type": "string",
-                    "enum": ["projekt", "seite"],
-                    "description": "Ob die id ein Projekt oder eine einzelne Seite referenziert.",
+                    "enum": ["projekte", "todos", "kontakte", "seite"],
+                    "description": "Gleiche Werte wie bei data_query('database')/entity_action('entity') plus 'seite' für eine einzelne Unterseite.",
                 },
                 "quelle_id": {
                     "type": "integer",
-                    "description": "id des Projekts (aus data_query) oder der Seite (aus read_seite/data_query 'unterseiten').",
+                    "description": "id des Projekts/Todos/Kontakts (aus data_query) oder der Seite (aus read_seite/data_query 'unterseiten').",
                 },
                 "format": {
                     "type": "string",
