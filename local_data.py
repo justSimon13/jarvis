@@ -108,12 +108,32 @@ def _get_db() -> sqlite3.Connection:
             updated_at      TEXT
         )
     """)
+    # Einmalige Reparatur (seit 2026-07-27): update_todo() schrieb bisher ein leeres
+    # Datumsfeld als '' statt NULL (Frontend füllt <input type="date"> beim Bearbeiten
+    # mit '' statt None vor, das ging beim Speichern unverändert durch). list_todos()s
+    # Filter 'datum IS NULL OR datum >= cutoff' greift bei '' auf keinen der beiden
+    # Zweige — jedes so betroffene Todo verschwand seitdem dauerhaft aus der Liste,
+    # obwohl es in der DB weiter existierte. Idempotent (WHERE datum='' matcht nach
+    # dem ersten Lauf nichts mehr), _normalize_fields() verhindert das Nachwachsen.
+    conn.execute("UPDATE todos SET datum = NULL WHERE datum = ''")
     conn.commit()
     return conn
 
 
 def _now() -> str:
     return datetime.now().isoformat()
+
+
+def _normalize_fields(fields: dict) -> dict:
+    """Leere Strings -> None. Edit-Formulare im Frontend (z.B. TodoItem.vue) befüllen ein
+    <input type="date"> für ein bisher leeres Feld mit '' statt None und schicken das beim
+    Speichern unverändert mit — ohne diese Normalisierung landet dann ein echter Leerstring
+    in der Spalte statt NULL. Bei 'datum' war das kein kosmetisches Problem: list_todos()s
+    Filter 'datum IS NULL OR datum >= cutoff' greift bei '' auf KEINEN der beiden Zweige
+    (Leerstring ist weder NULL noch >= irgendeinem echten Datum, da lexikographisch kleiner
+    als jeder YYYY-MM-DD-String) — das Todo verschwand dadurch nach jedem Speichern dauerhaft
+    aus der Liste, obwohl es in der DB unverändert existierte (wirkte wie Datenverlust)."""
+    return {k: (None if v == "" else v) for k, v in fields.items()}
 
 
 # ── Todos ─────────────────────────────────────────────────────────────────────
@@ -179,6 +199,7 @@ def add_todo(name: str, status: str | None = None, datum: str | None = None,
 
 
 def update_todo(todo_id: int, **fields) -> None:
+    fields = _normalize_fields(fields)
     allowed = {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
                "source", "external_id", "repo", "body", "labels"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
@@ -258,6 +279,7 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 
 
 def update_projekt(projekt_id: int, **fields) -> None:
+    fields = _normalize_fields(fields)
     allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
@@ -318,6 +340,7 @@ def add_kontakt(name: str, email: str | None = None, telefon: str | None = None,
 
 
 def update_kontakt(kontakt_id: int, **fields) -> None:
+    fields = _normalize_fields(fields)
     allowed = {"name", "email", "telefon", "tags", "notizen"}
     sets, values = [], []
     for k, v in fields.items():
@@ -394,6 +417,7 @@ def query(database: str, search: str | None = None, status: str | None = None, l
 
 
 def write(database: str, properties: dict) -> int:
+    properties = _normalize_fields(properties)
     if database == "todos":
         return add_todo(**{k: v for k, v in properties.items()
                             if k in {"name", "status", "datum", "prioritaet", "bereich", "aufwand",

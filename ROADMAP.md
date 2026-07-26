@@ -630,6 +630,24 @@ Verifiziert: Standalone-Testskript gegen 15 angelegte Test-Projekte + 15 Test-To
 
 ---
 
+## 🔴 Todos verschwanden nach dem Bearbeiten + Kosten/Statistik getrennt (2026-07-27, gleicher Tag) ✅
+
+**Anlass:** Simon: *"Ich kann gewisse Werte nicht updaten oder eintragen, bei eigentlich allen Einträgen auf der App... Bitte gehe einmal nochmal durch, auch Todos etc."* — plus der Wunsch, LLM-Verbrauchskosten und allgemeine Statistiken (Sport etc.) getrennt darzustellen statt beides auf einer Seite.
+
+**Live reproduzierter Bug (Kernursache für "Updates verschwinden"):** Ein Test-Todo ohne Datum anlegen, im Edit-Formular irgendein Feld ändern und speichern (`entity_action_ack` kam korrekt mit `ok:true` zurück) — danach war das Todo aus der Liste komplett verschwunden, obwohl die DB-Zeile weiter existierte. Ursache: `TodoItem.vue`s Edit-Formular befüllt ein bisher leeres `<input type="date">` beim Öffnen mit `''` statt `null` (`form.datum = props.todo.datum || ''`) und schickt das beim Speichern unverändert mit, unabhängig davon welches Feld man eigentlich ändern wollte. `local_data.update_todo()` schrieb dieses `''` bisher unverändert in die Spalte. `list_todos()`s Filter `datum IS NULL OR datum >= cutoff` greift bei `datum=''` auf **keinen** der beiden Zweige (Leerstring ist weder NULL noch `>=` irgendeinem echten `YYYY-MM-DD`-Datum, da lexikographisch kleiner) — die Zeile fiel dadurch aus jedem `list_todos()`-Ergebnis, dauerhaft, bis jemand das `datum`-Feld manuell wieder auf einen echten Wert setzt. Sah aus wie Datenverlust, war aber ein reiner Sichtbarkeits-Bug.
+
+**Fix (`local_data.py`):**
+- Neue Funktion `_normalize_fields()` — wandelt `""` zu `None` in jedem Update-Dict. Angewendet in `update_todo()`, `update_projekt()`, `update_kontakt()` und `write()` (LLM-`data_write`-Pfad, als Absicherung falls Claude mal explizit `""` statt das Feld wegzulassen schickt). **Bewusst nicht** in `update_seite()` — `seiten.titel` ist `NOT NULL`, dort würde die Normalisierung einen echten Fehler erzeugen statt einen zu verhindern.
+- **Einmalige Reparatur-Migration** in `_get_db()`: `UPDATE todos SET datum = NULL WHERE datum = ''` — repariert bereits bestehende, auf diese Weise unsichtbar gewordene Todos automatisch beim nächsten Connect (idempotent, kein Aufwand nach dem ersten erfolgreichen Lauf).
+
+**Kontrolliert, ob dieselbe Fallenkonstruktion woanders lauert:** `list_projekte()`/`list_kontakte()` haben keine vergleichbare Datums-Cutoff-Filterung — das exakte Katastrophen-Muster (Zeile verschwindet dauerhaft) ist auf `todos.datum` beschränkt. Die `geschaetzter_wert`-Meldung ("Budget/Einkommen nicht eintragbar") hat eine andere, unabhängige Ursache: dieses Feld ist serverseitig noch gar nicht deployed (siehe Deployment-Hinweise weiter oben) — kein Code-Bug, sondern der übliche Auto-Update-Verzug.
+
+**Kosten vs. allgemeine Statistik getrennt** (zweiter Teil der Anfrage): Neue eigene Seite **Kosten** (`KostenView.vue`, Route `/kosten`, Sidebar-Icon 💰) — enthält die bisher auf der Tracking-Seite mitlaufenden LLM-Kosten-Kacheln (Chat/Coding-Engine/Gesamt heute) + `CodingEngineUsage`. Dabei aufgefallen: das generische `tracking_topics`-Ergebnis enthielt zusätzlich einen `"chat"`-Topic mit den rohen `cost_usd`-Log-Einträgen aus `pipeline.py` — dieselbe Datenquelle wie die "Chat heute"-Kachel, nur als Rohliste zwischen Sport & Co. einsortiert. `"chat"` jetzt zusätzlich zu `"coding_engine"`/`"finanzen"` aus dem generischen `tracking_topics`-Ergebnis ausgeschlossen (`server.py`) — die "Tracking"-Seite zeigt jetzt ausschließlich allgemeine Lebens-Statistiken (Sport etc.) plus die Finanzen-Übersicht, LLM-Kosten leben komplett auf der neuen Kosten-Seite.
+
+Verifiziert: Standalone-Testskript reproduziert den Bug gezielt (Todo direkt per Raw-SQL auf `datum=''` korrumpiert, bestätigt Verschwinden aus `list_todos()`), bestätigt dass die Reparatur-Migration es beim nächsten `_get_db()`-Aufruf zurückholt, und dass `update_todo()`/`write()` `datum=''` jetzt korrekt zu NULL normalisieren statt den Bug erneut zu erzeugen. Playwright gegen den echten laufenden jarvis-web-Dev-Server bestätigt: neue Kosten-Seite zeigt korrekt die Kosten-Kacheln, Tracking-Seite zeigt nach dem Split keine LLM-Kosten-Kacheln/Charts mehr (nur noch Topic-Karten + Finanzen-Block), keine Konsolenfehler. Die `"chat"`-Ausschluss-Änderung selbst ist Backend-Code und läuft (wie alle Server-Änderungen heute) erst nach Auto-Update/Pip-Install auf dem HP-Server live — im Test war "Chat" auf der alten, noch nicht aktualisierten Server-Version deshalb weiterhin als Topic-Karte sichtbar, das ist erwartet. `npm run build` sauber.
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)

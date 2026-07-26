@@ -392,10 +392,14 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": str(e)}
     if resource == "tracking_topics":
         try:
-            # coding_engine und finanzen haben je eine eigene dedizierte Ansicht
-            # (finanzen_overview kombiniert es zusätzlich mit Projekt-Schätzungen) —
-            # hier nicht nochmal generisch/doppelt zeigen.
-            return [t for t in tracking.list_topics() if t not in ("coding_engine", "finanzen")]
+            # coding_engine/chat sind LLM-Verbrauchskosten (chat: pipeline.py's
+            # cost_usd-Logs, dieselbe Quelle wie store.chatCostToday) und finanzen
+            # hat seine eigene dedizierte Ansicht (finanzen_overview kombiniert es
+            # zusätzlich mit Projekt-Schätzungen) — alle drei gehören NICHT in die
+            # allgemeine Statistik-Übersicht (Simon: explizite Trennung gewünscht
+            # zwischen LLM-Kosten-Tracking und allgemeinen Lebens-Statistiken wie
+            # Sport). Kosten-Übersicht ist jarvis-web's eigene "Kosten"-Seite.
+            return [t for t in tracking.list_topics() if t not in ("coding_engine", "chat", "finanzen")]
         except Exception as e:
             return {"error": str(e)}
     if resource == "tracking_progress":
