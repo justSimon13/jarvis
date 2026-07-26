@@ -139,38 +139,52 @@ def parse_vouchers_csv(text: str) -> list[dict]:
 
 
 def import_invoices(csv_text: str) -> dict:
-    """Importiert/aktualisiert Rechnungen. Gibt {created, updated, total, unmatched}
-    zurück — 'unmatched' listet Rechnungen ohne projekt_id (neue UND bereits
-    bestehende unverknüpfte), zur direkten Weiterverwendung z.B. im Chat."""
+    """Importiert/aktualisiert Rechnungen. Gibt {created, updated, skipped_locked, total,
+    unmatched} zurück — 'unmatched' listet Rechnungen ohne projekt_id (neue UND bereits
+    bestehende unverknüpfte), zur direkten Weiterverwendung z.B. im Chat. 'skipped_locked'
+    zählt Rechnungen, die als 'gesperrt' markiert sind (siehe local_data.upsert_rechnung)
+    — z.B. weil Simon sie von Hand korrigiert hat oder sie unabhängig von SevDesk
+    gepflegt werden; der Import lässt diese Zeilen komplett unangetastet."""
     parsed = parse_invoices_csv(csv_text)
     existing = {r["rechnungsnummer"]: r for r in local_data.list_rechnungen()}
-    created = updated = 0
+    created = updated = skipped_locked = 0
     for entry in parsed:
         nummer = entry["rechnungsnummer"]
         is_new = nummer not in existing
         fields = {k: v for k, v in entry.items() if k != "rechnungsnummer"}
-        local_data.upsert_rechnung(nummer, **fields)
-        created += is_new
-        updated += not is_new
+        result_id = local_data.upsert_rechnung(nummer, **fields)
+        if result_id is None:
+            skipped_locked += 1
+        else:
+            created += is_new
+            updated += not is_new
     unmatched = [
         {"rechnungsnummer": r["rechnungsnummer"], "kunde": r["kunde"], "betrag_netto": r["betrag_netto"]}
         for r in local_data.list_rechnungen() if r["projekt_id"] is None
     ]
-    return {"created": created, "updated": updated, "total": len(parsed), "unmatched": unmatched}
+    return {
+        "created": created, "updated": updated, "skipped_locked": skipped_locked,
+        "total": len(parsed), "unmatched": unmatched,
+    }
 
 
 def import_vouchers(csv_text: str) -> dict:
+    """Siehe import_invoices() — gleiches Prinzip, 'skipped_locked' zählt gesperrte
+    Ausgaben, die der Import unangetastet lässt."""
     parsed = parse_vouchers_csv(csv_text)
     existing_numbers = {r["belegnummer"] for r in local_data.list_ausgaben()}
-    created = updated = 0
+    created = updated = skipped_locked = 0
     for entry in parsed:
         belegnummer = entry["belegnummer"]
         is_new = belegnummer not in existing_numbers
         fields = {k: v for k, v in entry.items() if k != "belegnummer"}
-        local_data.upsert_ausgabe(belegnummer, **fields)
-        created += is_new
-        updated += not is_new
-    return {"created": created, "updated": updated, "total": len(parsed)}
+        result_id = local_data.upsert_ausgabe(belegnummer, **fields)
+        if result_id is None:
+            skipped_locked += 1
+        else:
+            created += is_new
+            updated += not is_new
+    return {"created": created, "updated": updated, "skipped_locked": skipped_locked, "total": len(parsed)}
 
 
 def detect_and_import(csv_text: str) -> dict:

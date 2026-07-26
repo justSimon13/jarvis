@@ -524,9 +524,10 @@ _ENTITY_FIELDS = {
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
     "rechnungen":   {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
-                     "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"},
+                     "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen",
+                     "gesperrt"},
     "ausgaben":     {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
-                     "faellig_am", "bezahlt_am", "offener_betrag", "betrag"},
+                     "faellig_am", "bezahlt_am", "offener_betrag", "betrag", "gesperrt"},
 }
 
 # 'add' braucht pro Entität einen Pflicht-Bezeichner — bei den meisten 'name', bei

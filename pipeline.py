@@ -66,6 +66,8 @@ def _attachment_to_block(att: dict) -> dict:
                 f"[CSV-Import: {filename}] Erkannt als {kind_label}-Export: "
                 f"{result['created']} neu, {result['updated']} aktualisiert (von {result['total']})."
             )
+            if result.get("skipped_locked"):
+                summary += f" {result['skipped_locked']} gesperrte Einträge unangetastet gelassen."
             unmatched = result.get("unmatched") or []
             if unmatched:
                 preview = ", ".join(

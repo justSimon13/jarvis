@@ -132,6 +132,7 @@ def _get_db() -> sqlite3.Connection:
                                         -- Projekte haben (siehe projekt_id)
             projekt_id      INTEGER,   -- FK auf projekte.id, manuell/von JARVIS gesetzt
             notizen         TEXT,
+            gesperrt        INTEGER DEFAULT 0,  -- 1 = Import überschreibt diese Zeile nicht (siehe upsert_rechnung)
             created_at      TEXT,
             updated_at      TEXT
         )
@@ -149,10 +150,15 @@ def _get_db() -> sqlite3.Connection:
             bezahlt_am      TEXT,      -- NULL = noch nicht bezahlt
             offener_betrag  REAL,
             betrag          REAL,
+            gesperrt        INTEGER DEFAULT 0,  -- 1 = Import überschreibt diese Zeile nicht (siehe upsert_ausgabe)
             created_at      TEXT,
             updated_at      TEXT
         )
     """)
+    # Für Installs, die die beiden Tabellen schon ohne 'gesperrt' angelegt hatten
+    # (ALTER TABLE ADD COLUMN, idempotent — siehe _ensure_column).
+    _ensure_column(conn, "rechnungen", "gesperrt", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "ausgaben", "gesperrt", "INTEGER DEFAULT 0")
     # Einmalige Reparatur (seit 2026-07-27): update_todo() schrieb bisher ein leeres
     # Datumsfeld als '' statt NULL (Frontend füllt <input type="date"> beim Bearbeiten
     # mit '' statt None vor, das ging beim Speichern unverändert durch). list_todos()s
@@ -419,7 +425,8 @@ def delete_kontakt(kontakt_id: int) -> None:
 # ── Rechnungen ────────────────────────────────────────────────────────────────
 
 _RECHNUNGEN_COLS = ["id", "rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
-                    "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"]
+                    "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen",
+                    "gesperrt"]
 
 
 def list_rechnungen(projekt_id: int | None = None) -> list[dict]:
@@ -438,16 +445,17 @@ def list_rechnungen(projekt_id: int | None = None) -> list[dict]:
 def add_rechnung(rechnungsnummer: str, rechnungsdatum: str | None = None, faellig_am: str | None = None,
                   bezahlt_am: str | None = None, betreff: str | None = None, betrag_netto: float | None = None,
                   betrag_brutto: float | None = None, offener_betrag: float | None = None,
-                  kunde: str | None = None, projekt_id: int | None = None, notizen: str | None = None) -> int:
+                  kunde: str | None = None, projekt_id: int | None = None, notizen: str | None = None,
+                  gesperrt: bool | int | None = None) -> int:
     conn = _get_db()
     now = _now()
     cur = conn.execute(
         """INSERT INTO rechnungen (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff,
                                     betrag_netto, betrag_brutto, offener_betrag, kunde, projekt_id, notizen,
-                                    created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                    gesperrt, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (rechnungsnummer, rechnungsdatum, faellig_am, bezahlt_am, betreff, betrag_netto, betrag_brutto,
-         offener_betrag, kunde, projekt_id, notizen, now, now)
+         offener_betrag, kunde, projekt_id, notizen, int(bool(gesperrt)), now, now)
     )
     conn.commit()
     rechnung_id = cur.lastrowid
@@ -458,7 +466,9 @@ def add_rechnung(rechnungsnummer: str, rechnungsdatum: str | None = None, faelli
 def update_rechnung(rechnung_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff", "betrag_netto",
-               "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen"}
+               "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen", "gesperrt"}
+    if "gesperrt" in fields:
+        fields["gesperrt"] = int(bool(fields["gesperrt"]))
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -479,17 +489,25 @@ def delete_rechnung(rechnung_id: int) -> None:
     conn.close()
 
 
-def upsert_rechnung(rechnungsnummer: str, **fields) -> int:
+def upsert_rechnung(rechnungsnummer: str, **fields) -> int | None:
     """Für den CSV-Import: legt neu an oder aktualisiert per rechnungsnummer (SevDesks
     stabile ID) — ein wiederholter Export/Import derselben Rechnung erzeugt nie ein
     Duplikat. projekt_id wird bei einem Update NIE überschrieben, wenn bereits gesetzt
-    (manuelle/JARVIS-Zuordnung soll ein erneuter Import nicht wieder wegwischen)."""
+    (manuelle/JARVIS-Zuordnung soll ein erneuter Import nicht wieder wegwischen).
+    Ist die bestehende Zeile 'gesperrt' (manuell markiert, z.B. weil Simon sie von Hand
+    korrigiert hat oder sie unabhängig von SevDesk gepflegt wird), wird sie vom Import
+    komplett übersprungen — gibt dann None zurück statt der id, damit der Aufrufer das
+    von einem echten Update/Neuanlage unterscheiden kann."""
     conn = _get_db()
-    row = conn.execute("SELECT id, projekt_id FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,)).fetchone()
+    row = conn.execute(
+        "SELECT id, projekt_id, gesperrt FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,)
+    ).fetchone()
     conn.close()
     if row is None:
         return add_rechnung(rechnungsnummer, **fields)
-    existing_id, existing_projekt_id = row
+    existing_id, existing_projekt_id, gesperrt = row
+    if gesperrt:
+        return None
     fields.pop("projekt_id", None) if existing_projekt_id is not None else None
     update_rechnung(existing_id, **fields)
     return existing_id
@@ -498,7 +516,7 @@ def upsert_rechnung(rechnungsnummer: str, **fields) -> int:
 # ── Ausgaben ──────────────────────────────────────────────────────────────────
 
 _AUSGABEN_COLS = ["id", "belegnummer", "status", "lieferant", "kategorie", "beschreibung",
-                  "datum", "faellig_am", "bezahlt_am", "offener_betrag", "betrag"]
+                  "datum", "faellig_am", "bezahlt_am", "offener_betrag", "betrag", "gesperrt"]
 
 
 def list_ausgaben() -> list[dict]:
@@ -511,15 +529,16 @@ def list_ausgaben() -> list[dict]:
 def add_ausgabe(belegnummer: str, status: str | None = None, lieferant: str | None = None,
                 kategorie: str | None = None, beschreibung: str | None = None, datum: str | None = None,
                 faellig_am: str | None = None, bezahlt_am: str | None = None,
-                offener_betrag: float | None = None, betrag: float | None = None) -> int:
+                offener_betrag: float | None = None, betrag: float | None = None,
+                gesperrt: bool | int | None = None) -> int:
     conn = _get_db()
     now = _now()
     cur = conn.execute(
         """INSERT INTO ausgaben (belegnummer, status, lieferant, kategorie, beschreibung, datum,
-                                  faellig_am, bezahlt_am, offener_betrag, betrag, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  faellig_am, bezahlt_am, offener_betrag, betrag, gesperrt, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (belegnummer, status, lieferant, kategorie, beschreibung, datum, faellig_am, bezahlt_am,
-         offener_betrag, betrag, now, now)
+         offener_betrag, betrag, int(bool(gesperrt)), now, now)
     )
     conn.commit()
     ausgabe_id = cur.lastrowid
@@ -530,7 +549,9 @@ def add_ausgabe(belegnummer: str, status: str | None = None, lieferant: str | No
 def update_ausgabe(ausgabe_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
-               "faellig_am", "bezahlt_am", "offener_betrag", "betrag"}
+               "faellig_am", "bezahlt_am", "offener_betrag", "betrag", "gesperrt"}
+    if "gesperrt" in fields:
+        fields["gesperrt"] = int(bool(fields["gesperrt"]))
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -551,17 +572,21 @@ def delete_ausgabe(ausgabe_id: int) -> None:
     conn.close()
 
 
-def upsert_ausgabe(belegnummer: str, **fields) -> int:
+def upsert_ausgabe(belegnummer: str, **fields) -> int | None:
     """Für den CSV-Import: legt neu an oder aktualisiert per belegnummer (SevDesks
     stabile ID) — ein wiederholter Export/Import derselben Ausgabe erzeugt nie ein
-    Duplikat."""
+    Duplikat. Ist die bestehende Zeile 'gesperrt', wird sie übersprungen — gibt dann
+    None zurück statt der id (siehe upsert_rechnung, gleiches Prinzip)."""
     conn = _get_db()
-    row = conn.execute("SELECT id FROM ausgaben WHERE belegnummer = ?", (belegnummer,)).fetchone()
+    row = conn.execute("SELECT id, gesperrt FROM ausgaben WHERE belegnummer = ?", (belegnummer,)).fetchone()
     conn.close()
     if row is None:
         return add_ausgabe(belegnummer, **fields)
-    update_ausgabe(row[0], **fields)
-    return row[0]
+    existing_id, gesperrt = row
+    if gesperrt:
+        return None
+    update_ausgabe(existing_id, **fields)
+    return existing_id
 
 
 # ── Generischer Dispatch für die LLM-Tools (data_query/write/update/delete) ───

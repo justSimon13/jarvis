@@ -272,10 +272,12 @@ DEFINITIONS = [
             "Projektabschlüsse — speist den Gewinn-Trend-Chart als 'Pipeline'-Balken im jeweiligen Monat). "
             "rechnungen: rechnungsnummer (Pflicht), rechnungsdatum, faellig_am, bezahlt_am (alle YYYY-MM-DD), "
             "betreff, betrag_netto, betrag_brutto, offener_betrag (Zahlen), kunde, projekt_id (Zahl, id aus "
-            "data_query('projekte')), notizen. Normalerweise per CSV-Import angelegt, nicht manuell — dieses "
+            "data_query('projekte')), notizen, gesperrt (bool — true = ein künftiger CSV-Import lässt diese "
+            "Zeile komplett unangetastet, z.B. für eine Rechnung die nicht aus SevDesk kommt oder manuell "
+            "korrigiert wurde). Normalerweise per CSV-Import angelegt, nicht manuell — dieses "
             "Tool eher für Korrekturen/Einzelfälle. "
             "ausgaben: belegnummer (Pflicht), status, lieferant, kategorie, beschreibung, datum, faellig_am, "
-            "bezahlt_am (YYYY-MM-DD), offener_betrag, betrag (Zahlen)."
+            "bezahlt_am (YYYY-MM-DD), offener_betrag, betrag (Zahlen), gesperrt (bool, gleiche Bedeutung wie bei rechnungen)."
         ),
         "input_schema": {
             "type": "object",
@@ -298,7 +300,10 @@ DEFINITIONS = [
         "description": (
             "Aktualisiert einen bestehenden Eintrag per id. "
             "id aus einem vorherigen data_query entnehmen. Für rechnungen ist das der übliche "
-            "Weg, um projekt_id zu setzen/korrigieren, nachdem geklärt wurde welches Projekt gemeint ist."
+            "Weg, um projekt_id zu setzen/korrigieren, nachdem geklärt wurde welches Projekt gemeint ist. "
+            "gesperrt=true auf rechnungen/ausgaben setzen, wenn Simon einen Eintrag manuell korrigiert hat "
+            "oder er unabhängig von SevDesk gepflegt wird — ein künftiger CSV-Import überschreibt gesperrte "
+            "Zeilen dann nie mehr."
         ),
         "input_schema": {
             "type": "object",
