@@ -723,6 +723,22 @@ Zusätzliche Lehre für künftige Bulk-Importe: lokale Standalone-Tests gegen ei
 
 ---
 
+## 🔴 Vorfall: `stop_reason=max_tokens` löste Endlos-Retry-Schleife aus, kostete zweistellig $ ✅ behoben (2026-07-28)
+
+**Symptom:** Simon meldete live laufende JARVIS-Antworten, die sich in nahezu identischen, sich selbst korrigierenden Gedankengängen wiederholten ("Jetzt seh ich es klar...", "Jetzt hab ich den echten Kontext...", mehrfach fast wortgleich), ohne seine eigentlichen Fragen zu beantworten. Logs zeigten mehrere `[pipeline] LLM fertig: ~75-78s, stop=max_tokens` hintereinander. An diesem Tag bereits über $11 für vergleichsweise wenig normales Chatten verbraucht — bei Hochrechnung auf 30 Tage ein ernstes Kostenproblem.
+
+**Root Cause, per Live-Diagnose gefunden** (direkte WS-Verbindung gegen den echten Server, da MCP zeitweise nicht erreichbar und `/Volumes/jarvis` durch ein anderes gemountetes Volume verdeckt war — Diagnose lief komplett gegen die Live-Instanz): `pipeline.py::_run_llm()`s `while True`-Loop kannte nur drei `stop_reason`-Fälle — `end_turn`/`refusal` (Turn beenden) und `tool_use` (Loop mit Tool-Ergebnissen fortsetzen). **`max_tokens` fiel durch beide Prüfungen durch** und die Schleife sprang einfach zurück an den Anfang — mit **exakt demselben, unveränderten `client_messages`**. Kein Fortschritt, keine Persistierung der (verworfenen) Antwort, keine Abbruchbedingung: der Request wurde identisch wiederholt, potenziell endlos, bis rein zufällig ein Call anders endete. `_run_llm()` gab dabei die Kontrolle nie an `process_text()` zurück, solange das anhielt — erklärt zusätzlich einen zweiten Befund: die serverseitig gespeicherte Session-Historie fror exakt beim letzten erfolgreich abgeschlossenen Turn ein, alle nachfolgenden (aber live gestreamten und abgerechneten!) Turns landeten nie in `sessions.db`.
+
+Konkreter Auslöser in diesem Fall: ein Server-Neustart mitten in einer langen Konzept-Dokumentations-Session (`knowledge/jarvis/konzept_grundsatz.md`) hatte JARVIS fälschlich glauben lassen, Inhalt sei verlorengegangen (tatsächlich war die Datei vollständig intakt — bestätigt per Nachlesen). Beim Versuch, diesen (nicht existenten) Fehler zu korrigieren, geriet JARVIS in die oben beschriebene Schleife — jeder Retry "vergaß" den vorherigen gescheiterten Versuch komplett (der stand ja nie in der History) und leitete dieselbe Erkenntnis frisch neu her. Strukturell dieselbe Bug-Klasse wie der bereits gefixte `refusal`-Fall (Sonnet-5-Umstieg, 2026-07-25/26) — dort wurde derselbe Loop-Typ schon einmal für einen anderen `stop_reason`-Wert gefixt, `max_tokens` wurde dabei offenbar übersehen.
+
+**Fix:** `max_tokens` wird jetzt wie `refusal` behandelt — abgeschnittene Antwort (mit Hinweis auf die Kürzung) an `client_messages`/History anhängen und den Turn sauber beenden, statt sie zu verwerfen und blind zu wiederholen.
+
+Verifiziert mit gemocktem `llm.stream()` (vier Fälle): einzelner `max_tokens`-Treffer beendet den Turn nach genau 1 API-Call (Regressionsschutz gegen erneutes Retry eingebaut — der Test schlägt hart fehl, falls `llm.stream()` ein zweites Mal aufgerufen wird); normaler `end_turn`-Pfad unverändert (1 Call); `tool_use`→`end_turn`-Flow unverändert (2 Calls, bestehende Tool-Loop-Logik nicht angefasst); Edge Case `max_tokens` ganz ohne sichtbaren Text vor dem Limit (z.B. komplett von Thinking-Tokens verbraucht) ebenfalls sauber behandelt statt einer leeren `full_response`, die sonst fälschlich die gerade gestellte User-Frage aus der History gepoppt hätte.
+
+**Noch offen:** Deployment auf den HP-Server (Auto-Update zieht neue Commits nur bei idlem JARVIS, siehe `scripts/auto_update.sh`) sowie die eigentliche Wissensdatenbank-Korrektur (falsche "Inhalt verloren"-Notiz in `jarvis/setup.md` entfernen, Datenhoheit-Punkt eigentlich nach `jarvis/konzept_grundsatz.md` verschieben, verwaiste Duplikat-Datei `jarvis_system/jarvis_konzept.md` bereinigen).
+
+---
+
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
 ### Mode Playbook (brain.modules.modes)
