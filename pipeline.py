@@ -370,9 +370,25 @@ class JarvisPipeline:
             if final.stop_reason == "refusal" and not turn_text.strip():
                 turn_text = "Diese Anfrage wurde aus Sicherheitsgründen abgelehnt."
 
+            # stop_reason="max_tokens": Antwort wurde mitten im Generieren abgeschnitten,
+            # weil das Output-Limit erreicht wurde. War bisher UNBEHANDELT — weder
+            # "end_turn"/"tool_use" noch "refusal" griffen, die Schleife oben lief mit
+            # UNVERÄNDERTEN client_messages einfach erneut los: derselbe Request nochmal,
+            # ohne dass die (verworfene) Antwort je in client_messages/self.history
+            # landete. Live beobachtet (2026-07-28): eine Kaskade mehrerer ~75s-Calls,
+            # jedes Mal erneut bei max_tokens abgeschnitten — JARVIS "vergaß" bei jedem
+            # Versuch, dass es die Frage gerade schon erfolglos beantwortet hatte (der
+            # gescheiterte Versuch stand ja nirgends), und wiederholte de facto denselben
+            # Denkweg identisch, potenziell endlos. Jetzt wie "refusal" behandelt: die
+            # abgeschnittene Antwort wird trotzdem an die History angehängt und der Turn
+            # sauber beendet statt verworfen und blind wiederholt — ein Hinweis macht die
+            # Kürzung für Simon UND für JARVIS selbst im nächsten Turn sichtbar.
+            if final.stop_reason == "max_tokens":
+                turn_text = (turn_text or "") + "\n\n*(Antwort abgeschnitten — Token-Limit erreicht.)*"
+
             self._emit(P.RESPONSE_DONE, text=turn_text)
 
-            if final.stop_reason in ("end_turn", "refusal"):
+            if final.stop_reason in ("end_turn", "refusal", "max_tokens"):
                 full_response = turn_text
                 if turn_text:
                     client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
