@@ -89,12 +89,14 @@ DEFINITIONS = [
             "liefert am Ende einen Branch + GitHub-PR. ANDERER Weg als delegate_coding_task — dieses "
             "Tool ist für Mac-Projekte über den Worker-Kanal (aktuell genau EIN fest hinterlegtes "
             "privates Projekt, kein Ordner-Parameter), delegate_coding_task bleibt für JARVIS' eigenes "
-            "Server-Repo über das Agent SDK. Läuft asynchron — kehrt sofort mit 'gestartet' zurück "
-            "(prüft vorher deterministisch fetch/checkout/pull --ff-only auf dem Mac; bricht das ab, "
-            "z.B. wegen lokaler ungepushter Commits, startet der Job gar nicht erst), das eigentliche "
-            "Ergebnis (Branch, PR-Link, Kosten, Zusammenfassung) kommt Minuten später per Notification, "
-            "NICHT in dieser Antwort. Braucht einen verbundenen Mac-Client mit lokaler Ausführung. Mit "
-            "check_coding_job_status kann der Fortschritt zwischendurch abgefragt werden."
+            "Server-Repo über das Agent SDK. Läuft VOLLSTÄNDIG asynchron — kehrt sofort zurück, wartet "
+            "auf keine Quittierung. Alle Prüfungen (Freigabeliste, Konto, git fetch/checkout/pull) laufen "
+            "danach auf dem Mac; Fehler dabei kommen als Benachrichtigung (Job failed), NICHT in dieser "
+            "Antwort — ebenso das eigentliche Ergebnis (Branch, PR-Link, Kosten, Zusammenfassung), Minuten "
+            "später. Ist kein Mac-Worker verbunden oder läuft bereits ein Job, wird der Auftrag vorgemerkt "
+            "(pending) und startet automatisch, sobald ein Worker da bzw. der laufende Job fertig ist — "
+            "er scheitert dann NICHT, ein zweiter Startversuch für dieselbe Aufgabe wäre ein Duplikat. "
+            "Mit check_coding_job_status kann der Fortschritt zwischendurch abgefragt werden."
         ),
         "input_schema": {
             "type": "object",

@@ -5,12 +5,21 @@ als services/coding_engine.py (Claude Agent SDK + Git-Worktree, läuft
 server-seitig für JARVIS' Eigenentwicklung) — beide bestehen nebeneinander,
 dieses Modul fasst coding_engine.py nicht an.
 
-Zweiphasig, weil ein Lauf Minuten dauert (local_exec.py's Default-Timeout ist
-60s): start_job() schickt die Anfrage über den bestehenden, unveränderten
-local_exec.dispatch() — die Antwort kommt schnell zurück ("gestartet", Phase
-1). Das eigentliche Ergebnis kommt Minuten später als eigene
+Vollständig asynchron: start_job() legt die Job-Zeile an, schickt die Anfrage
+per local_exec.dispatch_nowait() ab (fire-and-forget, KEIN Warten auf eine
+Quittierung — das Warten hat real zu falschen "nichts angestoßen"-Meldungen
+und dadurch doppelt gestarteten Jobs geführt, obwohl der Job längst lief) und
+kehrt sofort zurück. Das Ergebnis kommt Minuten später als eigene
 coding_job_result-Nachricht (P.CODING_JOB_RESULT), von server.py an
-resolve_job_result() weitergereicht (Phase 2).
+resolve_job_result() weitergereicht. Fehler bei der Vorbereitung auf dem Mac
+(Allowlist, Konto, Git) kommen über denselben Kanal als status='failed'.
+
+Ist kein Worker verbunden (oder läuft bereits ein Job), bleibt der neue Job
+auf status='pending' und wird automatisch gestartet, sobald sich ein Worker
+anmeldet (on_worker_connected, von server.py bei client_hello mit
+'local_exec'-Capability aufgerufen) bzw. der laufende Job fertig ist
+(resolve_job_result stößt den nächsten an) — immer nur einer zur Zeit, das
+Arbeitsverzeichnis verträgt keine parallelen Läufe.
 
 V1: genau ein hartcodiertes privates Projekt (kein project-Parameter, keine
 projects-Tabelle) — _JOB_CWD muss mit PROJECT_ALLOWLIST[0] in jarvis-web's
@@ -18,6 +27,7 @@ localExec.js übereinstimmen, beide Seiten geben unabhängig voneinander frei.""
 from __future__ import annotations
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -78,16 +88,22 @@ def _fail_stale_jobs() -> None:
     Verbindungsabbruch, Mac schläft ein, Server-Neustart mitten im Lauf),
     bliebe eine Zeile für immer auf 'running' stehen. Läuft einmalig beim
     Serverstart — 1h Schwelle, damit ein Neustart während eines echten, noch
-    laufenden Jobs ihn nicht fälschlich als gescheitert markiert."""
+    laufenden Jobs ihn nicht fälschlich als gescheitert markiert.
+
+    Bewusst über updated_at statt created_at: ein Job kann inzwischen längere
+    Zeit auf 'pending' gewartet haben, bevor er startete (updated_at wird beim
+    tatsächlichen Losschicken gesetzt) — created_at würde so einen Job direkt
+    nach dem Start fälschlich als hängend werten. 'pending'-Jobs selbst sind
+    hier ausgenommen: die warten absichtlich, ohne Frist."""
     cutoff = (datetime.now() - _STALE_AFTER).isoformat()
     conn = _get_db()
     stale_ids = [
         row[0] for row in
-        conn.execute("SELECT id FROM jobs WHERE status = 'running' AND created_at < ?", (cutoff,)).fetchall()
+        conn.execute("SELECT id FROM jobs WHERE status = 'running' AND updated_at < ?", (cutoff,)).fetchall()
     ]
     if stale_ids:
         conn.execute(
-            "UPDATE jobs SET status = 'failed', result = ?, updated_at = ? WHERE status = 'running' AND created_at < ?",
+            "UPDATE jobs SET status = 'failed', result = ?, updated_at = ? WHERE status = 'running' AND updated_at < ?",
             ("Kein Ergebnis empfangen (Server-Neustart, Job vermutlich hängen geblieben).", _now(), cutoff),
         )
         conn.commit()
@@ -109,13 +125,14 @@ def _build_prompt(instruction: str) -> str:
 
 
 def start_job(instruction: str, title: str | None = None) -> str:
-    """Von tools.execute() aufgerufen ('start_coding_job'). Kehrt zurück sobald
-    der Worker den Lauf gestartet hat (lokal_exec.dispatch() blockiert nur für
-    Phase 1, Sekunden) — das eigentliche Ergebnis kommt per Notification, wenn
-    resolve_job_result() aufgerufen wird. Gleiches Blockier-Muster wie
-    services/tickets.py::sync_tickets() — kein Deadlock, weil die Antwort über
-    eine andere WebSocket-Verbindung (den Tauri-Client) hereinkommt, während
-    der Event-Loop weiterläuft."""
+    """Von tools.execute() aufgerufen ('start_coding_job'). Vollständig
+    asynchron: legt die Zeile an, schickt den Auftrag fire-and-forget ab
+    (KEIN Warten auf irgendeine Antwort — das Warten hat real zu falschen
+    "nichts angestoßen"-Timeout-Meldungen und dadurch doppelt gestarteten Jobs
+    geführt) und kehrt sofort zurück. Alle Fehler nach dem Absenden (Allowlist,
+    Konto, Git) kommen als coding_job_result mit status='failed' per
+    Notification. Ist kein Worker verbunden oder läuft bereits ein Job, bleibt
+    der neue auf 'pending' und startet automatisch später."""
     if not instruction or not instruction.strip():
         return "Keine Aufgabenbeschreibung angegeben."
 
@@ -123,7 +140,7 @@ def start_job(instruction: str, title: str | None = None) -> str:
     now = _now()
     cur = conn.execute(
         """INSERT INTO jobs (title, instruction, cwd, base_branch, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'running', ?, ?)""",
+           VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
         (title or instruction[:80], instruction, _JOB_CWD, _JOB_BASE_BRANCH, now, now),
     )
     conn.commit()
@@ -131,34 +148,72 @@ def start_job(instruction: str, title: str | None = None) -> str:
     branch = f"jarvis/job-{job_id}"
     conn.execute("UPDATE jobs SET branch = ? WHERE id = ?", (branch, job_id))
     conn.commit()
+    running = conn.execute(
+        "SELECT id FROM jobs WHERE status = 'running' AND id != ? LIMIT 1", (job_id,)
+    ).fetchone()
     conn.close()
 
-    result = local_exec.dispatch(
+    # Immer nur ein Lauf zur Zeit — das eine Arbeitsverzeichnis verträgt keine
+    # parallelen git checkout/branch/commit (client-seitig zusätzlich per Lock
+    # abgesichert, aber dort würde der zweite Job scheitern statt zu warten).
+    if running:
+        return (
+            f"Job #{job_id} vorgemerkt — Job #{running[0]} läuft noch, der neue startet "
+            "automatisch danach. Ergebnis kommt per Benachrichtigung."
+        )
+
+    if _try_dispatch(job_id, instruction, branch):
+        return f"Job #{job_id} angelegt, läuft — Ergebnis kommt per Benachrichtigung."
+
+    return (
+        f"Job #{job_id} vorgemerkt — gerade kein Mac-Worker verbunden. Er startet "
+        "automatisch, sobald sich einer anmeldet. Ergebnis kommt per Benachrichtigung."
+    )
+
+
+def _try_dispatch(job_id: int, instruction: str, branch: str) -> bool:
+    """Schickt einen Job fire-and-forget an den Worker. True = rausgeschickt
+    (Zeile auf 'running'), False = kein Worker erreichbar (Zeile bleibt/wird
+    'pending', kein Fehler — Wiederholung über on_worker_connected bzw.
+    resolve_job_result)."""
+    result = local_exec.dispatch_nowait(
         "claude_code_run", cwd=_JOB_CWD, base_branch=_JOB_BASE_BRANCH, branch=branch,
         instruction=_build_prompt(instruction), job_id=job_id,
     )
     if not result.get("ok"):
-        _mark_failed(job_id, result.get("error") or "Unbekannter Fehler beim Start.")
-        return f"Konnte den Coding-Job nicht starten: {result.get('error')}"
+        print(f"[coding_jobs] Job #{job_id} bleibt vorgemerkt: {result.get('error')}", flush=True)
+        return False
 
-    # Kein Branch-Name hier — der Client quittiert jetzt sofort nach Empfang,
-    # bevor Allowlist-Prüfung/Konto-Check/Git-Vorbereitung überhaupt gelaufen
-    # sind (die dauerten real über 60s und liefen sonst in local_exec.py's
-    # Dispatch-Timeout, obwohl der Job tatsächlich durchlief). Der Branch steht
-    # zu diesem Zeitpunkt noch nicht wirklich, erst nach der Allowlist-Prüfung
-    # auf dem Worker wird er angelegt — Fehler dabei kommen als eigenes
-    # coding_job_result mit status='failed', nicht mehr als Dispatch-Fehler hier.
-    return f"Job #{job_id} angenommen. Ich melde mich per Notification, wenn er fertig ist."
-
-
-def _mark_failed(job_id: int, reason: str) -> None:
     conn = _get_db()
-    conn.execute(
-        "UPDATE jobs SET status = 'failed', result = ?, updated_at = ? WHERE id = ?",
-        (reason, _now(), job_id),
-    )
+    conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
     conn.commit()
     conn.close()
+    print(f"[coding_jobs] Job #{job_id} an den Worker geschickt (Branch {branch}).", flush=True)
+    return True
+
+
+def _start_next_pending() -> None:
+    """Startet den ältesten 'pending'-Job, sofern gerade keiner läuft. Wird
+    aufgerufen wenn ein Worker sich anmeldet (on_worker_connected) und wenn ein
+    Lauf fertig wird (resolve_job_result) — dadurch arbeiten mehrere vorgemerkte
+    Jobs nacheinander ab, nie parallel."""
+    conn = _get_db()
+    running = conn.execute("SELECT id FROM jobs WHERE status = 'running' LIMIT 1").fetchone()
+    row = None
+    if not running:
+        row = conn.execute(
+            "SELECT id, instruction, branch FROM jobs WHERE status = 'pending' ORDER BY id LIMIT 1"
+        ).fetchone()
+    conn.close()
+    if row:
+        _try_dispatch(row[0], row[1], row[2])
+
+
+def on_worker_connected() -> None:
+    """Von server.py bei jedem client_hello mit 'local_exec'-Capability
+    aufgerufen. Läuft in einem eigenen Thread, damit der aufrufende
+    WebSocket-Handler (async) nicht auf SQLite/Senden wartet."""
+    threading.Thread(target=_start_next_pending, daemon=True).start()
 
 
 def resolve_job_result(payload: dict) -> None:
@@ -203,6 +258,10 @@ def resolve_job_result(payload: dict) -> None:
         priority="high", expires_in_min=1440,
     )
 
+    # Der Worker ist jetzt frei — falls Jobs auf 'pending' warten, den ältesten
+    # direkt anstoßen (sequenzielle Abarbeitung, siehe _start_next_pending).
+    _start_next_pending()
+
 
 def get_job_status(job_id: int | None = None) -> dict:
     """Für check_coding_job_status — ohne job_id der zuletzt gestartete Job.
@@ -222,9 +281,11 @@ def get_job_status(job_id: int | None = None) -> dict:
     conn.close()
 
     data = dict(zip(cols, row))
-    if data.get("status") == "running" and data.get("created_at"):
+    # updated_at statt created_at: ein Job kann vor dem Start auf 'pending'
+    # gewartet haben — die Laufzeit zählt ab dem tatsächlichen Losschicken.
+    if data.get("status") == "running" and data.get("updated_at"):
         try:
-            started = datetime.fromisoformat(data["created_at"])
+            started = datetime.fromisoformat(data["updated_at"])
             data["running_since_minutes"] = round((datetime.now() - started).total_seconds() / 60, 1)
         except ValueError:
             pass
