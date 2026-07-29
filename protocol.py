@@ -29,7 +29,7 @@ TEXT_INPUT = "text_input"     # {"type": "text_input", "text": "...", "tts": boo
                               #   tts=True  → LLM + TTS (Voice-Mode, Default)
                               #   tts=False → LLM only, kein Audio (Text-Mode)
 PING = "ping"                 # {"type": "ping"}
-CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer", "role": "...", "tab_id": "..." (nur role=dashboard — stabile Tab-Identität aus sessionStorage, isoliert die Web-Chat-History pro Tab), "capabilities": ["local_exec"] (optional — nur die Tauri-Desktop-App meldet 'local_exec', ein normaler Browser-Tab nicht, siehe LOCAL_EXEC_REQUEST unten)}
+CLIENT_HELLO = "client_hello" # {"type": "client_hello", "name": "schlafzimmer", "role": "...", "tab_id": "..." (nur role=dashboard — stabile Tab-Identität aus sessionStorage, isoliert die Web-Chat-History pro Tab), "capabilities": ["local_exec"] (optional — nur die Tauri-Desktop-App meldet 'local_exec', ein normaler Browser-Tab nicht, siehe LOCAL_EXEC_REQUEST unten), "worker_id": "..." (optional — nur Tauri-Desktop-App, zufällige lokal persistierte Kennung, noch nicht für Routing genutzt, siehe client_manager.set_worker_id)}
 ALARM_SYNC    = "alarm_sync"    # {"type": "alarm_sync", "alarms": [...]} — Client → Server beim Connect
 ALARM_RINGING = "alarm_ringing" # {"type": "alarm_ringing", "alarm_id": "...", "label": "..."} — Client → Server wenn Wecker klingelt
 ALARM_DISMISSED = "alarm_dismissed" # {"type": "alarm_dismissed", "alarm_id": "...", "snooze_count": N} — Client → Server wenn Wecker aus
