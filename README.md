@@ -114,6 +114,44 @@ Brain (Profil, Gedächtnis, Einstellungen) wird in Supabase gespeichert — ger�
 
 ---
 
+## Entwicklung starten
+
+Für lokale Entwicklung reicht ein Python-Setup ohne die gebaute App:
+
+```bash
+git clone https://github.com/justSimon13/jarvis.git
+cd jarvis
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`.env` im Projektverzeichnis anlegen (mind. `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` — Rest optional, siehe [API Keys](#3-api-keys)):
+
+```
+ANTHROPIC_API_KEY=
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+EMAIL_ADDRESS=
+WEATHER_CITY=Stuttgart
+JARVIS_HOST=0.0.0.0
+JARVIS_PORT=8765
+```
+
+Zwei Start-Varianten:
+
+```bash
+# Standalone (Terminal, kein Server nötig — Mikrofon/Lautsprecher direkt am eigenen Rechner)
+python3 main.py
+
+# WebSocket-Server (für Clients wie jarvis-web / Satellite), Standard-Port 8765
+python3 server.py
+```
+
+`JARVIS_HOST`/`JARVIS_PORT` überschreiben Host/Port des Servers bei Bedarf.
+
+---
+
 ## Aktualisieren
 
 Neues Release herunterladen → `install.sh` erneut ausführen. Deine `.env` und Brain-Daten bleiben erhalten.
