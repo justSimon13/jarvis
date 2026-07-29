@@ -14,6 +14,7 @@ class ClientManager:
         self._modes: dict[str, str] = {}               # client_id → mode ("assistent"|"coach"|"fokus")
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._capabilities: dict[str, list[str]] = {}  # client_id → ["local_exec", ...] (z.B. Tauri-Desktop-App)
+        self._worker_ids: dict[str, str] = {}           # client_id → worker_id (nur Tauri-Desktop-App, sonst nicht gesetzt)
         self._active: str | None = None
         self._lock = threading.Lock()
 
@@ -75,6 +76,19 @@ class ClientManager:
         with self._lock:
             self._capabilities[client_id] = list(capabilities or [])
 
+    def set_worker_id(self, client_id: str, worker_id: str | None):
+        """Kennung des Mac-Workers aus client_hello (nur Tauri-Desktop-App, sonst None).
+        Noch nicht für Routing genutzt (get_client_with_capability nimmt weiterhin den
+        ersten Treffer) — legt nur den Wire-Format-Schnitt für eine spätere
+        mac-private/mac-work-Unterscheidung."""
+        with self._lock:
+            if worker_id:
+                self._worker_ids[client_id] = worker_id
+
+    def get_worker_id(self, client_id: str) -> str | None:
+        with self._lock:
+            return self._worker_ids.get(client_id)
+
     def get_client_with_capability(self, capability: str) -> str | None:
         """Erster verbundener Client mit einer bestimmten Capability (z.B. 'local_exec' —
         die Tauri-Desktop-App, im Gegensatz zu einem normalen Browser-Tab). Bei mehreren
@@ -95,6 +109,7 @@ class ClientManager:
             self._modes.pop(client_id, None)
             self._pipelines.pop(client_id, None)
             self._capabilities.pop(client_id, None)
+            self._worker_ids.pop(client_id, None)
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
 
