@@ -220,6 +220,8 @@ Auf dem Server liegt das Gedächtnis: Wissensdatenbank, Projekte, Kontakte, Buch
 - Eigener Systembenutzer ohne Zugriff auf JARVIS-Verzeichnisse — billig, deutlich besser als nichts
 - **Container pro Projekt (empfohlen)** — eigenes Dateisystem, definiertes Netzwerk, wegwerfbar, reproduzierbar, mehrere parallel möglich
 
+**Kein Widerspruch zur bestehenden Regel "Kein Docker".** Diese Regel stammt aus `ARCHITECTURE.md` und ist mit *"Audio + Docker = Chaos auf Linux"* begründet — sie betrifft den JARVIS-Kern mit Audio-Geräten. Demo-Container haben kein Audio, keine Soundkarte, keine Gerätedurchreichung. **Die Regel gilt weiter für JARVIS selbst; Demos laufen trotzdem in Containern.**
+
 Im Container braucht es einen Git-Zugang mit Rechten **nur für neue eigene Repos**, nicht das volle GitHub-Token.
 
 ### Grenzen des Sandkastens
@@ -616,15 +618,29 @@ Deckt auch Fälle ab, an die heute niemand denkt, und ist dieselbe Logik wie bei
 
 ## Reihenfolge der Umsetzung
 
+**Priorisierung nach dem Migrationslauf vom 29.07.:** Die Gap-Analyse (`MIGRATION.md`) hat einen zehnstufigen Weg ergeben. Diese Reihenfolge ist für eine *Migration* logisch, aber für den *Nutzen* falsch herum — der Coding-Executor steht dort auf Platz 8, obwohl er technisch von nichts abhängt und die einzige fehlende Fähigkeit ist.
+
+**Was zuerst passiert:**
+
+**A. Backup.** Existiert nicht. Vor dem ersten Struktur-Umbau, nicht danach.
+
+**B. Der Coding-Strang** — unabhängig von allem anderen, braucht nur neue Tabellen (`jobs`, `queue`, `clients`), die es sowieso noch nicht gibt:
+
 1. **Praxistest** (10 Minuten): `claude -p` in einem Arbeitsprojekt, plus `claude auth status` in beiden Profilen. Klärt die letzte offene Annahme.
 2. **Kanal**: Auftrag rein, Befehl auf dem Mac, Ergebnis raus. Erstmal nur `gh issue list` — harmlos, zeigt sofort, ob der Weg trägt.
 3. **Ein einzelner Claude-Code-Lauf** über denselben Kanal, Branch als Ergebnis.
 4. **Diff-Ansicht** mit drei Knöpfen.
 5. **Batch mit Plan-Freigabe** (Morgenplanung).
 
-Danach erst: Server-Client, Demo-Automatik, Personas, Sprache.
+**C. `data_scope` und fehlende Beziehungen** (additive Spalten, kleinstes Risiko). Muss vor dem ersten Arbeitsprojekt stehen — nachträglich lässt sich die Spalte nicht befüllen.
 
-Punkt 5 ist der eigentlich begeisternde Teil — 2 bis 4 sind der Weg dahin, und jeder Schritt ist für sich schon nützlich.
+**Danach nach Bedarf:**
+
+- **`facts`** — echter Nutzen, weil das Gedächtnis heute bei 20 mitgeschickten Einträgen gedeckelt ist. Eilt aber nicht.
+- **`messages`/`threads`** — der riskanteste Umbau, und der Gewinn zeigt sich erst mit einem Client ohne Oberfläche. Solange es keinen Speaker gibt, hat er keine Dringlichkeit.
+- **`collections`, `documents`-Verschmelzung, `issue_cache`** — Hygiene. Nützlich, aber niemand wartet darauf.
+
+**Aufräumen ist immer ein eigener, späterer Schritt.** Alte Struktur erst entfernen, wenn der neue Pfad produktiv und verifiziert ist — nie im selben Schritt wie das Anlegen.
 
 ---
 

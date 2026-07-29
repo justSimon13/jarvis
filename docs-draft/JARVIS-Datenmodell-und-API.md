@@ -179,6 +179,8 @@ Coding-Aufträge. Eigenständige Objekte mit Lebensdauer — **nicht** im Chat.
 
 **`base_branch` ist Pflicht bei abhängigen Aufträgen.** Zeigt er auf einen Vorgänger und der scheitert, stoppt die Kette; bei unabhängigen läuft sie weiter.
 
+**Keine Migration, sondern die erste Persistenz überhaupt.** `coding_engine.py` hält Task-Status heute in einem In-Memory-Dict — kein Coding-Task überlebt einen Neustart. `jobs` ersetzt also nichts, es füllt eine Lücke.
+
 ### `clients`
 
 Geräte, nicht Kunden.
@@ -300,11 +302,15 @@ Trennlinie: **Hat es Logik → feste Tabelle. Sind es nur Daten → Collection.*
 ```json
 {"fields": [
   {"key": "piece",  "type": "text",    "label": "Stück"},
-  {"key": "minutes","type": "number",  "label": "Dauer"},
+  {"key": "minutes","type": "number",  "label": "Dauer", "target": 30},
   {"key": "bpm",    "type": "number",  "label": "Tempo"},
   {"key": "clean",  "type": "boolean", "label": "Fehlerfrei"}
 ]}
 ```
+
+**`target` ist optional und das Zuhause der bisherigen `tracking.goals`.** Ein Zielwert pro Topic (`sport` → `kalorien_ziel: 2800`) ist weder ein Fact noch ein Entry, sondern eine Eigenschaft des Feldes. Die generische Ansicht zeichnet daraus automatisch eine Ziellinie.
+
+Nicht zu verwechseln mit persönlichen Zielen ("will in 2 Jahren ausziehen") — die sind `facts.category = 'goals'`.
 
 **`entries`**
 
@@ -357,7 +363,8 @@ Abgleich mit dem Stand vom 29.07.2026 (`brain.db`, `local_data.db`, `sessions.db
 | `rechnungen` → `invoices`, `ausgaben` → `expenses` | inkl. `locked`-Flag (bisher `gesperrt`) gegen Überschreiben beim CSV-Import — gutes Detail, behalten |
 | `knowledge_index` → `documents` | nur `data_scope` und Bezüge ergänzen |
 | `knowledge_links` → `document_links` | unverändert übernehmen |
-| `knowledge_suggestions` → `document_suggestions` | unverändert übernehmen |
+
+**Korrektur (29.07.):** `knowledge_suggestions` → `document_suggestions` ist **nicht** unverändert übernehmbar, wie hier ursprünglich stand. Das Zielschema ersetzt `topic`/`file`/`heading` durch `document_id` (FK) / `title` / `section`, und `status` wechselt von `pending` auf `open`. Gehört damit zu den Umbauten, gekoppelt an die `documents`-Verschmelzung.
 
 ### Ergänzungen
 
@@ -409,6 +416,8 @@ Was bleibt: ein Todo darf auf einen Issue verweisen (`issue_ref`), wenn Simon da
 ---
 
 ## Der API-Schnitt
+
+**Notation:** Die HTTP-Schreibweise unten ist **konzeptionell, nicht wörtlich.** Sie benennt Fähigkeiten und die Grenze zwischen Kern und Client — nicht das Transportprotokoll. JARVIS spricht WebSocket (`protocol.py`), das bleibt so. **Keine zweite HTTP-Schicht daneben bauen.** `POST /api/chat` heißt: eine Nachricht mit diesem Zweck und dieser Nutzlast.
 
 **Grundsatz: ein dicker Endpunkt für Gespräche, dünne Endpunkte für Ansichten.**
 
