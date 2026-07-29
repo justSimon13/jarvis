@@ -90,11 +90,12 @@ CODING_SUDO_PASSWORD_RESPONSE = "coding_sudo_password_response"  # {"type": "cod
 LOCAL_EXEC_REQUEST  = "local_exec_request"   # {"type": "local_exec_request", "id": "...", "action": "...", **action-spezifische Felder}
 LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "id": "...", "ok": bool, "data": ..., "error": "..."}
 
-# "claude_code_run" ist ZWEIPHASIG, weil ein claude -p Lauf Minuten dauert —
-# lange über dem lokal_exec-Default-Timeout: LOCAL_EXEC_RESPONSE quittiert nur
-# "gestartet" (Phase 1, kommt innerhalb des normalen Timeouts zurück), das
-# eigentliche Ergebnis kommt Minuten später als eigene, unabhängige Nachricht
-# (Phase 2) — nicht als verzögerte LOCAL_EXEC_RESPONSE, die niemand mehr erwartet.
+# "claude_code_run" läuft fire-and-forget: der Server wartet auf KEINE
+# LOCAL_EXEC_RESPONSE (local_exec.dispatch_nowait — der Client schickt zwar
+# weiterhin eine sofortige Quittierung, die wird server-seitig still verworfen).
+# Das Ergebnis kommt Minuten später ausschließlich als eigene, unabhängige
+# CODING_JOB_RESULT-Nachricht — auch alle Vorbereitungs-Fehler auf dem Mac
+# (Allowlist, Konto, Git) kommen so, als status="failed".
 CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id": int, "ok": bool, "status": "done"|"failed", "session_id": "...", "cost_usd": float, "result": "...", "changed_files": "...", "denials": [...], "branch": "...", "pr_url": "..."|None} — Client → Server, unaufgefordert (siehe services/coding_jobs.py)
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─

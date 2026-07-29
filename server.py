@@ -729,6 +729,8 @@ async def handle_connection(websocket):
                     manager.set_role(client_id, role)
                     manager.set_capabilities(client_id, first_data.get("capabilities", []))
                     manager.set_worker_id(client_id, first_data.get("worker_id"))
+                    if "local_exec" in (first_data.get("capabilities") or []):
+                        coding_jobs.on_worker_connected()
                     print(f"[server] Client {addr} heißt: {name!r} (role={role})")
                 pending_msgs.clear()
     except asyncio.TimeoutError:
@@ -818,6 +820,8 @@ async def handle_connection(websocket):
                             manager.set_role(client_id, r)
                             manager.set_capabilities(client_id, data.get("capabilities", []))
                             manager.set_worker_id(client_id, data.get("worker_id"))
+                            if "local_exec" in (data.get("capabilities") or []):
+                                coding_jobs.on_worker_connected()
                 except Exception:
                     pass
 
@@ -869,6 +873,8 @@ async def handle_connection(websocket):
                         manager.set_role(client_id, role)
                         manager.set_capabilities(client_id, data.get("capabilities", []))
                         manager.set_worker_id(client_id, data.get("worker_id"))
+                        if "local_exec" in (data.get("capabilities") or []):
+                            coding_jobs.on_worker_connected()
                         print(f"[server] Client {addr} heißt jetzt: {name!r} (role={role})")
                     if role == "dashboard":
                         mode = data.get("mode", "assistent")
