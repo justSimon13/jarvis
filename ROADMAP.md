@@ -378,9 +378,13 @@ Fix: `_is_safe_readonly_command()` — eine enge, bewusst konservative Whitelist
 
 **Noch offen:**
 - Eskalations-Freigabe-Flow noch nicht mit einer tatsächlich riskanten Aktion live getestet (bisherige Tests waren alle unkritisch)
-- Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
+- ~~Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key~~ — hinfällig, siehe unten: der Weg wird nicht mehr verbessert, sondern durch den Mac-Worker-Ansatz ersetzt.
 - Konversationelle Konfigurierbarkeit der Eskalationsregeln
 - Nur 1 Coding-Task gleichzeitig (gilt jetzt projektübergreifend — zwei Tasks in unterschiedlichen Projekten können aktuell trotzdem nicht parallel laufen)
+
+**Nicht mehr über Tools erreichbar (2026-07-30):** `delegate_coding_task`/`check_coding_task_status` wurden am selben Tag mehrfach versehentlich statt des neuen Mac-Worker-Wegs (`start_coding_job`, `services/coding_jobs.py`) verwendet — rechnet über `CODING_ENGINE_API_KEY` zu vollen API-Preisen ab, während der Mac-Worker über Simons Abo läuft (`claude` CLI, kein API-Key). Beide Tool-Definitionen + `execute()`-Verdrahtung aus `tools.py` entfernt. `services/coding_engine.py` selbst bleibt vorerst unangetastet — die anderen vier Tools, die es nutzen (`sync_project`, `commit_and_push`, `run_command`, `create_project`), sind davon nicht betroffen, die bleiben. Geprüft: kein Proactive-Daemon/keine Routine ruft `coding_engine` direkt auf — `server.py`s übrige Anbindung (Kosten-Statistik, Idle-Status, Freigabe-/Sudo-Antworten) bleibt technisch intakt, wird nur nie mehr ausgelöst, da kein neuer Task mehr startet.
+
+**Geplant:** der server-seitige Executor wird später nach demselben Muster wie der Mac-Worker neu gebaut — `claude -p` mit `CLAUDE_CODE_OAUTH_TOKEN` (Abo statt API-Preise), ohne Worktrees, dieselbe `jobs`-Tabelle, eigene `client_id` (z.B. `jarvis-server`, ein dritter, immer online laufender Client — siehe `docs-draft/JARVIS-Konzept-2026-07-28.md`, Abschnitt "Der Server als dritter Client"). Sobald das steht, kann `services/coding_engine.py` ersatzlos entfernt werden.
 
 ---
 
