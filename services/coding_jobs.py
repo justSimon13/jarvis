@@ -141,7 +141,14 @@ def start_job(instruction: str, title: str | None = None) -> str:
         _mark_failed(job_id, result.get("error") or "Unbekannter Fehler beim Start.")
         return f"Konnte den Coding-Job nicht starten: {result.get('error')}"
 
-    return f"Job #{job_id} gestartet auf Branch {branch}. Ich melde mich per Notification, wenn er fertig ist."
+    # Kein Branch-Name hier — der Client quittiert jetzt sofort nach Empfang,
+    # bevor Allowlist-Prüfung/Konto-Check/Git-Vorbereitung überhaupt gelaufen
+    # sind (die dauerten real über 60s und liefen sonst in local_exec.py's
+    # Dispatch-Timeout, obwohl der Job tatsächlich durchlief). Der Branch steht
+    # zu diesem Zeitpunkt noch nicht wirklich, erst nach der Allowlist-Prüfung
+    # auf dem Worker wird er angelegt — Fehler dabei kommen als eigenes
+    # coding_job_result mit status='failed', nicht mehr als Dispatch-Fehler hier.
+    return f"Job #{job_id} angenommen. Ich melde mich per Notification, wenn er fertig ist."
 
 
 def _mark_failed(job_id: int, reason: str) -> None:
