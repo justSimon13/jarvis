@@ -28,7 +28,7 @@ _DB_PATH = Path.home() / ".jarvis" / "jobs.db"
 # V1-Projektkonfiguration — ein einziges privates Projekt. Auswahl mehrerer
 # Projekte ist Schritt C ("data_scope und fehlende Beziehungen") aus der
 # Konzept-Reihenfolge, nicht dieser Schritt.
-_JOB_CWD = "/Users/simon/Documents/Arbeit/Simon Fischer Consulting/Apps/jarvis-web"
+_JOB_CWD = "/Users/simon/Documents/Arbeit/Simon Fischer Consulting/Apps/jarvis-testrepo"
 _JOB_BASE_BRANCH = "main"
 
 _STALE_AFTER = timedelta(hours=1)
