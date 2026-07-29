@@ -15,6 +15,7 @@ from services import timer as timer_service
 from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
+from services import coding_jobs
 from services import tickets as tickets_service
 from services import document_export
 
@@ -79,6 +80,56 @@ DEFINITIONS = [
             "nur den EINEN zuletzt gestarteten Task (aktuell läuft nie mehr als einer gleichzeitig)."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "start_coding_job",
+        "description": (
+            "Startet einen Coding-Auftrag auf dem Mac-Worker: 'claude -p' läuft headless direkt im "
+            "freigegebenen Projektordner (kein Server-seitiger Worktree, kein Claude Agent SDK) und "
+            "liefert am Ende einen Branch + GitHub-PR. ANDERER Weg als delegate_coding_task — dieses "
+            "Tool ist für Mac-Projekte über den Worker-Kanal (aktuell genau EIN fest hinterlegtes "
+            "privates Projekt, kein Ordner-Parameter), delegate_coding_task bleibt für JARVIS' eigenes "
+            "Server-Repo über das Agent SDK. Läuft asynchron — kehrt sofort mit 'gestartet' zurück "
+            "(prüft vorher deterministisch fetch/checkout/pull --ff-only auf dem Mac; bricht das ab, "
+            "z.B. wegen lokaler ungepushter Commits, startet der Job gar nicht erst), das eigentliche "
+            "Ergebnis (Branch, PR-Link, Kosten, Zusammenfassung) kommt Minuten später per Notification, "
+            "NICHT in dieser Antwort. Braucht einen verbundenen Mac-Client mit lokaler Ausführung. Mit "
+            "check_coding_job_status kann der Fortschritt zwischendurch abgefragt werden."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "instruction": {
+                    "type": "string",
+                    "description": "Klare, vollständige Beschreibung der Coding-Aufgabe.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Kurzer Titel für den Job (optional, sinnvoller Default aus der Instruction falls weggelassen).",
+                },
+            },
+            "required": ["instruction"],
+        },
+    },
+    {
+        "name": "check_coding_job_status",
+        "description": (
+            "Prüft den Status eines über start_coding_job gestarteten Jobs — läuft er noch (inkl. "
+            "bisheriger Laufzeit in Minuten), ist er fertig (inkl. PR-Link), oder gab es einen Fehler? "
+            "Ohne id der zuletzt gestartete Job. Nutzen wenn Simon fragt 'läuft der Coding-Job noch?', "
+            "'ist der Auftrag fertig?' o.ä. — ANDERES Tool als check_coding_task_status (das ist für "
+            "delegate_coding_task, den server-seitigen Weg)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (optional, weglassen = zuletzt gestarteter Job).",
+                },
+            },
+            "required": [],
+        },
     },
     {
         "name": "sync_project",
@@ -1067,6 +1118,13 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
             status = coding_engine.get_task_status()
             if not status:
                 return "Es wurde noch nie ein Coding-Task gestartet."
+            return json.dumps(status, ensure_ascii=False)
+
+        if tool_name == "start_coding_job":
+            return coding_jobs.start_job(tool_input["instruction"], tool_input.get("title"))
+
+        if tool_name == "check_coding_job_status":
+            status = coding_jobs.get_job_status(tool_input.get("id"))
             return json.dumps(status, ensure_ascii=False)
 
         if tool_name == "sync_project":
