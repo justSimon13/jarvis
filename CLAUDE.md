@@ -193,6 +193,18 @@ Kurzübersicht (Top 3):
 - Etwas Neues → sofort in ROADMAP.md eintragen
 - Kein Punkt als erledigt kommunizieren ohne ROADMAP.md aktualisiert zu haben
 
+## Bericht am Ende eines Laufs
+
+Simon reviewt nicht zeilenweise. Jeder abgeschlossene Auftrag endet mit drei Angaben — knapp, ohne Code-Zitate:
+
+1. **Was geändert wurde, was bewusst nicht, und wo vom Plan abgewichen wurde.** Abweichungen immer nennen, auch wenn sie sinnvoll waren.
+2. **Geänderte Dateien mit Umfang** (`git diff --stat`). Dateien, die im Plan nicht vorkamen, ausdrücklich hervorheben.
+3. **Testnachweis:** was wurde geprüft, mit welchem Ergebnis. Bei additiven Umbauten gehört dazu, ob der bisherige Weg noch funktioniert.
+
+Temporäre Änderungen an Konfigurationsdateien (Ports, Pfade, Flags) immer erwähnen, auch wenn sie zurückgesetzt wurden.
+
+**Doku im selben Lauf nachziehen.** Wer Code ändert, aktualisiert die betroffene Beschreibung (`ARCHITECTURE.md`, `CODE_REFERENCE.md`, `TOOLS.md`, `ROADMAP.md`). Passt eine Änderung nicht zur bestehenden Doku, ist das im Bericht zu nennen statt stillschweigend zu belassen — sonst driften Code und Doku auseinander (zwei solche Fälle wurden am 29.07. gefunden).
+
 ## Konventionen
 
 - Alle Print-Ausgaben mit Prefix `[modulname]` und `flush=True`
@@ -202,3 +214,33 @@ Kurzübersicht (Top 3):
 - Brain-Änderungen immer via `brain.write()`, nie direktes SQLite
 - `api_history` wird MIT `history_lock` modifiziert
 - `GIT_CONVENTIONS.md` (Repo-Wurzel) gilt für Commits der Coding-Engine selbst (`delegate_coding_task`/`commit_and_push`) — nicht bindend für Commits von Simon oder Claude Code von Hand. Ein Projekt unter `config.PROJECTS_ROOT` kann eine eigene `GIT_CONVENTIONS.md` in seiner Wurzel anlegen, die dann Vorrang hat.
+
+## Arbeitsweise bei Umbauten
+
+**Branch statt main.** Keine Commits direkt auf main, kein Push ohne Rücksprache.
+
+**Keine Worktrees.** Direkt im Arbeitsverzeichnis, ein Branch pro Aufgabe.
+
+**Schrittweise, nicht auf einmal.** Neue Struktur neben die alte legen, migrieren, alte entfernen. Nach jedem Schritt muss das System lauffähig sein. Das Entfernen der alten Struktur ist immer ein eigener, späterer Schritt.
+
+**Vor jedem Datenbank-Umbau prüfen, ob ein aktuelles Backup existiert.** Wenn nicht, erst darauf hinweisen.
+
+## Ausführung auf dem Mac-Worker
+
+**Keine interaktive Login-Shell.** Nicht `zsh -lic "..."` aufrufen, sondern die Binary direkt mit vollem Pfad und explizit gesetztem `PATH`/`HOME`. Sonst werden die zsh-Startdateien gelesen — und `compinit` stellt dort bei unsicheren Verzeichnisrechten eine interaktive Ja/Nein-Frage, die ein Worker nicht beantworten kann. Der Prozess hängt dann still, ohne Fehlermeldung.
+
+Ursache separat beheben (meist Homebrew-Pfade mit Gruppen-Schreibrecht):
+
+```bash
+compaudit | xargs chmod g-w,o-w
+# falls nötig:
+chmod -R go-w /opt/homebrew/share
+```
+
+**Account vor jedem Job prüfen.** `claude auth status` liefert `email` und `orgId`. Vor einem Lauf gegen die erwartete Kennung des Clients abgleichen und bei Abweichung abbrechen — privat: `info@simonfischer.dev`, Arbeit: `digital35 GmbH`. Damit kann ein Arbeitsprojekt nicht über den privaten Account laufen.
+
+**`--bare` nicht verwenden.** Überspringt OAuth und Keychain, verlangt einen API-Key und liest auch `CLAUDE_CODE_OAUTH_TOKEN` nicht — würde die Abrechnung vom Abo auf Token-Preise umstellen.
+
+**Kein `ANTHROPIC_API_KEY` in Umgebungsdateien.** Ist die Variable gesetzt, rechnet Claude Code zu Token-Preisen ab statt über das Abo.
+
+**Bei unbeaufsichtigten Läufen immer `--max-turns` und `--max-budget-usd` setzen.**
