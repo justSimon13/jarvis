@@ -343,14 +343,17 @@ class JarvisPipeline:
                 if use_tts and self._on_audio:
                     tts_queue.put(None)
                 if "overloaded" in str(e).lower():
+                    print(f"[pipeline] Anthropic überlastet nach {time.monotonic() - t_llm_start:.2f}s: {e}", flush=True)
                     self._emit(P.ERROR, message="Anthropic überlastet.")
                     time.sleep(5)
                 else:
+                    print(f"[pipeline] API-Fehler nach {time.monotonic() - t_llm_start:.2f}s: {e}", flush=True)
                     self._emit(P.ERROR, message=f"API-Fehler: {e}")
                 return "", [], total_cost
             except Exception as e:
                 if use_tts and self._on_audio:
                     tts_queue.put(None)
+                print(f"[pipeline] Unerwarteter Fehler nach {time.monotonic() - t_llm_start:.2f}s: {e}", flush=True)
                 self._emit(P.ERROR, message=f"Fehler: {e}")
                 return "", [], total_cost
 
