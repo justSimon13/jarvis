@@ -30,6 +30,10 @@ Weicht der bestehende Code vom Datenmodell ab, gilt das Datenmodell — aber der
 
 **Prompt-Reihenfolge nicht ändern** (Caching hängt daran): Werkzeuge → Systemprompt/Persona → Facts/Indizes → Tagesübersicht → Nachrichten. Nie einen Zeitstempel weiter vorne einbauen.
 
+**Transport bleibt WebSocket.** Die HTTP-Notation im Datenmodell-Dokument ist konzeptionell — sie benennt Fähigkeiten, keine URLs. Keine zweite HTTP-Schicht neben `protocol.py` bauen.
+
+**"Kein Docker" gilt weiterhin für JARVIS selbst** (Audio-Geräte). Demo-Container sind davon nicht betroffen — kein Audio, keine Gerätedurchreichung.
+
 ## Vorgehen bei Umbauten
 
 **Schrittweise, nicht auf einmal.** Neue Struktur neben die alte legen, migrieren, alte entfernen. Nach jedem Schritt muss das System lauffähig sein.
