@@ -34,6 +34,7 @@ from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
 from services import coding_engine
+from services import coding_jobs
 from services import document_export
 from services import local_exec
 from services import sleep_coach
@@ -948,6 +949,8 @@ async def handle_connection(websocket):
                     coding_engine.resolve_sudo_password(data["id"], data.get("password", ""))
                 elif data.get("type") == P.LOCAL_EXEC_RESPONSE:
                     local_exec.resolve_local_exec(data["id"], data)
+                elif data.get("type") == P.CODING_JOB_RESULT:
+                    coding_jobs.resolve_job_result(data)
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])
@@ -1078,6 +1081,7 @@ async def main():
     sleep_coach.init(manager, alarm_service, dispatcher)
     proactive_service.init(manager, alarm_service, dispatcher)
     coding_engine.init(manager, dispatcher)
+    coding_jobs.init(manager, dispatcher)
     local_exec.init(manager)
     learning.init(manager)
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")

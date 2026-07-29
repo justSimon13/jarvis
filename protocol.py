@@ -85,10 +85,17 @@ CODING_SUDO_PASSWORD_REQUEST  = "coding_sudo_password_request"   # {"type": "cod
 CODING_SUDO_PASSWORD_RESPONSE = "coding_sudo_password_response"  # {"type": "coding_sudo_password_response", "id": "...", "password": "..."} — nur einmalig verwendet, nie serverseitig gespeichert/geloggt
 
 # ── Lokale Ausführung auf einem Client mit 'local_exec'-Capability (z.B. die Tauri-Desktop-App) ──
-# Generisches Primitiv — 'action' bestimmt WAS lokal läuft (z.B. "gh_issue_list", später auch
-# "claude_code_cli"), nicht auf einen einzelnen Anwendungsfall festgelegt.
+# Generisches Primitiv — 'action' bestimmt WAS lokal läuft ("gh_issue_list", "shell_exec",
+# "claude_code_run"), nicht auf einen einzelnen Anwendungsfall festgelegt.
 LOCAL_EXEC_REQUEST  = "local_exec_request"   # {"type": "local_exec_request", "id": "...", "action": "...", **action-spezifische Felder}
 LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "id": "...", "ok": bool, "data": ..., "error": "..."}
+
+# "claude_code_run" ist ZWEIPHASIG, weil ein claude -p Lauf Minuten dauert —
+# lange über dem lokal_exec-Default-Timeout: LOCAL_EXEC_RESPONSE quittiert nur
+# "gestartet" (Phase 1, kommt innerhalb des normalen Timeouts zurück), das
+# eigentliche Ergebnis kommt Minuten später als eigene, unabhängige Nachricht
+# (Phase 2) — nicht als verzögerte LOCAL_EXEC_RESPONSE, die niemand mehr erwartet.
+CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id": int, "ok": bool, "status": "done"|"failed", "session_id": "...", "cost_usd": float, "result": "...", "changed_files": "...", "denials": [...], "branch": "...", "pr_url": "..."|None} — Client → Server, unaufgefordert (siehe services/coding_jobs.py)
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
