@@ -741,6 +741,9 @@ Verifiziert mit gemocktem `llm.stream()` (vier Fälle): einzelner `max_tokens`-T
 
 ## 🟡 Bestehende offene Punkte (weiterhin gültig)
 
+### Große Neuausrichtung — Entwurfsphase (seit 2026-07-28)
+Simon arbeitet an einem grundlegenden Redesign (Datenmodell, API-Schnitt, Personas, Gedächtnis, Coding-Executor-Modell) — Entwürfe liegen in [`docs-draft/`](docs-draft/) (`JARVIS-Konzept-2026-07-28.md`, `JARVIS-Datenmodell-und-API.md`, `CLAUDE.md`), bewusst getrennt von den aktiven Root-Docs. **Noch nicht umgesetzt, wird laut Simon noch weiter überarbeitet** — dieser Abschnitt hier (ROADMAP.md) und der übrige Code beschreiben weiterhin den tatsächlichen IST-Stand, nicht den Entwurf. Vor jeder größeren Struktur-/Datenbankänderung erst prüfen, ob sie zufällig schon Teil dieser Neuausrichtung ist, um nicht gegen die spätere Richtung zu bauen.
+
 ### Mode Playbook (brain.modules.modes)
 Pro Modus: `guidelines` + `decision_protocol` + `quality_rules` in brain.db speichern. Bisher nur kurzer Text.
 
