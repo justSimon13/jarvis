@@ -517,10 +517,12 @@ def _try_dispatch(job_id: int) -> bool:
     # ROADMAP.md/Plan "Autonomiegrade für Coding-Jobs". Alles andere (auch
     # NULL) bleibt der bisherige einstufige, schreibende Lauf.
     plan_only = autonomy == "careful"
-    # delivery bestimmt client-seitig (localExec.js), ob/wohin committet wird
-    # UND welche Tool-Rechte das Modell für gh bekommt (bei 'local' komplett
-    # gesperrt, nicht nur Schreibzugriffe) — siehe jarvis-web's
-    # _claudeToolFlags/_finishJob.
+    # delivery bestimmt client-seitig (localExec.js's _finishJob) deterministisch,
+    # ob/wohin committet wird — NICHT die Tool-Rechte des Modells: gh ist dem
+    # Modell in JEDEM delivery-Modus komplett gesperrt (Bash(gh:*), siehe
+    # jarvis-web's _claudeToolFlags), das Modell braucht gh nie — der Worker
+    # holt den Issue-Inhalt und erstellt einen etwaigen PR jeweils selbst,
+    # außerhalb des Modell-Laufs.
     fields = {
         "cwd": cwd, "base_branch": base_branch, "branch": branch, "job_id": job_id,
         "plan_only": plan_only, "delivery": delivery or "pr",
