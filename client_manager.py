@@ -15,6 +15,11 @@ class ClientManager:
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._capabilities: dict[str, list[str]] = {}  # client_id → ["local_exec", ...] (z.B. Tauri-Desktop-App)
         self._worker_ids: dict[str, str] = {}           # client_id → worker_id (nur Tauri-Desktop-App, sonst nicht gesetzt)
+        # worker_id → Rolle ("mac-private"/"mac-work", passend zu projekte.client_id).
+        # Rein In-Memory — Persistenz über einen Server-Neustart hinweg ist Sache
+        # von services/coding_jobs.py (_load_worker_assignments/assign_worker,
+        # brain.config), damit dieser Manager ohne I/O-Abhängigkeiten bleibt.
+        self._worker_assignments: dict[str, str] = {}
         self._active: str | None = None
         self._lock = threading.Lock()
 
@@ -93,12 +98,54 @@ class ClientManager:
         """Erster verbundener Client mit einer bestimmten Capability (z.B. 'local_exec' —
         die Tauri-Desktop-App, im Gegensatz zu einem normalen Browser-Tab). Bei mehreren
         gleichzeitig verbundenen Clients mit derselben Capability zählt der zuerst gefundene —
-        für ein einzelnes Mac reicht das."""
+        für ein einzelnes Mac reicht das. Für Coding-Jobs (mehrere Mac-Worker möglich)
+        NICHT mehr verwendet, siehe get_connection_for_role() — bleibt für Aufrufer, denen
+        es egal ist WELCHER local_exec-Client antwortet (z.B. Ticket-Sync)."""
         with self._lock:
             for cid, caps in self._capabilities.items():
                 if capability in caps:
                     return cid
             return None
+
+    def set_worker_assignment(self, worker_id: str, role_client_id: str) -> None:
+        with self._lock:
+            self._worker_assignments[worker_id] = role_client_id
+
+    def get_worker_assignment(self, worker_id: str) -> str | None:
+        with self._lock:
+            return self._worker_assignments.get(worker_id)
+
+    def get_connection_for_role(self, role_client_id: str) -> str | None:
+        """Connection-ID des Mac-Workers, der aktuell der Rolle role_client_id
+        (z.B. 'mac-work', passend zu projekte.client_id) zugeordnet UND
+        verbunden ist. None wenn nicht zugeordnet ODER nicht verbunden — KEIN
+        Fallback auf einen anderen verbundenen Worker (sonst könnte ein Job für
+        ein Kundenprojekt auf dem falschen Mac landen)."""
+        with self._lock:
+            for cid, caps in self._capabilities.items():
+                if "local_exec" not in caps:
+                    continue
+                worker_id = self._worker_ids.get(cid)
+                if worker_id and self._worker_assignments.get(worker_id) == role_client_id:
+                    return cid
+            return None
+
+    def list_local_exec_workers(self) -> list[dict]:
+        """Aktuell verbundene local_exec-Clients mit worker_id + aktueller
+        Rollenzuordnung (client_id: None = noch nicht zugeordnet, bekommt
+        keine Coding-Jobs). Für das list_mac_workers-Tool — Simon muss einen
+        neuen, unbekannten Worker im Chat sehen können, um ihn zuzuordnen."""
+        with self._lock:
+            result = []
+            for cid, caps in self._capabilities.items():
+                if "local_exec" not in caps:
+                    continue
+                worker_id = self._worker_ids.get(cid)
+                result.append({
+                    "worker_id": worker_id,
+                    "client_id": self._worker_assignments.get(worker_id) if worker_id else None,
+                })
+            return result
 
     def unregister(self, client_id: str):
         with self._lock:

@@ -326,21 +326,22 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
     return results
 
 
-def list_coding_projects(client_id: str = "mac-private") -> list[dict]:
-    """Für services/coding_jobs.py::_resolve_project() — Projekte, die für
-    Mac-Worker-Coding-Jobs freigegeben sind (path gesetzt UND passender
-    client_id). Eigene, gezielte Abfrage statt der generischen query(): die
-    hat kein WHERE für "hat einen Pfad UND diesen client_id". Absichtlich
-    NICHT Teil von list_projekte() (Kontext-Prompt-Aufbau) — diese Felder
-    fahren nicht bei jedem Gespräch mit, nur wenn tatsächlich ein Coding-Job
-    startet."""
+def list_coding_projects() -> list[dict]:
+    """Für services/coding_jobs.py::_resolve_project() — alle Projekte, die für
+    Mac-Worker-Coding-Jobs freigegeben sind (path gesetzt), über ALLE Worker-
+    Rollen hinweg (client_id wird mit zurückgegeben, nicht mehr gefiltert —
+    seit 2026-07-31 bestimmt coding_jobs.py anhand von client_id, welcher
+    Worker den Job bekommt, dafür muss die Rolle hier sichtbar sein). Eigene,
+    gezielte Abfrage statt der generischen query(): die hat kein WHERE für
+    "hat einen Pfad". Absichtlich NICHT Teil von list_projekte()
+    (Kontext-Prompt-Aufbau) — diese Felder fahren nicht bei jedem Gespräch
+    mit, nur wenn tatsächlich ein Coding-Job startet."""
     conn = _get_db()
     rows = conn.execute(
-        "SELECT id, name, path, repo, base_branch FROM projekte WHERE path IS NOT NULL AND client_id = ? ORDER BY id",
-        (client_id,)
+        "SELECT id, name, path, repo, base_branch, client_id FROM projekte WHERE path IS NOT NULL ORDER BY id",
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "path", "repo", "base_branch"]
+    cols = ["id", "name", "path", "repo", "base_branch", "client_id"]
     return [dict(zip(cols, r)) for r in rows]
 
 
