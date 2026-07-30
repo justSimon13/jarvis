@@ -331,17 +331,19 @@ def list_coding_projects() -> list[dict]:
     Mac-Worker-Coding-Jobs freigegeben sind (path gesetzt), über ALLE Worker-
     Rollen hinweg (client_id wird mit zurückgegeben, nicht mehr gefiltert —
     seit 2026-07-31 bestimmt coding_jobs.py anhand von client_id, welcher
-    Worker den Job bekommt, dafür muss die Rolle hier sichtbar sein). Eigene,
-    gezielte Abfrage statt der generischen query(): die hat kein WHERE für
-    "hat einen Pfad". Absichtlich NICHT Teil von list_projekte()
+    Worker den Job bekommt, dafür muss die Rolle hier sichtbar sein). autonomy
+    (seit demselben Tag ausgewertet, siehe coding_jobs.py::_try_dispatch) wird
+    ebenfalls mit zurückgegeben — vorher gespeichert, aber nirgends gelesen.
+    Eigene, gezielte Abfrage statt der generischen query(): die hat kein WHERE
+    für "hat einen Pfad". Absichtlich NICHT Teil von list_projekte()
     (Kontext-Prompt-Aufbau) — diese Felder fahren nicht bei jedem Gespräch
     mit, nur wenn tatsächlich ein Coding-Job startet."""
     conn = _get_db()
     rows = conn.execute(
-        "SELECT id, name, path, repo, base_branch, client_id FROM projekte WHERE path IS NOT NULL ORDER BY id",
+        "SELECT id, name, path, repo, base_branch, client_id, autonomy FROM projekte WHERE path IS NOT NULL ORDER BY id",
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "path", "repo", "base_branch", "client_id"]
+    cols = ["id", "name", "path", "repo", "base_branch", "client_id", "autonomy"]
     return [dict(zip(cols, r)) for r in rows]
 
 

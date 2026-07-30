@@ -43,7 +43,12 @@ DEFINITIONS = [
             "über list_mac_workers/assign_mac_worker der projekte.client_id des gewählten Projekts zugeordnet "
             "UND gerade verbunden ist — ist keiner zugeordnet oder verbunden, bleibt der Job vorgemerkt, es "
             "weicht NIE auf einen anderen Worker aus (sonst könnte ein Kundenprojekt auf dem falschen Mac "
-            "landen). Mit check_coding_job_status kann der Fortschritt zwischendurch abgefragt werden."
+            "landen). Bei projekte.autonomy='careful' läuft der Job zweistufig: erst ein read-only "
+            "Planungslauf (keine Änderungen), der Job landet danach auf 'awaiting_review' statt fertig zu "
+            "sein — der Plan kommt als Chat-Nachricht + Notification, dann approve_coding_job/"
+            "revise_coding_job/discard_coding_job verwenden. Bei anderen Autonomiegraden (oder nicht gesetzt) "
+            "läuft es wie gehabt in einem einzigen schreibenden Lauf. Mit check_coding_job_status kann der "
+            "Fortschritt zwischendurch abgefragt werden."
         ),
         "input_schema": {
             "type": "object",
@@ -194,10 +199,12 @@ DEFINITIONS = [
         "name": "check_coding_job_status",
         "description": (
             "Prüft den Status eines über start_coding_job gestarteten Jobs — läuft er noch (inkl. "
-            "bisheriger Laufzeit in Minuten), ist er fertig (inkl. PR-Link), oder gab es einen Fehler? "
-            "Ohne id der zuletzt gestartete Job. Nutzen wenn Simon fragt 'läuft der Coding-Job noch?', "
-            "'ist der Auftrag fertig?' o.ä. — ANDERES Tool als check_coding_task_status (das ist für "
-            "delegate_coding_task, den server-seitigen Weg)."
+            "bisheriger Laufzeit in Minuten), ist er fertig (inkl. PR-Link), wartet er auf Freigabe "
+            "(status='awaiting_review', nur bei autonomy='careful' — result enthält dann den Plan, siehe "
+            "approve_coding_job/revise_coding_job/discard_coding_job), wurde er verworfen "
+            "(status='discarded'), oder gab es einen Fehler? Ohne id der zuletzt gestartete Job. Nutzen wenn "
+            "Simon fragt 'läuft der Coding-Job noch?', 'ist der Auftrag fertig?' o.ä. — ANDERES Tool als "
+            "check_coding_task_status (das ist für delegate_coding_task, den server-seitigen Weg)."
         ),
         "input_schema": {
             "type": "object",
@@ -208,6 +215,79 @@ DEFINITIONS = [
                 },
             },
             "required": [],
+        },
+    },
+    {
+        "name": "approve_coding_job",
+        "description": (
+            "Setzt den zuvor erstellten Plan eines wartenden Jobs (status='awaiting_review', "
+            "autonomy='careful') tatsächlich um — zweite, schreibende Stufe. Setzt den Session-Kontext des "
+            "Planungslaufs per --resume fort, damit das Modell nicht bei null anfängt. Hat der wartende Job "
+            "schon lange (Stunden/Tage) auf Freigabe gewartet, kann die Session nicht mehr fortsetzbar sein "
+            "— in dem Fall startet der Worker automatisch neu, nur mit dem gespeicherten Plantext statt dem "
+            "vollen Bearbeitungsverlauf (verliert etwas Kontext, setzt aber trotzdem den zuletzt freigegebenen "
+            "Plan um). Nur für Jobs mit status='awaiting_review' (siehe check_coding_job_status), sonst "
+            "Fehlermeldung ohne Wirkung."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (aus check_coding_job_status/start_coding_job).",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optionaler zusätzlicher Hinweis für die Umsetzung, neben der Freigabe des Plans selbst.",
+                },
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "revise_coding_job",
+        "description": (
+            "Lässt den Plan eines wartenden Jobs (status='awaiting_review', autonomy='careful') anhand von "
+            "comment überarbeiten — bleibt read-only (keine Änderungen), der Job landet danach WIEDER auf "
+            "'awaiting_review' mit dem überarbeiteten Plan statt umzusetzen. Erst wenn der Plan passt, "
+            "approve_coding_job verwenden. Gleicher --resume-Fallback wie approve_coding_job bei einer nicht "
+            "mehr fortsetzbaren Session. Nur für Jobs mit status='awaiting_review', sonst Fehlermeldung ohne "
+            "Wirkung."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (aus check_coding_job_status/start_coding_job).",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Was am Plan geändert werden soll — Pflicht, ohne konkretes Feedback keine sinnvolle Nachbesserung.",
+                },
+            },
+            "required": ["id", "comment"],
+        },
+    },
+    {
+        "name": "discard_coding_job",
+        "description": (
+            "Verwirft einen wartenden Job (status='awaiting_review', autonomy='careful') vollständig — Branch "
+            "weg, Arbeitsverzeichnis wieder frei für den nächsten vorgemerkten Job auf demselben Projekt. "
+            "WICHTIG: ohne dieses Tool blockiert ein nicht freigegebener Plan alle weiteren Jobs für dasselbe "
+            "Projekt unbegrenzt (z.B. bei mehreren nacheinander vorbereiteten Aufträgen) — bei einem Plan, der "
+            "nicht mehr gebraucht wird, dieses Tool statt einfach zu ignorieren verwenden. Nur für Jobs mit "
+            "status='awaiting_review', sonst Fehlermeldung ohne Wirkung."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (aus check_coding_job_status/start_coding_job).",
+                },
+            },
+            "required": ["id"],
         },
     },
     {
@@ -409,9 +489,11 @@ DEFINITIONS = [
             "base_branch (z.B. 'main' — ohne diesen Wert kann kein Job auf diesem Projekt starten), client_id "
             "('mac-private'/'mac-work' — bestimmt WELCHER Mac-Worker Jobs für dieses Projekt bekommt, siehe "
             "list_mac_workers/assign_mac_worker; ohne client_id kann für dieses Projekt kein Job starten), "
-            "autonomy ('sandbox'/'auto'/'review'/'careful' — "
-            "wird gespeichert, aber noch NICHT ausgewertet, siehe ROADMAP.md), data_scope ('own'/'customer'/"
-            "'employer' — ebenfalls gespeichert, noch nicht ausgewertet). "
+            "autonomy ('sandbox'/'auto'/'review'/'careful' — nur 'careful' hat eigenes Verhalten: Jobs laufen "
+            "dann zweistufig mit Freigabe-Schritt, siehe start_coding_job/approve_coding_job/"
+            "revise_coding_job/discard_coding_job; 'sandbox'/'review'/'auto'/nicht gesetzt laufen alle wie "
+            "bisher einstufig), data_scope ('own'/'customer'/'employer' — weiterhin gespeichert, noch nicht "
+            "ausgewertet). "
             "rechnungen: rechnungsnummer (Pflicht), rechnungsdatum, faellig_am, bezahlt_am (alle YYYY-MM-DD), "
             "betreff, betrag_netto, betrag_brutto, offener_betrag (Zahlen), kunde, projekt_id (Zahl, id aus "
             "data_query('projekte')), notizen, gesperrt (bool — true = ein künftiger CSV-Import lässt diese "
@@ -1191,12 +1273,17 @@ DEFINITIONS = [
 ]
 
 
-def execute(tool_name: str, tool_input: dict, emit=None) -> str:
+def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=None) -> str:
     """emit: optionaler Callback (self._emit der aufrufenden JarvisPipeline) für Tools,
     die dem Client direkt eine Server-Push-Nachricht schicken müssen statt nur den
     Text-Result für die LLM-Loop zurückzugeben (aktuell nur generate_document — das
     generierte Dokument geht als eigene WS-Nachricht raus, nicht im tool_result-Text,
-    der bliebe sonst als riesiger Base64-Blob im Gesprächsverlauf hängen)."""
+    der bliebe sonst als riesiger Base64-Blob im Gesprächsverlauf hängen).
+
+    category/tab_id: Herkunft des auslösenden Chat-Turns (von pipeline.py durchgereicht,
+    siehe JarvisPipeline.set_chat_target) — nur für start_coding_job relevant, damit
+    coding_jobs.py das spätere Jobergebnis gezielt als Chat-Nachricht in genau diesem
+    Tab zustellen kann (siehe coding_jobs.start_job/resolve_job_result)."""
     try:
         if tool_name == "start_coding_job":
             return coding_jobs.start_job(
@@ -1204,11 +1291,22 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
                 title=tool_input.get("title"),
                 project=tool_input.get("project"),
                 issue_number=tool_input.get("issue_number"),
+                category=category,
+                tab_id=tab_id,
             )
 
         if tool_name == "check_coding_job_status":
             status = coding_jobs.get_job_status(tool_input.get("id"))
             return json.dumps(status, ensure_ascii=False)
+
+        if tool_name == "approve_coding_job":
+            return coding_jobs.approve_job(tool_input["id"], comment=tool_input.get("comment"))
+
+        if tool_name == "revise_coding_job":
+            return coding_jobs.revise_job(tool_input["id"], comment=tool_input["comment"])
+
+        if tool_name == "discard_coding_job":
+            return coding_jobs.discard_job(tool_input["id"])
 
         if tool_name == "list_allowed_coding_paths":
             target_conn_id = coding_jobs.resolve_worker_connection(tool_input.get("client_id"))

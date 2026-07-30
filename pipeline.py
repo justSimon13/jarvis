@@ -128,9 +128,20 @@ class JarvisPipeline:
         self._thinking_enabled: bool = False
         # LLM-Modell — per Client/Session wählbar (siehe llm.MODEL_CATALOG), Default Sonnet 5.
         self._model: str = llm.MODEL
+        # Herkunft dieses Turns (category/tab_id, siehe server.py) — an
+        # tools.execute() durchgereicht, damit z.B. start_coding_job weiß, in
+        # welchem Tab ein späteres Jobergebnis als Chat-Nachricht landen soll
+        # (siehe services/coding_jobs.py::start_job). None bis set_chat_target()
+        # aufgerufen wird (server.py, direkt nach der Konstruktion).
+        self._category: str | None = None
+        self._tab_id: str | None = None
 
     def set_room(self, room: str):
         self._room = room
+
+    def set_chat_target(self, category: str, tab_id: str):
+        self._category = category
+        self._tab_id = tab_id
 
     def set_mode(self, mode: str):
         self._mode = mode
@@ -410,7 +421,7 @@ class JarvisPipeline:
                             result = self._executed_tool_ids[call_id]
                             print(f"[pipeline] Tool-Dedup: {block.name} ({call_id})", flush=True)
                         else:
-                            result = tools.execute(block.name, block.input, emit=self._emit)
+                            result = tools.execute(block.name, block.input, emit=self._emit, category=self._category, tab_id=self._tab_id)
                             self._executed_tool_ids[call_id] = result
                         tool_results.append({
                             "type": "tool_result",
