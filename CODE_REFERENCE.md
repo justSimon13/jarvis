@@ -257,10 +257,11 @@ Beide deutsch (Semikolon-getrennt, UTF-8-BOM, `DD.MM.YYYY`, Komma-Dezimaltrennze
 | `apple_music.py` | Lokale Apple-Music-Steuerung | macOS "Music" App via AppleScript | nur `sys.platform=="darwin"` |
 | `btc.py` | Bitcoin-Preis | CoinGecko | 15-Min-Cache `btc_cache.json` |
 | `client_music.py` | Musik-Routing an Satellite (mpv+YouTube) | keine | In-Memory Room-Handoff-State |
-| `coding_engine.py` | Delegierte Coding-Tasks | Claude Agent SDK, GitHub REST + `git` CLI | Budgets aus `config.CODING_*`, Worktrees unter `~/.jarvis/coding_worktrees` |
+| `coding_engine.py` | Delegierte Coding-Tasks (JARVIS' eigenes Server-Repo) | Claude Agent SDK, GitHub REST + `git` CLI | Budgets aus `config.CODING_*`, Worktrees unter `~/.jarvis/coding_worktrees` |
+| `coding_jobs.py` | Coding-Aufträge auf Mac-Projekten — `claude -p` headless über den Worker (kein Worktree, kein Agent SDK), zweistufig bei `autonomy='careful'` (Plan → `awaiting_review` → `approve_coding_job`/`revise_coding_job`/`discard_coding_job`) | `local_exec.py` (Dispatch an den Worker), `local_data.list_coding_projects()`, `knowledge.py` (`coding_doc`-Einbettung) | SQLite `jobs.db`; `autonomy`/`delivery`/`issue_repo`/`coding_doc` werden bei `start_job()` aus dem Projekt in die Job-Zeile gesnapshottet (spätere Projekt-Änderungen betreffen laufende/wartende Jobs nie) |
 | `document_export.py` | PDF/Word aus jeder Seite generieren — Projekt/Todo/Kontakt-Wurzelseite oder einzelne Unterseite, via `local_data.get_seite_view()` (seit 2026-07-26, Markdown-Parser deckt #-Überschriften/Absätze/Bullets/hr/Zitate/GFM-Tabellen/**Bold**/*Kursiv* ab) | `python-docx`, `reportlab` | keine — rein synchron, kein State |
 | `google_auth.py` | Gemeinsame Google-OAuth | `google-auth`/`google-auth-oauthlib` | Token `google_token.json` |
-| `local_exec.py` | "Führ das auf dem Client aus"-Primitiv | keine (WS-Routing) | 60s Timeout, aktuell nur Action `gh_issue_list` |
+| `local_exec.py` | "Führ das auf dem Client aus"-Primitiv | keine (WS-Routing) | 60s Timeout; Actions: `gh_issue_list`, `shell_exec`, `claude_code_run`/`_resume`/`_discard` (siehe `coding_jobs.py`), `list_allowed_paths`, `add_allowed_path`, `diagnose_binaries` |
 | `notification_dispatcher.py` | Push, unabhängig von Pipelines | keine | SQLite `notifications.db`, Rate-Limit 3/h |
 | `proactive.py` | Kalender-/Email-/Todo-/Followup-Reminder | `calendar.py`, `email.py`, `local_data`, `tracking`, `brain` | `proactive_state.json`, Intervalle aus `brain.config.proaktiv.*` |
 | `reminders.py` | Apple Reminders Einkaufsliste | macOS "Reminders" via AppleScript | nur macOS |
