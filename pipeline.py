@@ -32,6 +32,28 @@ TTS_BUFFER_MIN = 120
 # tools.DEFINITIONS gebaut (statische Liste, ändert sich nicht zur Laufzeit).
 _TOOL_SCHEMAS_BY_NAME = {d["name"]: d for d in tools.DEFINITIONS}
 
+# Konkreter Lösungsvorschlag pro Tool für die Kürzungs-Notiz unten, NUR wenn
+# GENAU DIESES Tool tatsächlich abgeschnitten wurde — ein vorbeugender Hinweis
+# in write_knowledges eigener Tool-Beschreibung griff in der Praxis kaum
+# (das Modell schätzt vorab selten ab, ob ein Dokument zu lang wird, siehe
+# ROADMAP.md 2026-07-31 Nachtrag zwei), es fängt einfach an zu schreiben und
+# läuft ins Limit. Hier dagegen steht der Hinweis GENAU dann im Kontext, wenn
+# er gebraucht wird. Ein abgeschnittener Aufruf wurde nie ausgeführt (siehe
+# Aufrufer unten) — es wurde also durch DIESEN Aufruf nichts gespeichert.
+_TRUNCATION_HINTS = {
+    "write_knowledge": (
+        "Schreibe stattdessen zuerst nur einen kurzen Anfang (Titel + Einleitung oder erster "
+        "Abschnitt) mit write_knowledge, dann für jeden weiteren Abschnitt einen eigenen "
+        "append_knowledge_section-Aufruf — jeder einzelne Aufruf bleibt dadurch klein, "
+        "unabhängig von der Gesamtlänge des Dokuments."
+    ),
+    "append_knowledge_section": (
+        "Teile diesen Abschnitt in mehrere kleinere Abschnitte auf und rufe append_knowledge_section "
+        "entsprechend mehrfach auf, statt alles in einem Aufruf zu versuchen."
+    ),
+}
+_DEFAULT_TRUNCATION_HINT = "Bitte erneut versuchen, ggf. mit kürzerem Inhalt oder aufgeteilt auf mehrere Aufrufe."
+
 
 def _is_noise(text: str) -> bool:
     """True wenn text keine bedeutsame Sprache enthält (nur Geräuschbeschreibungen, Kurzfüller etc.)"""
@@ -434,13 +456,19 @@ class JarvisPipeline:
             # benannt statt stillschweigend verworfen — kein automatischer Retry hier (das brächte
             # dieselbe Endlosschleifen-Gefahr wie oben beschrieben zurück, diesmal fürs Fortsetzen
             # eines abgebrochenen JSON-Blobs, was die Anthropic-API ohnehin nicht direkt unterstützt).
+            # Zusätzlich (2026-07-31, Nachtrag zwei): konkreter Lösungsvorschlag pro Tool statt nur
+            # generischer "aufgeteilt auf mehrere Aufrufe" — ein vorbeugender Hinweis dazu in
+            # write_knowledges eigener Beschreibung griff kaum (das Modell schätzt vorab selten ab,
+            # ob ein Dokument zu lang wird, fängt einfach an zu schreiben und läuft ins Limit), daher
+            # wieder aus der Tool-Beschreibung entfernt — _TRUNCATION_HINTS liefert den Hinweis
+            # stattdessen GENAU dann, wenn der Fall tatsächlich eintritt.
             if final.stop_reason == "max_tokens":
                 truncated_tool = _find_truncated_tool_call(final.content)
                 if truncated_tool:
+                    hint = _TRUNCATION_HINTS.get(truncated_tool.name, _DEFAULT_TRUNCATION_HINT)
                     turn_text = (turn_text or "") + (
                         f"\n\n*(Antwort abgeschnitten — Token-Limit erreicht, während eines Aufrufs von "
-                        f"`{truncated_tool.name}`. Dieser Aufruf wurde NICHT ausgeführt. Bitte erneut "
-                        f"versuchen, ggf. mit kürzerem Inhalt oder aufgeteilt auf mehrere Aufrufe.)*"
+                        f"`{truncated_tool.name}`. Dieser Aufruf wurde NICHT ausgeführt. {hint})*"
                     )
                 else:
                     turn_text = (turn_text or "") + "\n\n*(Antwort abgeschnitten — Token-Limit erreicht.)*"

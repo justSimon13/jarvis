@@ -1138,13 +1138,7 @@ DEFINITIONS = [
             "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben. "
             "VERLINKUNG: verwandte Inhalte im Fließtext aktiv mit [[topic/file]] bzw. [[topic/file|Anzeigetext]] verlinken "
             "(z.B. '[[programmierung/jarvis_projekt|JARVIS-Architektur]]'), wenn eine echte inhaltliche Beziehung zu einer bekannten "
-            "Datei besteht. Backlinks werden automatisch berechnet, nicht selbst pflegen — nur Vorwärtslinks im Text setzen. "
-            "BEI LÄNGEREN DOKUMENTEN (mehrere tausend Wörter): nicht alles in einem einzigen Aufruf schreiben — der "
-            "gesamte Aufruf inkl. content zählt gegen dasselbe Antwort-Token-Limit wie sichtbarer Text, bei einem sehr "
-            "langen Inhalt kann die Antwort mitten im Aufruf abgeschnitten werden (der Aufruf wird dann GAR NICHT "
-            "ausgeführt, nichts wird gespeichert). Stattdessen: hier nur einen kurzen Anfang (Titel + Einleitung oder "
-            "ersten Abschnitt) schreiben, für jeden weiteren Abschnitt append_knowledge_section aufrufen — jeder "
-            "einzelne Aufruf bleibt dadurch klein, unabhängig von der Gesamtlänge des Dokuments."
+            "Datei besteht. Backlinks werden automatisch berechnet, nicht selbst pflegen — nur Vorwärtslinks im Text setzen."
         ),
         "input_schema": {
             "type": "object",
