@@ -365,6 +365,11 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {"error": str(e)}
     if resource == "todos":
         return local_data.list_todos()
+    if resource == "coding_jobs":
+        try:
+            return coding_jobs.list_jobs(status_filter=req_data.get("status"))
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "tickets":
         return local_data.list_tickets()
     if resource == "sync_tickets":
@@ -1041,6 +1046,22 @@ async def handle_connection(websocket):
                         _deliver_job_result_to_chat(delivery)
                 elif data.get("type") == P.CODING_JOB_PROGRESS:
                     _relay_job_progress(data)
+                elif data.get("type") == P.CODING_JOB_ACTION:
+                    # Job-Ansicht in jarvis-web (Freigeben/Nachbessern/Verwerfen) —
+                    # ruft DIESELBEN Funktionen wie die gleichnamigen Tools
+                    # (approve_coding_job/revise_coding_job/discard_coding_job in
+                    # tools.py), keine zweite Logik fürs Frontend.
+                    job_action = data.get("action", "")
+                    job_id_arg = data.get("id")
+                    if job_action == "approve":
+                        action_result = await loop.run_in_executor(None, coding_jobs.approve_job, job_id_arg, data.get("comment"))
+                    elif job_action == "revise":
+                        action_result = await loop.run_in_executor(None, coding_jobs.revise_job, job_id_arg, data.get("comment"))
+                    elif job_action == "discard":
+                        action_result = await loop.run_in_executor(None, coding_jobs.discard_job, job_id_arg)
+                    else:
+                        action_result = f"Unbekannte Aktion: {job_action}"
+                    send_json({"type": P.CODING_JOB_ACTION_ACK, "id": job_id_arg, "action": job_action, "result": action_result})
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])

@@ -108,6 +108,17 @@ CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id
 # get_job_chat_target).
 CODING_JOB_PROGRESS = "coding_job_progress"  # {"type": "coding_job_progress", "job_id": int, "text": "liest hello.py"}
 
+# Job-Ansicht in jarvis-web (Freigeben/Nachbessern/Verwerfen-Knöpfe) — Client →
+# Server, ruft DIESELBEN services/coding_jobs.py-Funktionen wie die Tools
+# approve_coding_job/revise_coding_job/discard_coding_job (server.py ruft sie
+# direkt auf, keine eigene/zweite Logik). "result" in der Ack ist derselbe
+# menschenlesbare Text, den auch das jeweilige Tool zurückgeben würde — kein
+# strukturiertes ok/fail für den fachlichen Ausgang (z.B. "Job wartet nicht
+# auf Freigabe"), das Frontend zeigt den Text und lädt die Liste neu, der
+# tatsächliche Status danach ist die verlässliche Quelle.
+CODING_JOB_ACTION     = "coding_job_action"      # {"type": "coding_job_action", "action": "approve"|"revise"|"discard", "id": int, "comment": "..."|None}
+CODING_JOB_ACTION_ACK = "coding_job_action_ack"  # {"type": "coding_job_action_ack", "id": int, "action": "...", "result": "..."}
+
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
 ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "..."}

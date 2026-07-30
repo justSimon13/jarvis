@@ -714,11 +714,39 @@ def resolve_job_result(payload: dict) -> dict | None:
     }
 
 
+_TERMINAL_STATUSES = ("done", "failed", "discarded")
+
+
+def _enrich_job(data: dict) -> dict:
+    """Gemeinsamer Anreicherungs-Schritt für get_job_status() (ein Job) und
+    list_jobs() (alle) — abgeleitete Anzeigefelder, die nicht direkt in der
+    DB stehen:
+    - running_since_minutes: bei status='running', ab updated_at (nicht
+      created_at — ein Job kann vor dem Start auf 'pending' gewartet haben,
+      die Laufzeit zählt erst ab dem tatsächlichen Losschicken).
+    - duration_minutes: bei einem terminalen Status (done/failed/discarded),
+      created_at bis updated_at — eine Annäherung an die Gesamtdauer vom
+      Auftrag bis zum Abschluss, schließt bei mehrstufigen (careful) Jobs
+      auch die Wartezeit auf Freigabe mit ein (keine separate Zeiterfassung
+      pro Stufe — für die Job-Übersicht reicht diese Näherung)."""
+    if data.get("status") == "running" and data.get("updated_at"):
+        try:
+            started = datetime.fromisoformat(data["updated_at"])
+            data["running_since_minutes"] = round((datetime.now() - started).total_seconds() / 60, 1)
+        except ValueError:
+            pass
+    elif data.get("status") in _TERMINAL_STATUSES and data.get("created_at") and data.get("updated_at"):
+        try:
+            start = datetime.fromisoformat(data["created_at"])
+            end = datetime.fromisoformat(data["updated_at"])
+            data["duration_minutes"] = round((end - start).total_seconds() / 60, 1)
+        except ValueError:
+            pass
+    return data
+
+
 def get_job_status(job_id: int | None = None) -> dict:
-    """Für check_coding_job_status — ohne job_id der zuletzt gestartete Job.
-    Bei status='running' zusätzlich die bisherige Laufzeit in Minuten, damit
-    Simon "läuft das noch normal?" beantwortet bekommt, ohne auf den
-    1-Stunden-Stale-Cleanup warten zu müssen."""
+    """Für check_coding_job_status — ohne job_id der zuletzt gestartete Job."""
     conn = _get_db()
     if job_id is not None:
         cur = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
@@ -730,17 +758,32 @@ def get_job_status(job_id: int | None = None) -> dict:
         return {"active": False}
     cols = [d[0] for d in cur.description]
     conn.close()
+    return _enrich_job(dict(zip(cols, row)))
 
-    data = dict(zip(cols, row))
-    # updated_at statt created_at: ein Job kann vor dem Start auf 'pending'
-    # gewartet haben — die Laufzeit zählt ab dem tatsächlichen Losschicken.
-    if data.get("status") == "running" and data.get("updated_at"):
-        try:
-            started = datetime.fromisoformat(data["updated_at"])
-            data["running_since_minutes"] = round((datetime.now() - started).total_seconds() / 60, 1)
-        except ValueError:
-            pass
-    return data
+
+def list_jobs(status_filter: str | None = None) -> list[dict]:
+    """Für die Job-Übersicht in jarvis-web (data_request 'coding_jobs') — alle
+    Jobs (optional nach status gefiltert), neueste zuerst. Reichert jede Zeile
+    um project_name an (Lookup gegen local_data.list_coding_projects() über
+    cwd — die Job-Zeile selbst kennt nur den Pfad, keinen Namen; kein Treffer
+    z.B. wenn das Projekt inzwischen umbenannt/entfernt wurde, dann bleibt
+    project_name None, cwd bleibt als Fallback fürs Frontend sichtbar)."""
+    conn = _get_db()
+    if status_filter:
+        cur = conn.execute("SELECT * FROM jobs WHERE status = ? ORDER BY id DESC", (status_filter,))
+    else:
+        cur = conn.execute("SELECT * FROM jobs ORDER BY id DESC")
+    rows = cur.fetchall()
+    cols = [d[0] for d in cur.description]
+    conn.close()
+
+    path_to_name = {p["path"]: p["name"] for p in local_data.list_coding_projects()}
+    jobs = []
+    for row in rows:
+        data = dict(zip(cols, row))
+        data["project_name"] = path_to_name.get(data.get("cwd"))
+        jobs.append(_enrich_job(data))
+    return jobs
 
 
 def _notify(text: str, priority: str = "normal", expires_in_min: int = 60) -> None:
