@@ -42,9 +42,15 @@ class NotificationDispatcher:
                 priority     TEXT NOT NULL DEFAULT 'normal',
                 created_at   TEXT NOT NULL,
                 expires_at   TEXT NOT NULL,
-                delivered_at TEXT
+                delivered_at TEXT,
+                rate_limited INTEGER NOT NULL DEFAULT 1
             )
         """)
+        # Für Installationen von vor 2026-07-31 (bypass_rate_limit), deren
+        # notifications-Tabelle schon ohne die Spalte angelegt wurde.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+        if "rate_limited" not in cols:
+            conn.execute("ALTER TABLE notifications ADD COLUMN rate_limited INTEGER NOT NULL DEFAULT 1")
         conn.commit()
         return conn
 
@@ -56,6 +62,7 @@ class NotificationDispatcher:
         channels: list[str] | None = None,
         priority: str = "normal",
         expires_in_min: int = 60,
+        bypass_rate_limit: bool = False,
     ) -> str | None:
         """
         Erstellt eine Notification und liefert sie sofort aus wenn Clients verbunden.
@@ -63,13 +70,23 @@ class NotificationDispatcher:
         channels: ["dashboard"] | ["voice"] | ["dashboard", "voice"]
         priority: "low" | "normal" | "high"
         expires_in_min: danach wird die Notification nicht mehr nachgeliefert
+        bypass_rate_limit: True für angeforderte, seltene Ergebnis-Meldungen
+            (aktuell: Coding-Job-Ergebnisse, siehe services/coding_jobs.py) —
+            ein verworfenes Ergebnis ist schlimmer als eine Meldung zu viel
+            (2026-07-31: Job-Fertig-Meldungen wurden vom allgemeinen 3/h-Limit
+            verworfen, sahen dann aus wie "nichts passiert", führte mehrfach zu
+            Fehldiagnosen). Zählt auch NICHT in den Zähler für andere
+            Notifications hinein (siehe rate_limited-Spalte/_under_rate_limit) —
+            sonst könnten mehrere Job-Ergebnisse in derselben Stunde das Budget
+            für z.B. Proactive-Reminder aufbrauchen, obwohl die selbst nie
+            geprüft wurden.
 
         Gibt die notification_id zurück, oder None wenn Rate-Limit greift.
         """
         if channels is None:
             channels = ["dashboard"]
 
-        if not self._under_rate_limit():
+        if not bypass_rate_limit and not self._under_rate_limit():
             print("[dispatcher] Rate-Limit erreicht — Notification verworfen", flush=True)
             return None
 
@@ -82,12 +99,13 @@ class NotificationDispatcher:
             "created_at":   now.isoformat(),
             "expires_at":   (now + timedelta(minutes=expires_in_min)).isoformat(),
             "delivered_at": None,
+            "rate_limited": 0 if bypass_rate_limit else 1,
         }
 
         with self._lock:
             self._db.execute(
                 "INSERT INTO notifications VALUES "
-                "(:id, :text, :channels, :priority, :created_at, :expires_at, :delivered_at)",
+                "(:id, :text, :channels, :priority, :created_at, :expires_at, :delivered_at, :rate_limited)",
                 notification,
             )
             self._db.commit()
@@ -196,7 +214,7 @@ class NotificationDispatcher:
         one_hour_ago = (datetime.utcnow() - timedelta(hours=1)).isoformat()
         with self._lock:
             count = self._db.execute(
-                "SELECT COUNT(*) FROM notifications WHERE created_at > ?",
+                "SELECT COUNT(*) FROM notifications WHERE created_at > ? AND rate_limited = 1",
                 (one_hour_ago,),
             ).fetchone()[0]
         return count < _MAX_PER_HOUR
