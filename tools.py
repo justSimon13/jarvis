@@ -1138,7 +1138,13 @@ DEFINITIONS = [
             "Vorher read_knowledge aufrufen wenn die Datei bereits existieren könnte, dann Inhalt ergänzen statt überschreiben. "
             "VERLINKUNG: verwandte Inhalte im Fließtext aktiv mit [[topic/file]] bzw. [[topic/file|Anzeigetext]] verlinken "
             "(z.B. '[[programmierung/jarvis_projekt|JARVIS-Architektur]]'), wenn eine echte inhaltliche Beziehung zu einer bekannten "
-            "Datei besteht. Backlinks werden automatisch berechnet, nicht selbst pflegen — nur Vorwärtslinks im Text setzen."
+            "Datei besteht. Backlinks werden automatisch berechnet, nicht selbst pflegen — nur Vorwärtslinks im Text setzen. "
+            "BEI LÄNGEREN DOKUMENTEN (mehrere tausend Wörter): nicht alles in einem einzigen Aufruf schreiben — der "
+            "gesamte Aufruf inkl. content zählt gegen dasselbe Antwort-Token-Limit wie sichtbarer Text, bei einem sehr "
+            "langen Inhalt kann die Antwort mitten im Aufruf abgeschnitten werden (der Aufruf wird dann GAR NICHT "
+            "ausgeführt, nichts wird gespeichert). Stattdessen: hier nur einen kurzen Anfang (Titel + Einleitung oder "
+            "ersten Abschnitt) schreiben, für jeden weiteren Abschnitt append_knowledge_section aufrufen — jeder "
+            "einzelne Aufruf bleibt dadurch klein, unabhängig von der Gesamtlänge des Dokuments."
         ),
         "input_schema": {
             "type": "object",
@@ -1153,6 +1159,27 @@ DEFINITIONS = [
                 },
             },
             "required": ["topic", "file", "content"],
+        },
+    },
+    {
+        "name": "append_knowledge_section",
+        "description": (
+            "Hängt einen neuen Abschnitt ('## heading') an eine BESTEHENDE Wissensdatei an — legt sie "
+            "an falls sie noch nicht existiert (dann als '# heading' plus Inhalt, gleichwertig zu einem "
+            "ersten write_knowledge-Aufruf). Für LÄNGERE Dokumente die bessere Wahl als ein einzelner "
+            "riesiger write_knowledge-Aufruf, siehe dort — ein Aufruf pro Abschnitt hält jeden einzelnen "
+            "Tool-Aufruf klein und macht dadurch ein Abschneiden durch das Antwort-Token-Limit "
+            "unwahrscheinlich, unabhängig von der Gesamtlänge des fertigen Dokuments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic":   {"type": "string", "description": "Topic-Ordner, z.B. 'sport'"},
+                "file":    {"type": "string", "description": "Dateiname ohne .md"},
+                "heading": {"type": "string", "description": "Überschrift des neuen Abschnitts, ohne '##'"},
+                "content": {"type": "string", "description": "Inhalt dieses EINEN Abschnitts (Markdown)"},
+            },
+            "required": ["topic", "file", "heading", "content"],
         },
     },
     {
@@ -1642,6 +1669,15 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
                 tags=tool_input.get("tags"),
             )
             return f"Gespeichert: {tool_input['topic']}/{tool_input['file']}.md"
+
+        if tool_name == "append_knowledge_section":
+            knowledge.append_section(
+                topic=tool_input["topic"],
+                file=tool_input["file"],
+                heading=tool_input["heading"],
+                content=tool_input["content"],
+            )
+            return f"Abschnitt '{tool_input['heading']}' angehängt: {tool_input['topic']}/{tool_input['file']}.md"
 
         if tool_name == "search_knowledge":
             results = knowledge.search(tool_input["query"])
