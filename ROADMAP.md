@@ -381,6 +381,7 @@ Fix: `_is_safe_readonly_command()` — eine enge, bewusst konservative Whitelist
 - Dedizierter `CODING_ENGINE_API_KEY` statt Fallback auf den Haupt-Key
 - Konversationelle Konfigurierbarkeit der Eskalationsregeln
 - Nur 1 Coding-Task gleichzeitig (gilt jetzt projektübergreifend — zwei Tasks in unterschiedlichen Projekten können aktuell trotzdem nicht parallel laufen)
+- `projekte.autonomy` (seit 2026-07-30, Mac-Worker-Mehrprojekt-Unterstützung in `start_coding_job`) wird gespeichert, aber **nicht ausgewertet** — kein unterschiedliches Verhalten je Grad (`sandbox`/`auto`/`review`/`careful`). Muss wirken, BEVOR das erste Projekt mit `data_scope = 'employer'` angebunden wird — sonst suggeriert das Feld eine Kontrolle, die tatsächlich nicht existiert.
 
 ---
 

@@ -94,6 +94,17 @@ def _get_db() -> sqlite3.Connection:
     # Trend-Chart: bekannte Pipeline-Projekte werden im jeweiligen Monat als
     # erwarteter Zufluss eingebucht statt nur pauschal in die Gesamtschätzung.
     _ensure_column(conn, "projekte", "erwartetes_abschlussdatum", "TEXT")
+    # Mac-Worker-Coding-Jobs (seit 2026-07-30, Migrationsschritt C aus
+    # docs-draft/JARVIS-Konzept-2026-07-28.md vorgezogen): additiv, bestehende
+    # Zeilen bleiben unberührt. 'path' muss zeichengenau mit einem Eintrag in
+    # jarvis-web's localExec.js::PROJECT_ALLOWLIST übereinstimmen (der Server
+    # ist keine vertrauenswürdige Quelle für Pfade). 'base_branch' ist eine
+    # pragmatische Ergänzung über die Zielbild-Spalten hinaus (dort nur bei
+    # 'jobs' gelistet, nicht bei 'projects') — ohne sie weiß coding_jobs.py
+    # nicht, von welchem Branch abgezweigt wird. 'autonomy'/'data_scope'
+    # werden vorerst nur gespeichert, nicht ausgewertet (siehe ROADMAP.md).
+    for column in ("path", "repo", "base_branch", "client_id", "autonomy", "data_scope"):
+        _ensure_column(conn, "projekte", column, "TEXT")
     # Externe Ticket-Quellen (z.B. GitHub Issues, siehe services/tickets.py):
     # zusätzliche, nullable Felder für todos — bestehende Zeilen bleiben
     # unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
@@ -315,16 +326,39 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
     return results
 
 
+def list_coding_projects(client_id: str = "mac-private") -> list[dict]:
+    """Für services/coding_jobs.py::_resolve_project() — Projekte, die für
+    Mac-Worker-Coding-Jobs freigegeben sind (path gesetzt UND passender
+    client_id). Eigene, gezielte Abfrage statt der generischen query(): die
+    hat kein WHERE für "hat einen Pfad UND diesen client_id". Absichtlich
+    NICHT Teil von list_projekte() (Kontext-Prompt-Aufbau) — diese Felder
+    fahren nicht bei jedem Gespräch mit, nur wenn tatsächlich ein Coding-Job
+    startet."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT id, name, path, repo, base_branch FROM projekte WHERE path IS NOT NULL AND client_id = ? ORDER BY id",
+        (client_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "name", "path", "repo", "base_branch"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
 def add_projekt(name: str, status: str | None = None, beschreibung: str | None = None,
                  typ: str | None = None, geschaetzter_wert: float | None = None,
-                 erwartetes_abschlussdatum: str | None = None) -> int:
+                 erwartetes_abschlussdatum: str | None = None,
+                 path: str | None = None, repo: str | None = None, base_branch: str | None = None,
+                 client_id: str | None = None, autonomy: str | None = None,
+                 data_scope: str | None = None) -> int:
     conn = _get_db()
     now = _now()
     cur = conn.execute(
         """INSERT INTO projekte (name, status, beschreibung, typ, geschaetzter_wert,
-                                  erwartetes_abschlussdatum, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum, now, now)
+                                  erwartetes_abschlussdatum, path, repo, base_branch, client_id,
+                                  autonomy, data_scope, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum,
+         path, repo, base_branch, client_id, autonomy, data_scope, now, now)
     )
     conn.commit()
     projekt_id = cur.lastrowid
@@ -334,7 +368,8 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 
 def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
-    allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"}
+    allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
+               "path", "repo", "base_branch", "client_id", "autonomy", "data_scope"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -677,7 +712,8 @@ _QUERY_META = {
         "default_limit": 10, "search_col": "name", "status_col": "status", "unterseiten": True,
     },
     "projekte": {
-        "cols": ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"],
+        "cols": ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
+                 "path", "repo", "base_branch", "client_id", "autonomy", "data_scope"],
         "default_limit": 200, "search_col": "name", "status_col": "status", "unterseiten": True,
     },
     "rechnungen": {
