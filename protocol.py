@@ -96,7 +96,17 @@ LOCAL_EXEC_RESPONSE = "local_exec_response"  # {"type": "local_exec_response", "
 # Das Ergebnis kommt Minuten später ausschließlich als eigene, unabhängige
 # CODING_JOB_RESULT-Nachricht — auch alle Vorbereitungs-Fehler auf dem Mac
 # (Allowlist, Konto, Git) kommen so, als status="failed".
-CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id": int, "ok": bool, "status": "done"|"failed", "session_id": "...", "cost_usd": float, "result": "...", "changed_files": "...", "denials": [...], "branch": "...", "pr_url": "..."|None} — Client → Server, unaufgefordert (siehe services/coding_jobs.py)
+CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id": int, "ok": bool, "status": "done"|"failed"|"awaiting_review"|"discarded", "session_id": "...", "cost_usd": float, "result": "...", "changed_files": "...", "denials": [...], "branch": "...", "pr_url": "..."|None} — Mac-Worker → Server, unaufgefordert (siehe services/coding_jobs.py). NEU auch Server → Web-Tab-Client: server.py leitet ein Ergebnis mit gesetztem category/tab_id zusätzlich zur Notification an genau diesen Tab weiter (_deliver_job_result_to_chat), Payload dann nur {"type", "job_id", "result", "status"} — jarvis-web rendert das als Chat-Nachricht.
+
+# Flüchtiger Live-Fortschritt WÄHREND ein claude_code_run/claude_code_resume
+# noch läuft — aus claude -p --output-format stream-json's tool_use-Events
+# destilliert (Worker), NICHT persistiert (weder display_history noch
+# api_history) und NICHT über lange Ausfälle hinweg nachgeliefert — ein
+# verpasstes Ereignis ist irrelevant, das nächste kommt in Kürze. Client →
+# Server (Mac-Worker) UND Server → Client (Web-Tab, nur wenn der Job beim
+# Start ein category/tab_id erfasst hat, siehe services/coding_jobs.py::
+# get_job_chat_target).
+CODING_JOB_PROGRESS = "coding_job_progress"  # {"type": "coding_job_progress", "job_id": int, "text": "liest hello.py"}
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}

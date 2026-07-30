@@ -128,6 +128,47 @@ def _set_active_session_id(tab_id: str, session_id: int | None) -> None:
         _active_session_ids[tab_id] = session_id
 
 
+def _deliver_job_result_to_chat(delivery: dict) -> None:
+    """Liefert ein Coding-Job-Ergebnis zusätzlich zur Notification als
+    Chat-Nachricht aus — an genau den (category, tab_id), in dem der Job
+    gestartet wurde (siehe services/coding_jobs.py::resolve_job_result).
+    Bewusst NICHT über RESPONSE_START/CHUNK/DONE (das Muster aus
+    pipeline.greet()): diese laufen client-seitig über ein einzelnes
+    pendingResponse-Ref, das mit einem echten, gerade laufenden Turn in
+    diesem Tab kollidieren würde. Stattdessen direkt über den bestehenden
+    coding_job_result-Typ, den jarvis-web jetzt auch eingehend behandelt.
+
+    Für 'web' ist tab_id identisch mit der Connection-client_id (siehe
+    client_hello-Handling weiter unten) — get_event_callback(tab_id) trifft
+    deshalb direkt die richtige Verbindung, kein eigener Tab-Lookup nötig."""
+    category = delivery["category"]
+    tab_id = delivery["tab_id"]
+    with history_lock:
+        _get_display_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_full"]})
+        _get_api_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_short"]})
+
+    cb = manager.get_event_callback(tab_id)
+    if cb:
+        cb({"type": P.CODING_JOB_RESULT, "job_id": delivery.get("job_id"), "result": delivery["chat_text_full"]})
+
+
+def _relay_job_progress(data: dict) -> None:
+    """Leitet ein flüchtiges Fortschritts-Ereignis (siehe protocol.py::
+    CODING_JOB_PROGRESS) an den Web-Tab weiter, in dem der Job gestartet
+    wurde — KEINE History-Berührung (weder display_history noch api_history),
+    Fortschritt ist ausdrücklich nicht persistiert. Kein Ziel bekannt oder Tab
+    gerade nicht verbunden → still verwerfen, kein Fehler, keine
+    Warteschlange (das nächste Ereignis kommt in Kürze)."""
+    job_id = data.get("job_id")
+    target = coding_jobs.get_job_chat_target(job_id) if job_id is not None else None
+    if not target:
+        return
+    _category, tab_id = target
+    cb = manager.get_event_callback(tab_id)
+    if cb:
+        cb({"type": P.CODING_JOB_PROGRESS, "job_id": job_id, "text": data.get("text", "")})
+
+
 SATELLITE_TIMEOUT = 28800  # 8h Inaktivität → neue Session (nur Voice-Clients)
 _last_activity_ts: float = 0.0
 _ROLLING_WINDOW = 60       # Max. Nachrichten in api_history
@@ -797,6 +838,7 @@ async def handle_connection(websocket):
     )
     if manager.get_name(client_id):
         pipeline.set_room(manager.get_name(client_id))
+    pipeline.set_chat_target(category, tab_id)
     manager.register_pipeline(client_id, pipeline)
 
     if role == "dashboard":
@@ -994,7 +1036,11 @@ async def handle_connection(websocket):
                 elif data.get("type") == P.LOCAL_EXEC_RESPONSE:
                     local_exec.resolve_local_exec(data["id"], data)
                 elif data.get("type") == P.CODING_JOB_RESULT:
-                    coding_jobs.resolve_job_result(data)
+                    delivery = coding_jobs.resolve_job_result(data)
+                    if delivery:
+                        _deliver_job_result_to_chat(delivery)
+                elif data.get("type") == P.CODING_JOB_PROGRESS:
+                    _relay_job_progress(data)
                 elif data.get("type") == P.KNOWLEDGE_CONFIRM:
                     if data.get("confirmed"):
                         learning.apply_suggestion(data["id"])
