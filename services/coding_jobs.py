@@ -237,18 +237,27 @@ def start_job(instruction: str | None = None, title: str | None = None,
     branch = f"jarvis/job-{job_id}"
     conn.execute("UPDATE jobs SET branch = ? WHERE id = ?", (branch, job_id))
     conn.commit()
-    running = conn.execute(
-        "SELECT id FROM jobs WHERE status = 'running' AND id != ? LIMIT 1", (job_id,)
-    ).fetchone()
+    # Nur tatsächlich offene Jobs zählen (status running/pending), nicht ALLE
+    # mit kleinerer ID — sonst zeigt eine Positionsangabe auf einen Job, der
+    # längst fertig ist (done/failed), nur weil sein coding_job_result verzögert
+    # ankam (2026-07-31: Job #11 wurde als "läuft hinter #9 und #10" gemeldet,
+    # obwohl beide schon done waren mit PR). Kein LIMIT 1 mehr — bei mehreren
+    # offenen Jobs (running + pending) sollen ALLE genannt werden, nicht nur
+    # der eine laufende.
+    open_ahead = conn.execute(
+        "SELECT id FROM jobs WHERE status IN ('running', 'pending') AND id != ? ORDER BY id",
+        (job_id,),
+    ).fetchall()
     conn.close()
 
     # Immer nur ein Lauf zur Zeit — das eine Arbeitsverzeichnis verträgt keine
     # parallelen git checkout/branch/commit (client-seitig zusätzlich per Lock
     # abgesichert, aber dort würde der zweite Job scheitern statt zu warten).
-    if running:
+    if open_ahead:
+        ids = ", ".join(f"#{row[0]}" for row in open_ahead)
         return (
-            f"Job #{job_id} vorgemerkt — Job #{running[0]} läuft noch, der neue startet "
-            "automatisch danach. Ergebnis kommt per Benachrichtigung."
+            f"Job #{job_id} vorgemerkt — {ids} noch offen, der neue startet automatisch "
+            "danach der Reihe nach. Ergebnis kommt per Benachrichtigung."
         )
 
     if _try_dispatch(job_id):
