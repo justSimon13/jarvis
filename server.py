@@ -689,6 +689,28 @@ async def handle_connection(websocket):
     category = "voice"  # Default bis Rolle bekannt ist; send_json() bindet spät (Closure)
     tab_id = client_id  # Für "web": stabile Tab-Identität vom Client (client_hello); sonst Fallback
 
+    # Ein Turn (process_text/process_audio) lief bisher INLINE im async-for
+    # unten (await run_in_executor direkt in der Schleife) — blockierte damit
+    # auch das Lesen JEDER weiteren Nachricht auf DERSELBEN Verbindung, bis der
+    # Turn fertig war. Kein Problem, solange nichts anderes auf dieser
+    # Verbindung eine Antwort braucht — bricht aber zusammen, sobald ein Tool
+    # innerhalb des Turns per local_exec.dispatch() auf eine Antwort GENAU
+    # DIESES Clients wartet (Mac-Worker chattet über dieselbe Verbindung, über
+    # die er auch local_exec bedient): die local_exec_response steckt dann bis
+    # zum dispatch()-Timeout (60s) im ungelesenen Rest der Schleife fest, real
+    # beobachtet als ~63s-Verzögerung + "Antwort ohne passende Anfrage"
+    # (2026-07-30). Fix: Turn läuft als eigener Task, die Schleife liest sofort
+    # weiter — _turn_lock hält die bisherige Serialisierung (ein Turn nach dem
+    # anderen, keine zwei gleichzeitig) auf dieser Verbindung aufrecht.
+    _turn_lock = asyncio.Lock()
+    _pending_turn_tasks: set[asyncio.Task] = set()
+
+    def _spawn_turn(coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        _pending_turn_tasks.add(task)
+        task.add_done_callback(_pending_turn_tasks.discard)
+        return task
+
     def send_json(event: dict):
         if _capture[0]:
             etype = event.get("type")
@@ -832,11 +854,19 @@ async def handle_connection(websocket):
                     # Ein Sprach-Timeout betrifft nur die "voice"-Kategorie, nicht
                     # die (unbeteiligte) Web-Live-Ansicht.
                     _check_satellite_timeout()
-                await loop.run_in_executor(None, pipeline.process_audio, message)
-                _last_activity_ts = time.time()
-                _trim_api_history(category, tab_id)
-                _save_history()
-                asyncio.create_task(_push_dashboard_update())
+
+                async def _run_audio_turn(message=message):
+                    async with _turn_lock:
+                        try:
+                            await loop.run_in_executor(None, pipeline.process_audio, message)
+                            _last_activity_ts = time.time()
+                            _trim_api_history(category, tab_id)
+                            _save_history()
+                            asyncio.create_task(_push_dashboard_update())
+                        except Exception as e:
+                            print(f"[server] Unerwarteter Fehler bei Audio-Turn ({client_id}): {e}", flush=True)
+
+                _spawn_turn(_run_audio_turn())
             else:
                 data = json.loads(message)
                 if data.get("type") == P.TEXT_INPUT:
@@ -856,13 +886,21 @@ async def handle_connection(websocket):
                             ]
                         _get_display_history(category, tab_id).append(display_entry)
                     _get_session_clients(category, tab_id).add(client_name)
-                    await loop.run_in_executor(None, pipeline.process_text, text, use_tts, attachments)
-                    _last_activity_ts = time.time()
-                    _trim_api_history(category, tab_id)
-                    _save_history()
-                    if category == "web":
-                        _persist_web_turn(loop, tab_id)
-                    asyncio.create_task(_push_dashboard_update())
+
+                    async def _run_text_turn(text=text, use_tts=use_tts, attachments=attachments):
+                        async with _turn_lock:
+                            try:
+                                await loop.run_in_executor(None, pipeline.process_text, text, use_tts, attachments)
+                                _last_activity_ts = time.time()
+                                _trim_api_history(category, tab_id)
+                                _save_history()
+                                if category == "web":
+                                    _persist_web_turn(loop, tab_id)
+                                asyncio.create_task(_push_dashboard_update())
+                            except Exception as e:
+                                print(f"[server] Unerwarteter Fehler bei Text-Turn ({client_id}): {e}", flush=True)
+
+                    _spawn_turn(_run_text_turn())
                 elif data.get("type") == P.CLIENT_HELLO:
                     name = data.get("name", "")
                     role = data.get("role", "client")
@@ -1037,6 +1075,9 @@ async def handle_connection(websocket):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
+        if _pending_turn_tasks:
+            print(f"[server] Warte auf {len(_pending_turn_tasks)} laufende(n) Turn(s) vor Disconnect-Cleanup ({addr})...", flush=True)
+            await asyncio.gather(*_pending_turn_tasks, return_exceptions=True)
         manager.unregister(client_id)
         coding_engine.refresh_idle_status()
         if role != "dashboard":
