@@ -512,7 +512,13 @@ def get_job_status(job_id: int | None = None) -> dict:
 
 
 def _notify(text: str, priority: str = "normal", expires_in_min: int = 60) -> None:
+    """bypass_rate_limit=True: Job-Ergebnisse sind angefordert und selten — ein
+    vom allgemeinen 3/h-Limit verworfenes Ergebnis sieht aus wie "nichts
+    passiert" und hat real mehrfach zu Fehldiagnosen geführt (2026-07-31)."""
     if _dispatcher:
-        _dispatcher.notify(text, channels=["dashboard"], priority=priority, expires_in_min=expires_in_min)
+        _dispatcher.notify(
+            text, channels=["dashboard"], priority=priority, expires_in_min=expires_in_min,
+            bypass_rate_limit=True,
+        )
     else:
         print(f"[coding_jobs] (kein Dispatcher) {text}", flush=True)
