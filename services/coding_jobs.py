@@ -253,10 +253,13 @@ _PLAN_ONLY_TAIL = (
     "kommentieren kann."
 )
 _WRITE_TAIL = (
-    "Beende deine Antwort mit einer kurzen Zusammenfassung: was geändert wurde, "
-    "was bewusst nicht, und wo du vom naheliegenden Vorgehen abgewichen bist "
-    "(falls zutreffend). Committe/pushe/erstelle keinen PR selbst — das übernimmt "
-    "die aufrufende Umgebung."
+    "Dieser Lauf ist unbeaufsichtigt — niemand liest oder beantwortet Rückfragen während des "
+    "Laufs. Frage deshalb nicht nach Bestätigung (z.B. 'Soll ich das committen?') und warte nicht "
+    "auf eine Antwort, die nie kommt — triff die naheliegende Entscheidung selbst und führe die "
+    "Änderungen durch. Beende deine Antwort mit einer kurzen Zusammenfassung: was geändert wurde, "
+    "was bewusst nicht, und wo du vom naheliegenden Vorgehen abgewichen bist (falls zutreffend). "
+    "Committe/pushe/erstelle keinen PR selbst — das übernimmt die aufrufende Umgebung, lass deine "
+    "Änderungen einfach unverändert im Arbeitsverzeichnis stehen."
 )
 
 
@@ -336,12 +339,13 @@ def _build_issue_prompt_parts(extra_instruction: str | None, plan_only: bool = F
 def _build_resume_prompt(mode: str, comment: str | None, coding_doc: str | None = None) -> str:
     """Server-authored Prompt für einen --resume-Lauf (Freigabe/Nachbesserung)
     — gleiches 'kein Client baut Prompts'-Prinzip wie oben. Für den Fall, dass
-    das Modell den vollen Session-Kontext noch hat (Normalfall). coding_doc
-    nur bei mode='approve' angehängt (die schreibende Stufe) — 'revise' bleibt
-    read-only, committet nichts."""
+    das Modell den vollen Session-Kontext noch hat (Normalfall). _WRITE_TAIL/
+    coding_doc nur bei mode='approve' angehängt (die schreibende Stufe) —
+    'revise' bleibt read-only, committet nichts, braucht also weder die
+    Commit-Konvention noch den Hinweis auf unbeaufsichtigtes Committen."""
     if mode == "approve":
         extra = f"\n\nZusätzlicher Hinweis von Simon: {comment}" if comment else ""
-        return f"Setze den zuvor erstellten Plan jetzt um.{extra}{_build_commit_convention_note(coding_doc)}"
+        return f"Setze den zuvor erstellten Plan jetzt um.{extra}\n\n{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
     extra = f": {comment}" if comment else "."
     return f"Passe den Plan an, bevor er umgesetzt wird{extra}"
 
@@ -359,7 +363,7 @@ def _build_resume_fallback_prompt(mode: str, comment: str | None, plan_text: str
     )
     if mode == "approve":
         extra = f"Zusätzlicher Hinweis von Simon: {comment}\n\n" if comment else ""
-        return f"{base}{extra}Setze diesen Plan jetzt um.{_build_commit_convention_note(coding_doc)}"
+        return f"{base}{extra}Setze diesen Plan jetzt um.\n\n{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
     extra = f": {comment}" if comment else "."
     return f"{base}Passe den Plan an{extra}"
 
