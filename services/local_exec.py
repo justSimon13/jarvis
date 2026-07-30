@@ -41,16 +41,23 @@ def resolve_local_exec(request_id: str, payload: dict) -> None:
         print(f"[local_exec] Antwort ohne passende Anfrage: {request_id}", flush=True)
 
 
-def dispatch(action: str, timeout: float = _TIMEOUT_SEC, **fields) -> dict:
+def dispatch(action: str, timeout: float = _TIMEOUT_SEC, target_conn_id: str | None = None, **fields) -> dict:
     """Blockiert den aufrufenden Thread bis der Client antwortet (oder Timeout) —
     NIE auf dem Haupt-Event-Loop aufrufen, immer in einem Hintergrund-Thread/
     Executor (wie coding_engine.py's _request_approval_sync/
     _request_sudo_password_sync). Gibt {"ok": bool, "data": ..., "error": "..."}
-    zurück."""
+    zurück.
+
+    target_conn_id (optional): schickt gezielt an EINE bestimmte Connection
+    (z.B. einen per Rolle aufgelösten Mac-Worker, siehe
+    client_manager.py::get_connection_for_role) statt an "irgendeinen
+    verbundenen local_exec-Client". Ohne Angabe unverändertes Verhalten —
+    bestehende Aufrufer (tickets.py, list_allowed_coding_paths ohne Rollen-
+    Angabe) sind davon nicht betroffen."""
     if not _manager:
         return {"ok": False, "error": "local_exec nicht initialisiert."}
 
-    client_id = _manager.get_client_with_capability("local_exec")
+    client_id = target_conn_id or _manager.get_client_with_capability("local_exec")
     if not client_id:
         return {"ok": False, "error": "Kein Mac-Client mit lokaler Ausführung verbunden."}
 
@@ -82,7 +89,7 @@ def dispatch(action: str, timeout: float = _TIMEOUT_SEC, **fields) -> dict:
     return result
 
 
-def dispatch_nowait(action: str, **fields) -> dict:
+def dispatch_nowait(action: str, target_conn_id: str | None = None, **fields) -> dict:
     """Wie dispatch(), aber ohne auf irgendeine Antwort zu warten — kehrt sofort
     zurück, sobald die Nachricht rausgeschickt wurde. Für Aktionen, deren
     Ergebnis über einen eigenen Rückkanal kommt (z.B. claude_code_run →
@@ -90,11 +97,16 @@ def dispatch_nowait(action: str, **fields) -> dict:
     falschen Timeout-Meldungen geführt ("Es wurde nichts angestoßen"), obwohl
     der Job längst lief — und darüber zu doppelt gestarteten Jobs. Gibt nur
     zurück, ob das SENDEN geklappt hat: {"ok": True} oder
-    {"ok": False, "error": "..."} (kein Client verbunden / Senden gescheitert)."""
+    {"ok": False, "error": "..."} (kein Client verbunden / Senden gescheitert).
+
+    target_conn_id (optional): siehe dispatch() — gezielt an eine bestimmte
+    Connection statt an "irgendeinen verbundenen local_exec-Client". Von
+    coding_jobs.py::_try_dispatch() genutzt, um an den per Rolle (client_id)
+    zugeordneten Worker zu schicken, nicht an den ersten beliebigen."""
     if not _manager:
         return {"ok": False, "error": "local_exec nicht initialisiert."}
 
-    client_id = _manager.get_client_with_capability("local_exec")
+    client_id = target_conn_id or _manager.get_client_with_capability("local_exec")
     if not client_id:
         return {"ok": False, "error": "Kein Mac-Client mit lokaler Ausführung verbunden."}
 

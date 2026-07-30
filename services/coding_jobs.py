@@ -24,8 +24,18 @@ Arbeitsverzeichnis verträgt keine parallelen Läufe.
 Projektauswahl (seit 2026-07-30, Migrationsschritt C aus
 docs-draft/JARVIS-Konzept-2026-07-28.md vorgezogen) über local_data.py's
 projekte-Tabelle statt hartcodierter Konstanten — siehe _resolve_project().
-Vorerst nur Projekte mit client_id='mac-private', Routing nach worker_id und
-Arbeitsprojekte sind ein späterer Schritt.
+
+Routing nach worker_id (seit 2026-07-31): projekte.client_id (z.B.
+'mac-private'/'mac-work') bestimmt, WELCHER Mac-Worker einen Job bekommt.
+Jeder Worker meldet im client_hello eine stabile worker_id (zufällige UUID,
+lokal persistiert) — welche worker_id welcher Rolle entspricht, ordnet Simon
+im Chat zu (assign_worker/list_workers, siehe unten), persistiert in
+brain.config. Ein Worker ohne Zuordnung bekommt NIE einen Job, auch wenn er
+verbunden ist — kein automatisches Ausweichen auf einen anderen Worker (sonst
+könnte ein Kundenprojekt auf dem falschen Mac landen). Die frühere "nur ein
+Job gleichzeitig"-Sperre galt serverweit; sie gilt jetzt pro (client_id, cwd)
+— zwei unabhängige Worker (oder zwei verschiedene Projekte auf demselben
+Worker) können parallel laufen, dasselbe Arbeitsverzeichnis nie doppelt.
 
 Issue-basierte Aufträge (issue_number statt/zusätzlich zu instruction): der
 Job wird SOFORT angelegt (pending wenn kein Worker da, genau wie bei
@@ -42,6 +52,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import brain
 import local_data
 from services import local_exec
 
@@ -91,6 +102,15 @@ def _get_db() -> sqlite3.Connection:
     # issue_number/repo angelegt wurde.
     _ensure_column(conn, "jobs", "issue_number", "INTEGER")
     _ensure_column(conn, "jobs", "repo", "TEXT")
+    # Für Installationen von vor 2026-07-31 (Worker-Routing): neue Spalte,
+    # existierende Zeilen sofort auf 'mac-private' migrieren statt einen
+    # Laufzeit-Fallback auf "irgendein Worker" zu bauen — vor diesem Schritt
+    # gab es nur den einen Worker, das ist die einzig korrekte Annahme.
+    # Idempotent: betrifft nach dem ersten Lauf nur noch neue NULL-Zeilen (gibt
+    # es danach nicht mehr, aber schadet nicht, nochmal zu prüfen).
+    _ensure_column(conn, "jobs", "client_id", "TEXT")
+    conn.execute("UPDATE jobs SET client_id = 'mac-private' WHERE client_id IS NULL")
+    conn.commit()
     return conn
 
 
@@ -103,6 +123,61 @@ def init(client_manager, dispatcher) -> None:
     _manager = client_manager
     _dispatcher = dispatcher
     _fail_stale_jobs()
+    _load_worker_assignments()
+
+
+def _load_worker_assignments() -> None:
+    """Lädt die in brain.config persistierten worker_id→Rolle-Zuordnungen beim
+    Start in den (rein In-Memory-)ClientManager — ohne das würde jede
+    Zuordnung einen Server-Neustart nicht überleben. brain.config ist eine
+    pragmatische Zwischenlösung (kein eigenes SQLite-Schema für eine Handvoll
+    Key-Value-Paare nötig); das im Zielbild-Dokument geplante clients-Table
+    (docs-draft) macht das später sauberer."""
+    assignments = brain.read("config", "worker_assignments")
+    if isinstance(assignments, dict):
+        for worker_id, role_client_id in assignments.items():
+            _manager.set_worker_assignment(worker_id, role_client_id)
+
+
+def assign_worker(worker_id: str, client_id: str) -> str:
+    """Von tools.execute() aufgerufen ('assign_mac_worker'). Ordnet eine (per
+    list_workers ermittelte) worker_id einer Rolle zu — 'mac-private' oder
+    'mac-work', passend zu projekte.client_id. Persistiert in brain.config,
+    damit die Zuordnung einen Server-Neustart übersteht."""
+    if client_id not in ("mac-private", "mac-work"):
+        return f"Ungültige Rolle '{client_id}' — erlaubt: mac-private, mac-work."
+    _manager.set_worker_assignment(worker_id, client_id)
+    brain.write("config", f"worker_assignments.{worker_id}", client_id)
+    return f"Worker {worker_id} der Rolle '{client_id}' zugeordnet."
+
+
+def list_workers() -> list[dict]:
+    """Von tools.execute() aufgerufen ('list_mac_workers'). Zeigt aktuell
+    verbundene local_exec-Clients (mit worker_id + Zuordnungsstatus) UND
+    persistierte Zuordnungen zu gerade nicht verbundenen Workern — damit Simon
+    auch fragen kann 'welcher Worker ist mac-work?', ohne dass der gerade
+    online sein muss."""
+    connected = _manager.list_local_exec_workers()
+    seen = {w["worker_id"] for w in connected if w["worker_id"]}
+    result = [{**w, "connected": True} for w in connected]
+
+    assignments = brain.read("config", "worker_assignments")
+    if isinstance(assignments, dict):
+        for worker_id, role_client_id in assignments.items():
+            if worker_id not in seen:
+                result.append({"worker_id": worker_id, "client_id": role_client_id, "connected": False})
+    return result
+
+
+def resolve_worker_connection(role_client_id: str | None) -> str | None:
+    """Für tools.py (list_allowed_coding_paths/add_allowed_coding_path) — löst
+    einen optionalen client_id-Parameter (Rolle) zu einer Ziel-Connection auf.
+    Ohne Angabe: irgendein verbundener local_exec-Client (reicht, solange nur
+    einer verbunden ist). Mit Angabe: gezielt der Worker, der dieser Rolle
+    zugeordnet ist — None wenn nicht zugeordnet/nicht verbunden."""
+    if role_client_id:
+        return _manager.get_connection_for_role(role_client_id)
+    return _manager.get_client_with_capability("local_exec")
 
 
 def _fail_stale_jobs() -> None:
@@ -223,30 +298,37 @@ def start_job(instruction: str | None = None, title: str | None = None,
     if not resolved.get("base_branch"):
         return f"Projekt '{resolved['name']}' hat kein 'base_branch' hinterlegt (per data_update setzen, z.B. 'main')."
 
+    if not resolved.get("client_id"):
+        return (
+            f"Projekt '{resolved['name']}' hat kein 'client_id' hinterlegt (per data_update setzen, "
+            "z.B. 'mac-private' oder 'mac-work') — bestimmt welcher Mac-Worker den Job bekommt."
+        )
+
     conn = _get_db()
     now = _now()
     default_title = title or (instruction[:80] if instruction else f"Issue #{issue_number}")
     cur = conn.execute(
-        """INSERT INTO jobs (title, instruction, issue_number, repo, cwd, base_branch, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+        """INSERT INTO jobs (title, instruction, issue_number, repo, cwd, base_branch, client_id, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
         (default_title, instruction, issue_number, resolved.get("repo"),
-         resolved["path"], resolved["base_branch"], now, now),
+         resolved["path"], resolved["base_branch"], resolved["client_id"], now, now),
     )
     conn.commit()
     job_id = cur.lastrowid
     branch = f"jarvis/job-{job_id}"
     conn.execute("UPDATE jobs SET branch = ? WHERE id = ?", (branch, job_id))
     conn.commit()
-    # Nur tatsächlich offene Jobs zählen (status running/pending), nicht ALLE
-    # mit kleinerer ID — sonst zeigt eine Positionsangabe auf einen Job, der
-    # längst fertig ist (done/failed), nur weil sein coding_job_result verzögert
-    # ankam (2026-07-31: Job #11 wurde als "läuft hinter #9 und #10" gemeldet,
-    # obwohl beide schon done waren mit PR). Kein LIMIT 1 mehr — bei mehreren
-    # offenen Jobs (running + pending) sollen ALLE genannt werden, nicht nur
-    # der eine laufende.
+    # Nur tatsächlich offene Jobs FÜR DASSELBE (client_id, cwd) zählen (status
+    # running/pending), nicht ALLE mit kleinerer ID und nicht Jobs auf einem
+    # anderen Worker/Projekt — sonst zeigt eine Positionsangabe auf einen Job,
+    # der längst fertig ist (done/failed) oder der den neuen Job gar nicht
+    # blockiert, weil er auf einem anderen (client_id, cwd)-Paar läuft (siehe
+    # Nebenläufigkeit pro (client_id, cwd) in _start_next_pending). Kein
+    # LIMIT 1 — bei mehreren offenen Jobs sollen ALLE genannt werden.
     open_ahead = conn.execute(
-        "SELECT id FROM jobs WHERE status IN ('running', 'pending') AND id != ? ORDER BY id",
-        (job_id,),
+        "SELECT id FROM jobs WHERE status IN ('running', 'pending') AND id != ? "
+        "AND client_id = ? AND cwd = ? ORDER BY id",
+        (job_id, resolved["client_id"], resolved["path"]),
     ).fetchall()
     conn.close()
 
@@ -270,21 +352,29 @@ def start_job(instruction: str | None = None, title: str | None = None,
 
 
 def _try_dispatch(job_id: int) -> bool:
-    """Schickt einen Job fire-and-forget an den Worker. Liest die Zeile selbst
-    aus der DB (einzige Quelle für cwd/base_branch/branch/instruction/
-    issue_number/repo — vermeidet Diskrepanzen zwischen den beiden
+    """Schickt einen Job fire-and-forget an den Worker, der der Zeile eigenen
+    client_id (Rolle) zugeordnet UND verbunden ist. Liest die Zeile selbst aus
+    der DB (einzige Quelle für cwd/base_branch/branch/instruction/
+    issue_number/repo/client_id — vermeidet Diskrepanzen zwischen den beiden
     Aufrufstellen start_job()/_start_next_pending()). True = rausgeschickt
-    (Zeile auf 'running'), False = kein Worker erreichbar (Zeile bleibt/wird
-    'pending', kein Fehler — Wiederholung über on_worker_connected bzw.
-    resolve_job_result)."""
+    (Zeile auf 'running'), False = kein passender Worker erreichbar (Zeile
+    bleibt/wird 'pending', kein Fehler — Wiederholung über on_worker_connected
+    bzw. resolve_job_result). KEIN Ausweichen auf einen anderen Worker, wenn
+    der zugeordnete nicht verbunden ist — das ist hier der Kernpunkt."""
     conn = _get_db()
     row = conn.execute(
-        "SELECT instruction, issue_number, repo, cwd, base_branch, branch FROM jobs WHERE id = ?", (job_id,)
+        "SELECT instruction, issue_number, repo, cwd, base_branch, branch, client_id FROM jobs WHERE id = ?",
+        (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return False
-    instruction, issue_number, repo, cwd, base_branch, branch = row
+    instruction, issue_number, repo, cwd, base_branch, branch, client_id = row
+
+    target_conn_id = _manager.get_connection_for_role(client_id)
+    if not target_conn_id:
+        print(f"[coding_jobs] Job #{job_id} bleibt vorgemerkt: kein Worker für Rolle '{client_id}' zugeordnet/verbunden.", flush=True)
+        return False
 
     fields = {"cwd": cwd, "base_branch": base_branch, "branch": branch, "job_id": job_id}
     if issue_number:
@@ -293,7 +383,7 @@ def _try_dispatch(job_id: int) -> bool:
     else:
         fields["instruction"] = _build_prompt(instruction)
 
-    result = local_exec.dispatch_nowait("claude_code_run", **fields)
+    result = local_exec.dispatch_nowait("claude_code_run", target_conn_id=target_conn_id, **fields)
     if not result.get("ok"):
         print(f"[coding_jobs] Job #{job_id} bleibt vorgemerkt: {result.get('error')}", flush=True)
         return False
@@ -302,25 +392,40 @@ def _try_dispatch(job_id: int) -> bool:
     conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
     conn.commit()
     conn.close()
-    print(f"[coding_jobs] Job #{job_id} an den Worker geschickt (Branch {branch}).", flush=True)
+    print(f"[coding_jobs] Job #{job_id} an Worker '{client_id}' geschickt (Branch {branch}).", flush=True)
     return True
 
 
 def _start_next_pending() -> None:
-    """Startet den ältesten 'pending'-Job, sofern gerade keiner läuft. Wird
-    aufgerufen wenn ein Worker sich anmeldet (on_worker_connected) und wenn ein
-    Lauf fertig wird (resolve_job_result) — dadurch arbeiten mehrere vorgemerkte
-    Jobs nacheinander ab, nie parallel."""
+    """Startet für JEDES (client_id, cwd)-Paar mit wartenden Jobs den jeweils
+    ältesten 'pending'-Job, sofern für genau dieses Paar gerade nichts läuft.
+    Wird aufgerufen wenn ein Worker sich anmeldet (on_worker_connected) und
+    wenn ein Lauf fertig wird (resolve_job_result). Nebenläufigkeit gilt PRO
+    (client_id, cwd), nicht mehr global: zwei unabhängige Worker (oder zwei
+    verschiedene Projekte auf demselben Worker) können gleichzeitig laufen —
+    nur dasselbe Arbeitsverzeichnis nie doppelt (paralleler git checkout/
+    branch/commit würde sich sonst gegenseitig korrumpieren)."""
     conn = _get_db()
-    running = conn.execute("SELECT id FROM jobs WHERE status = 'running' LIMIT 1").fetchone()
-    row = None
-    if not running:
-        row = conn.execute(
-            "SELECT id FROM jobs WHERE status = 'pending' ORDER BY id LIMIT 1"
+    pending_pairs = conn.execute(
+        "SELECT DISTINCT client_id, cwd FROM jobs WHERE status = 'pending'"
+    ).fetchall()
+    to_dispatch = []
+    for client_id, cwd in pending_pairs:
+        running = conn.execute(
+            "SELECT 1 FROM jobs WHERE status = 'running' AND client_id = ? AND cwd = ? LIMIT 1",
+            (client_id, cwd),
         ).fetchone()
+        if running:
+            continue
+        oldest = conn.execute(
+            "SELECT id FROM jobs WHERE status = 'pending' AND client_id = ? AND cwd = ? ORDER BY id LIMIT 1",
+            (client_id, cwd),
+        ).fetchone()
+        if oldest:
+            to_dispatch.append(oldest[0])
     conn.close()
-    if row:
-        _try_dispatch(row[0])
+    for job_id in to_dispatch:
+        _try_dispatch(job_id)
 
 
 def on_worker_connected() -> None:
