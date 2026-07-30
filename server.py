@@ -157,16 +157,23 @@ def _relay_job_progress(data: dict) -> None:
     CODING_JOB_PROGRESS) an den Web-Tab weiter, in dem der Job gestartet
     wurde — KEINE History-Berührung (weder display_history noch api_history),
     Fortschritt ist ausdrücklich nicht persistiert. Kein Ziel bekannt oder Tab
-    gerade nicht verbunden → still verwerfen, kein Fehler, keine
-    Warteschlange (das nächste Ereignis kommt in Kürze)."""
+    gerade nicht verbunden → still verwerfen (Design-Entscheidung, ein
+    verpasstes Ereignis ist irrelevant), aber GELOGGT statt komplett lautlos —
+    sonst nicht von einem echten Bug zu unterscheiden (siehe Diagnose
+    "Live-Fortschrittszeile erscheint nicht", 2026-07-31)."""
     job_id = data.get("job_id")
+    print(f"[server] coding_job_progress empfangen: job_id={job_id}, text={data.get('text')!r}", flush=True)
     target = coding_jobs.get_job_chat_target(job_id) if job_id is not None else None
     if not target:
+        print(f"[server] coding_job_progress verworfen: kein category/tab_id für job_id={job_id} hinterlegt.", flush=True)
         return
     _category, tab_id = target
     cb = manager.get_event_callback(tab_id)
-    if cb:
-        cb({"type": P.CODING_JOB_PROGRESS, "job_id": job_id, "text": data.get("text", "")})
+    if not cb:
+        print(f"[server] coding_job_progress verworfen: Tab {tab_id!r} (job_id={job_id}) gerade nicht verbunden.", flush=True)
+        return
+    cb({"type": P.CODING_JOB_PROGRESS, "job_id": job_id, "text": data.get("text", "")})
+    print(f"[server] coding_job_progress an Tab {tab_id!r} zugestellt (job_id={job_id}).", flush=True)
 
 
 SATELLITE_TIMEOUT = 28800  # 8h Inaktivität → neue Session (nur Voice-Clients)
@@ -953,6 +960,14 @@ async def handle_connection(websocket):
                     role = data.get("role", "client")
                     category = _category_for_role(role)
                     tab_id = data.get("tab_id") or client_id
+                    # pipeline.set_chat_target() muss hier MIT aktualisiert werden —
+                    # sonst bleibt die Pipeline (self._category/self._tab_id, siehe
+                    # pipeline.py) auf dem Stand des ERSTEN client_hello stehen, ein
+                    # danach gestarteter Coding-Job würde sein Ergebnis/Fortschritt
+                    # an den falschen (oder gar keinen) Tab zugestellt bekommen.
+                    # Bisher übersehen (gefunden bei der "Live-Fortschritt kommt
+                    # nicht an"-Diagnose, 2026-07-31).
+                    pipeline.set_chat_target(category, tab_id)
                     if name:
                         manager.set_name(client_id, name)
                         manager.set_role(client_id, role)

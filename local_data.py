@@ -103,7 +103,20 @@ def _get_db() -> sqlite3.Connection:
     # 'jobs' gelistet, nicht bei 'projects') — ohne sie weiß coding_jobs.py
     # nicht, von welchem Branch abgezweigt wird. 'autonomy'/'data_scope'
     # werden vorerst nur gespeichert, nicht ausgewertet (siehe ROADMAP.md).
-    for column in ("path", "repo", "base_branch", "client_id", "autonomy", "data_scope"):
+    # 'issue_repo' (seit 2026-07-31): optionales getrenntes Ticket-Repo — bei
+    # uns liegen Issues aller Repos in einem eigenen Repo, nicht im jeweiligen
+    # Code-Repo. Gesetzt, läuft gh issue view/list für Coding-Jobs gegen
+    # dieses Repo, während der Job selbst weiter im 'path' des Code-Repos
+    # arbeitet. 'delivery' (local/push/pr, seit 2026-07-31): unabhängig von
+    # 'autonomy' — autonomy steuert Kontrolle VOR der Ausführung, delivery wie
+    # weit das Ergebnis geht. Default 'pr' (bisheriges Verhalten) für Projekte
+    # ohne gesetzten Wert, siehe coding_jobs.py::start_job(). 'coding_doc'
+    # (seit 2026-07-31, Zwischenlösung siehe ROADMAP.md): Referenz
+    # ("topic/file") auf ein Wissensdokument, das bei Coding-Jobs in diesem
+    # Projekt mitgegeben wird (Commit-/Code-Konventionen, projektspezifische
+    # Hinweise — kein Bezug auf einen bestimmten Anwendungsfall).
+    for column in ("path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+                   "issue_repo", "delivery", "coding_doc"):
         _ensure_column(conn, "projekte", column, "TEXT")
     # Externe Ticket-Quellen (z.B. GitHub Issues, siehe services/tickets.py):
     # zusätzliche, nullable Felder für todos — bestehende Zeilen bleiben
@@ -340,10 +353,11 @@ def list_coding_projects() -> list[dict]:
     mit, nur wenn tatsächlich ein Coding-Job startet."""
     conn = _get_db()
     rows = conn.execute(
-        "SELECT id, name, path, repo, base_branch, client_id, autonomy FROM projekte WHERE path IS NOT NULL ORDER BY id",
+        "SELECT id, name, path, repo, base_branch, client_id, autonomy, issue_repo, delivery, coding_doc "
+        "FROM projekte WHERE path IS NOT NULL ORDER BY id",
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "path", "repo", "base_branch", "client_id", "autonomy"]
+    cols = ["id", "name", "path", "repo", "base_branch", "client_id", "autonomy", "issue_repo", "delivery", "coding_doc"]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -372,7 +386,8 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
-               "path", "repo", "base_branch", "client_id", "autonomy", "data_scope"}
+               "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+               "issue_repo", "delivery", "coding_doc"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -716,7 +731,8 @@ _QUERY_META = {
     },
     "projekte": {
         "cols": ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
-                 "path", "repo", "base_branch", "client_id", "autonomy", "data_scope"],
+                 "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+                 "issue_repo", "delivery", "coding_doc"],
         "default_limit": 200, "search_col": "name", "status_col": "status", "unterseiten": True,
     },
     "rechnungen": {

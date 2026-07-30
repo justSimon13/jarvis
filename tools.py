@@ -196,6 +196,25 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "unassign_mac_worker",
+        "description": (
+            "Entfernt eine bestehende Worker-Zuordnung wieder (Gegenstück zu assign_mac_worker). Nutzen um "
+            "veraltete Einträge aus list_mac_workers zu entfernen — z.B. nach einem Wechsel des "
+            "Speicherorts der worker_id selbst (die alte worker_id bleibt sonst dauerhaft als verwaiste, "
+            "nicht mehr verbundene Zuordnung stehen). Kein Fehler wenn worker_id gar nicht zugeordnet war."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker_id aus list_mac_workers, deren Zuordnung entfernt werden soll.",
+                },
+            },
+            "required": ["worker_id"],
+        },
+    },
+    {
         "name": "check_coding_job_status",
         "description": (
             "Prüft den Status eines über start_coding_job gestarteten Jobs — läuft er noch (inkl. "
@@ -440,9 +459,10 @@ DEFINITIONS = [
             "und dann per data_update setzen, sonst Simon fragen welches Projekt gemeint ist, "
             "der Kunde allein reicht nicht da ein Kunde mehrere Projekte haben kann). "
             "ausgaben: ebenfalls aus SevDesk importiert (Kategorie/Lieferant/Betrag). "
-            "projekte hat außerdem path/repo/base_branch/client_id/autonomy/data_scope für "
-            "Mac-Worker-Coding-Jobs (start_coding_job) — siehe data_write-Beschreibung für "
-            "die gültigen Werte, meist nicht relevant für normale Projekt-Abfragen. "
+            "projekte hat außerdem path/repo/base_branch/client_id/autonomy/data_scope/issue_repo/"
+            "delivery/coding_doc für Mac-Worker-Coding-Jobs (start_coding_job) — siehe "
+            "data_write-Beschreibung für die gültigen Werte, meist nicht relevant für normale "
+            "Projekt-Abfragen. "
             "Ohne limit-Angabe kommt bereits praktisch die komplette Liste zurück "
             "(Default 200 bei 'projekte'/'rechnungen'/'ausgaben', 10 bei 'todos' — Todos können "
             "über Jahre auf sehr viele anwachsen, die anderen sind kleine, begrenzte Listen). "
@@ -493,7 +513,19 @@ DEFINITIONS = [
             "dann zweistufig mit Freigabe-Schritt, siehe start_coding_job/approve_coding_job/"
             "revise_coding_job/discard_coding_job; 'sandbox'/'review'/'auto'/nicht gesetzt laufen alle wie "
             "bisher einstufig), data_scope ('own'/'customer'/'employer' — weiterhin gespeichert, noch nicht "
-            "ausgewertet). "
+            "ausgewertet), issue_repo (optional, 'owner/name' — nur nötig wenn Issues getrennt vom Code-Repo "
+            "liegen, z.B. ein zentrales Ticket-Repo für mehrere Projekte; gesetzt, läuft gh issue view/list für "
+            "Coding-Jobs gegen DIESES Repo statt gegen repo, der Job selbst arbeitet weiter im path des "
+            "Code-Repos; ohne issue_repo wie bisher repo verwendet), delivery ('local'/'push'/'pr', Default "
+            "'pr' — unabhängig von autonomy: autonomy steuert Kontrolle VOR der Ausführung, delivery wie weit "
+            "das Ergebnis geht. 'pr' (bisheriges Verhalten): Commit, Push, PR. 'push': Commit + Push, kein PR. "
+            "'local': nur Commit auf dem Job-Branch, kein Push, kein PR — für Arbeitsprojekte, bei denen das "
+            "Ergebnis lokal bleiben soll; git push und gh sind dem Modell dann strukturell gesperrt, nicht nur "
+            "im Ablauf weggelassen), coding_doc (optional, 'topic/file' — Referenz auf ein mit write_knowledge "
+            "angelegtes Wissensdokument, das bei der schreibenden Stufe eines Coding-Jobs in den Prompt "
+            "eingebettet wird, NACHRANGIG zu einer GIT_CONVENTIONS.md im Repo selbst falls vorhanden. Nicht auf "
+            "Commit-Konventionen beschränkt — Code-Konventionen oder sonstige projektspezifische Hinweise "
+            "gehören genauso hinein. Zwischenlösung, siehe ROADMAP.md). "
             "rechnungen: rechnungsnummer (Pflicht), rechnungsdatum, faellig_am, bezahlt_am (alle YYYY-MM-DD), "
             "betreff, betrag_netto, betrag_brutto, offener_betrag (Zahlen), kunde, projekt_id (Zahl, id aus "
             "data_query('projekte')), notizen, gesperrt (bool — true = ein künftiger CSV-Import lässt diese "
@@ -528,7 +560,8 @@ DEFINITIONS = [
             "gesperrt=true auf rechnungen/ausgaben setzen, wenn Simon einen Eintrag manuell korrigiert hat "
             "oder er unabhängig von SevDesk gepflegt wird — ein künftiger CSV-Import überschreibt gesperrte "
             "Zeilen dann nie mehr. Für projekte auch der Weg, um path/repo/base_branch/client_id/autonomy/"
-            "data_scope für Mac-Worker-Coding-Jobs nachträglich zu setzen (gültige Werte siehe data_write)."
+            "data_scope/issue_repo/delivery/coding_doc für Mac-Worker-Coding-Jobs nachträglich zu setzen "
+            "(gültige Werte siehe data_write)."
         ),
         "input_schema": {
             "type": "object",
@@ -1340,6 +1373,9 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
 
         if tool_name == "assign_mac_worker":
             return coding_jobs.assign_worker(tool_input["worker_id"], tool_input["client_id"])
+
+        if tool_name == "unassign_mac_worker":
+            return coding_jobs.unassign_worker(tool_input["worker_id"])
 
         if tool_name == "sync_project":
             return coding_engine.sync_project(tool_input.get("project"))

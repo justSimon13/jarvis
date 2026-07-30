@@ -115,6 +115,13 @@ class ClientManager:
         with self._lock:
             return self._worker_assignments.get(worker_id)
 
+    def remove_worker_assignment(self, worker_id: str) -> None:
+        """Gegenstück zu set_worker_assignment — für unassign_mac_worker (siehe
+        services/coding_jobs.py::unassign_worker). Kein Fehler wenn worker_id
+        gar nicht zugeordnet war (idempotent)."""
+        with self._lock:
+            self._worker_assignments.pop(worker_id, None)
+
     def get_connection_for_role(self, role_client_id: str) -> str | None:
         """Connection-ID des Mac-Workers, der aktuell der Rolle role_client_id
         (z.B. 'mac-work', passend zu projekte.client_id) zugeordnet UND

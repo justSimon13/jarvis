@@ -142,6 +142,7 @@ class JarvisPipeline:
     def set_chat_target(self, category: str, tab_id: str):
         self._category = category
         self._tab_id = tab_id
+        print(f"[pipeline] set_chat_target: category={category!r}, tab_id={tab_id!r}", flush=True)
 
     def set_mode(self, mode: str):
         self._mode = mode
