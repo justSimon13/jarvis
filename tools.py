@@ -104,6 +104,32 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "diagnose_coding_worker",
+        "description": (
+            "Diagnose OHNE Job-Start: fragt bei einem Mac-Worker das tatsächliche PATH des App-Prozesses "
+            "(zeigt ob die App-eigene PATH-Erweiterung beim Start überhaupt gelaufen ist), das für "
+            "Subprozesse zusammengesetzte PATH, den Inhalt von allowlist.json sowie für gh/claude/git (und "
+            "alle weiteren in binaries konfigurierten Namen) einen Existenz-Check UND einen echten "
+            "--version-Probelauf mit rohem Ergebnis/Fehler ab — ungefiltert, ohne Labels. Nutzen bei "
+            "anhaltenden, unklaren Coding-Job-Fehlern (z.B. 'os error 2') statt zu raten oder einen echten "
+            "Job zu starten nur um dieselbe generische Meldung zu bekommen — zeigt direkt, ob/was am PATH "
+            "oder an einer Binary nicht stimmt."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string",
+                    "description": (
+                        "Welcher Worker gefragt werden soll ('mac-private'/'mac-work', siehe list_mac_workers). "
+                        "Weglassen: irgendein verbundener local_exec-Client — reicht, solange nur einer verbunden ist."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "add_allowed_coding_path",
         "description": (
             "Fügt einem Mac-Worker per Chat einen neuen freigegebenen Projektordner hinzu (dateibasierte "
@@ -1200,6 +1226,15 @@ def execute(tool_name: str, tool_input: dict, emit=None) -> str:
             result = local_exec.dispatch("add_allowed_path", target_conn_id=target_conn_id, path=tool_input["path"])
             if not result.get("ok"):
                 return result.get("error", "Fehler beim Hinzufügen des Pfads.")
+            return json.dumps(result.get("data", {}), ensure_ascii=False)
+
+        if tool_name == "diagnose_coding_worker":
+            target_conn_id = coding_jobs.resolve_worker_connection(tool_input.get("client_id"))
+            if not target_conn_id:
+                return "Kein passender Mac-Worker verbunden (Rolle nicht zugeordnet oder nicht verbunden)."
+            result = local_exec.dispatch("diagnose_binaries", target_conn_id=target_conn_id)
+            if not result.get("ok"):
+                return result.get("error", "Fehler bei der Diagnose.")
             return json.dumps(result.get("data", {}), ensure_ascii=False)
 
         if tool_name == "list_mac_workers":
