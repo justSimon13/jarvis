@@ -28,6 +28,32 @@ _NON_ALPHA = re.compile(r'[^\w]', re.UNICODE)
 _MIN_MEANINGFUL = 3
 TTS_BUFFER_MIN = 120
 
+# Für _find_truncated_tool_call() — Name -> Tool-Definition, einmalig aus
+# tools.DEFINITIONS gebaut (statische Liste, ändert sich nicht zur Laufzeit).
+_TOOL_SCHEMAS_BY_NAME = {d["name"]: d for d in tools.DEFINITIONS}
+
+# Konkreter Lösungsvorschlag pro Tool für die Kürzungs-Notiz unten, NUR wenn
+# GENAU DIESES Tool tatsächlich abgeschnitten wurde — ein vorbeugender Hinweis
+# in write_knowledges eigener Tool-Beschreibung griff in der Praxis kaum
+# (das Modell schätzt vorab selten ab, ob ein Dokument zu lang wird, siehe
+# ROADMAP.md 2026-07-31 Nachtrag zwei), es fängt einfach an zu schreiben und
+# läuft ins Limit. Hier dagegen steht der Hinweis GENAU dann im Kontext, wenn
+# er gebraucht wird. Ein abgeschnittener Aufruf wurde nie ausgeführt (siehe
+# Aufrufer unten) — es wurde also durch DIESEN Aufruf nichts gespeichert.
+_TRUNCATION_HINTS = {
+    "write_knowledge": (
+        "Schreibe stattdessen zuerst nur einen kurzen Anfang (Titel + Einleitung oder erster "
+        "Abschnitt) mit write_knowledge, dann für jeden weiteren Abschnitt einen eigenen "
+        "append_knowledge_section-Aufruf — jeder einzelne Aufruf bleibt dadurch klein, "
+        "unabhängig von der Gesamtlänge des Dokuments."
+    ),
+    "append_knowledge_section": (
+        "Teile diesen Abschnitt in mehrere kleinere Abschnitte auf und rufe append_knowledge_section "
+        "entsprechend mehrfach auf, statt alles in einem Aufruf zu versuchen."
+    ),
+}
+_DEFAULT_TRUNCATION_HINT = "Bitte erneut versuchen, ggf. mit kürzerem Inhalt oder aufgeteilt auf mehrere Aufrufe."
+
 
 def _is_noise(text: str) -> bool:
     """True wenn text keine bedeutsame Sprache enthält (nur Geräuschbeschreibungen, Kurzfüller etc.)"""
@@ -35,6 +61,27 @@ def _is_noise(text: str) -> bool:
         return True
     cleaned = _STRIP_PARENS.sub('', text).strip()
     return len(_NON_ALPHA.sub('', cleaned)) < _MIN_MEANINGFUL
+
+
+def _find_truncated_tool_call(content_blocks):
+    """Bei stop_reason='max_tokens' kann der letzte Content-Block ein tool_use sein, dessen
+    Input-JSON mitten im Generieren abgebrochen wurde (z.B. ein langer Dokumentinhalt bei
+    write_knowledge). Empirisch verifiziert (2026-07-31, echter API-Call mit absichtlich sehr
+    niedrigem max_tokens): die Anthropic-SDK übernimmt bei einem abgebrochenen tool_use-Block nur
+    die VOLLSTÄNDIG übertragenen Felder in block.input — ein noch nicht fertig generiertes Feld
+    (auch ein Pflichtfeld) fehlt dort einfach komplett, es kommt weder eine Exception noch ein
+    kaputter/abgeschnittener Wert. Ein tool_use-Block mit fehlendem Pflichtfeld ist deshalb ein
+    zuverlässiges, schemabasiertes Signal für 'wurde nicht fertig generiert' — unabhängig vom
+    genauen Tool oder Inhalt. Gibt den ersten so erkannten Block zurück, sonst None."""
+    for block in content_blocks:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        schema = _TOOL_SCHEMAS_BY_NAME.get(block.name)
+        required = (schema or {}).get("input_schema", {}).get("required", [])
+        missing = [f for f in required if f not in (block.input or {})]
+        if missing:
+            return block
+    return None
 
 
 _TEXT_MIME_PREFIXES = ("text/",)
@@ -398,8 +445,33 @@ class JarvisPipeline:
             # abgeschnittene Antwort wird trotzdem an die History angehängt und der Turn
             # sauber beendet statt verworfen und blind wiederholt — ein Hinweis macht die
             # Kürzung für Simon UND für JARVIS selbst im nächsten Turn sichtbar.
+            #
+            # Nachtrag (2026-07-31): passiert der Abbruch WÄHREND eines Tool-Aufrufs (z.B.
+            # write_knowledge mit langem Dokumentinhalt — der Inhalt zählt gegen dasselbe
+            # max_tokens-Budget wie sichtbarer Text), landete bisher trotzdem nur die generische
+            # Kürzungs-Notiz in der History — der Tool-Aufruf selbst wurde NIE ausgeführt (final.content
+            # enthält zwar den tool_use-Block, aber "tool_use" != final.stop_reason, der obige
+            # Zweig griff also nicht), ohne dass das irgendwo sichtbar wurde. Über
+            # _find_truncated_tool_call() jetzt erkannt (schemabasiert, siehe dort) und explizit
+            # benannt statt stillschweigend verworfen — kein automatischer Retry hier (das brächte
+            # dieselbe Endlosschleifen-Gefahr wie oben beschrieben zurück, diesmal fürs Fortsetzen
+            # eines abgebrochenen JSON-Blobs, was die Anthropic-API ohnehin nicht direkt unterstützt).
+            # Zusätzlich (2026-07-31, Nachtrag zwei): konkreter Lösungsvorschlag pro Tool statt nur
+            # generischer "aufgeteilt auf mehrere Aufrufe" — ein vorbeugender Hinweis dazu in
+            # write_knowledges eigener Beschreibung griff kaum (das Modell schätzt vorab selten ab,
+            # ob ein Dokument zu lang wird, fängt einfach an zu schreiben und läuft ins Limit), daher
+            # wieder aus der Tool-Beschreibung entfernt — _TRUNCATION_HINTS liefert den Hinweis
+            # stattdessen GENAU dann, wenn der Fall tatsächlich eintritt.
             if final.stop_reason == "max_tokens":
-                turn_text = (turn_text or "") + "\n\n*(Antwort abgeschnitten — Token-Limit erreicht.)*"
+                truncated_tool = _find_truncated_tool_call(final.content)
+                if truncated_tool:
+                    hint = _TRUNCATION_HINTS.get(truncated_tool.name, _DEFAULT_TRUNCATION_HINT)
+                    turn_text = (turn_text or "") + (
+                        f"\n\n*(Antwort abgeschnitten — Token-Limit erreicht, während eines Aufrufs von "
+                        f"`{truncated_tool.name}`. Dieser Aufruf wurde NICHT ausgeführt. {hint})*"
+                    )
+                else:
+                    turn_text = (turn_text or "") + "\n\n*(Antwort abgeschnitten — Token-Limit erreicht.)*"
 
             self._emit(P.RESPONSE_DONE, text=turn_text)
 

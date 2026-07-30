@@ -143,8 +143,18 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
     model: eines der Modelle aus MODEL_CATALOG — Fallback auf MODEL bei ungültigem/fehlendem Wert.
     thinking: Adaptive Thinking an/aus. Default aus, damit sich am bisherigen schnellen
     Antwortverhalten (Voice) nichts stillschweigend ändert. max_tokens wird bei aktivem
-    Thinking angehoben, da Thinking-Tokens dort mit hineinzählen — bei 8096 könnte eine
-    Antwort sonst mitten im Denkprozess abgeschnitten werden.
+    Thinking angehoben, da Thinking-Tokens dort mit hineinzählen — bei zu knappem Wert könnte
+    eine Antwort sonst mitten im Denkprozess abgeschnitten werden.
+
+    max_tokens war bis 2026-07-31 bei 8096 (ohne Thinking) — zu knapp für eine Antwort, die mit
+    einem Tool-Aufruf endet, dessen Inhalt gegen dasselbe Budget zählt wie sichtbarer Text (z.B.
+    write_knowledge mit einem längeren Dokument). Reale Abbrüche mit stop_reason='max_tokens'
+    GENAU an dieser Stelle beobachtet (der Aufruf wurde dabei nie ausgeführt, siehe pipeline.py::
+    _find_truncated_tool_call). Angehoben auf Werte, die unter dem kleinsten unterstützten Modells
+    (Haiku 4.5, max. 32000 Output-Tokens) bleiben — Sonnet/Opus 5 erlauben deutlich mehr (bis
+    64000), Fable 5 ist unbekannt, bekommt hier denselben vorsichtigeren Wert wie Thinking. Ein
+    höheres max_tokens kostet nichts zusätzlich, solange es nicht tatsächlich ausgeschöpft wird
+    (Abrechnung nach TATSÄCHLICH generierten Tokens, nicht nach dem Limit selbst).
 
     Sonderfall Fable 5: erlaubt kein thinking={"type":"disabled"} (400 bei jedem Versuch,
     Thinking läuft dort immer). Der thinking-Parameter wird für dieses Modell ignoriert,
@@ -165,10 +175,10 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
 
     if model == "claude-fable-5":
         thinking_config = {"type": "adaptive"}
-        max_tokens = 16000
+        max_tokens = 30000
     else:
         thinking_config = {"type": "adaptive"} if thinking else {"type": "disabled"}
-        max_tokens = 16000 if thinking else 8096
+        max_tokens = 30000 if thinking else 24000
 
     with _get_client().messages.stream(
         model=model,

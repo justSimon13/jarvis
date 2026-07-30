@@ -1156,6 +1156,27 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "append_knowledge_section",
+        "description": (
+            "Hängt einen neuen Abschnitt ('## heading') an eine BESTEHENDE Wissensdatei an — legt sie "
+            "an falls sie noch nicht existiert (dann als '# heading' plus Inhalt, gleichwertig zu einem "
+            "ersten write_knowledge-Aufruf). Für LÄNGERE Dokumente die bessere Wahl als ein einzelner "
+            "riesiger write_knowledge-Aufruf, siehe dort — ein Aufruf pro Abschnitt hält jeden einzelnen "
+            "Tool-Aufruf klein und macht dadurch ein Abschneiden durch das Antwort-Token-Limit "
+            "unwahrscheinlich, unabhängig von der Gesamtlänge des fertigen Dokuments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic":   {"type": "string", "description": "Topic-Ordner, z.B. 'sport'"},
+                "file":    {"type": "string", "description": "Dateiname ohne .md"},
+                "heading": {"type": "string", "description": "Überschrift des neuen Abschnitts, ohne '##'"},
+                "content": {"type": "string", "description": "Inhalt dieses EINEN Abschnitts (Markdown)"},
+            },
+            "required": ["topic", "file", "heading", "content"],
+        },
+    },
+    {
         "name": "search_knowledge",
         "description": (
             "Durchsucht den Wissens-Index nach relevanten Dateien. "
@@ -1642,6 +1663,15 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
                 tags=tool_input.get("tags"),
             )
             return f"Gespeichert: {tool_input['topic']}/{tool_input['file']}.md"
+
+        if tool_name == "append_knowledge_section":
+            knowledge.append_section(
+                topic=tool_input["topic"],
+                file=tool_input["file"],
+                heading=tool_input["heading"],
+                content=tool_input["content"],
+            )
+            return f"Abschnitt '{tool_input['heading']}' angehängt: {tool_input['topic']}/{tool_input['file']}.md"
 
         if tool_name == "search_knowledge":
             results = knowledge.search(tool_input["query"])
