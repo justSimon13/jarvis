@@ -262,11 +262,28 @@ def _trim_api_history(category: str, tab_id: str):
             del hist[:len(hist) - _ROLLING_WINDOW]
 
 
-def _persist_web_turn(loop, tab_id: str):
+async def _persist_web_turn(loop, tab_id: str) -> None:
     """Schreibt die aktuelle Web-Tab-Session nach jeder Nachricht in sessions.db durch
     (UPDATE der bestehenden Zeile, kein neuer Eintrag) — läuft im Executor, damit der
     SQLite-Write den Event-Loop nicht blockiert. finalize=False: keine Lernextraktion,
-    die läuft nur bei echtem Abschluss (Reset/Wechsel/Shutdown)."""
+    die läuft nur bei echtem Abschluss (Reset/Wechsel/Shutdown).
+
+    AWAITED seit 2026-07-31 (vorher fire-and-forget über asyncio.create_task, ohne dass
+    der Aufrufer je darauf wartete) — Simon meldete Kontextverlust nach einem Server-
+    Neustart im selben, weiterhin verbundenen Chat-Tab: der eigentliche Write lief auf
+    einem SEPARATEN, nicht abgewarteten Task, dessen Ausführung beliebig lange nach
+    Turn-Ende verzögert sein konnte (nächster freier Event-Loop-Tick). Stirbt der Prozess
+    (Absturz, hartes Kill, oder ein Neustart der nicht auf den Task wartet) in genau
+    diesem Fenster, geht der zuletzt abgeschlossene Turn nie in sessions.db — beim
+    Reconnect stellt find_active_session() dann einen veralteten Stand wieder her, dem
+    Modell fehlt der Kontext, obwohl der clientseitige Chatverlauf (rein im Browser-/
+    Tauri-Zustand, nie neu vom Server geladen) unverändert weiter alles anzeigt und so
+    Kontinuität vortäuscht. Alle anderen session_memory.upsert()-Aufrufstellen in dieser
+    Datei (SESSION_RESET/SESSION_LOAD) awaiten den Executor-Call bereits direkt — dieser
+    hier war die einzige Ausnahme. _run_text_turn() läuft selbst schon als eigener,
+    losgelöster Task (siehe _spawn_turn) — das Awaiten hier verzögert weder die
+    Nachrichten-Schleife der Verbindung noch die an den Client gestreamte Antwort (die
+    steht zu diesem Zeitpunkt längst raus), schließt aber das Zeitfenster fast vollständig."""
     with history_lock:
         hist_snapshot = list(_get_api_history("web", tab_id))
         clients_snapshot = sorted(_get_session_clients("web", tab_id))
@@ -275,12 +292,9 @@ def _persist_web_turn(loop, tab_id: str):
     def _do():
         return session_memory.upsert(sid, hist_snapshot, clients=clients_snapshot, category="web", finalize=False, tab_id=tab_id)
 
-    async def _run():
-        new_sid = await loop.run_in_executor(None, _do)
-        if new_sid is not None:
-            _set_active_session_id(tab_id, new_sid)
-
-    asyncio.create_task(_run())
+    new_sid = await loop.run_in_executor(None, _do)
+    if new_sid is not None:
+        _set_active_session_id(tab_id, new_sid)
 
 
 _QA_REGISTRY = {
@@ -949,7 +963,7 @@ async def handle_connection(websocket):
                                 _trim_api_history(category, tab_id)
                                 _save_history()
                                 if category == "web":
-                                    _persist_web_turn(loop, tab_id)
+                                    await _persist_web_turn(loop, tab_id)
                                 asyncio.create_task(_push_dashboard_update())
                             except Exception as e:
                                 print(f"[server] Unerwarteter Fehler bei Text-Turn ({client_id}): {e}", flush=True)
