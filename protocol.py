@@ -52,6 +52,7 @@ DATA_RESPONSE = "data_response"  # {"type": "data_response", "resource": "...", 
 SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coach"|"fokus"}
 SET_THINKING  = "set_thinking"   # {"type": "set_thinking", "enabled": bool} — Adaptive Thinking pro Client/Session (Default aus)
 SET_LLM_MODEL = "set_llm_model"  # {"type": "set_llm_model", "model": "claude-sonnet-5"|"claude-opus-5"|"claude-haiku-4-5"|"claude-fable-5"}
+SET_THREAD    = "set_thread"     # {"type": "set_thread", "thread_id": N|null} — aktiven Thread für diesen Tab setzen/löschen (Teil 2, manuelles Etikett)
 
 # ── Event-Overlay (Server → Dashboard) ───────────────────────────────────────
 OVERLAY_EVENT   = "overlay_event"   # {"type": "overlay_event", "event_id": "...", "title": "...", "icon": "...", "send": "...", "snooze_minutes": 10}
@@ -130,8 +131,8 @@ CODING_JOB_ACTION     = "coding_job_action"      # {"type": "coding_job_action",
 CODING_JOB_ACTION_ACK = "coding_job_action_ack"  # {"type": "coding_job_action_ack", "id": int, "action": "...", "result": "..."}
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─
-ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
-ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "..."}
+ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte"|"threads", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
+ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "...", "id": ... (nur bei action=="add" und Erfolg)}
 
 # ── Dokument-Export (Client → Server, Server → Client) ────────────────────────
 GENERATE_DOCUMENT_REQUEST = "generate_document_request"  # {"type": "generate_document_request", "quelle_typ": "projekt"|"seite", "quelle_id": int, "format": "pdf"|"docx"} — Client → Server, Layer 1 DATA (kein LLM-Umweg, z.B. Export-Knopf in ProjekteView.vue). Antwort kommt als document_ready (Erfolg) oder error (Fehlschlag).

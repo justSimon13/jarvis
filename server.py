@@ -128,6 +128,14 @@ def _set_active_session_id(tab_id: str, session_id: int | None) -> None:
         _active_session_ids[tab_id] = session_id
 
 
+# Welcher Thread (Teil 2, manuelles Etikett — siehe ROADMAP.md) gerade für einen
+# Web-Tab aktiv ist. None/fehlend = kein Thread aktiv, Fensterbildung bleibt
+# tab-/cursor-basiert wie in Teil 1. Rein in-memory wie _active_session_ids —
+# überlebt einen Server-Neustart nicht (dann muss neu gewählt werden), einen
+# Client-Reconnect bei laufendem Server aber schon, siehe CLIENT_HELLO unten.
+_active_thread_ids: dict[str, int | None] = {}
+
+
 def _deliver_job_result_to_chat(delivery: dict) -> None:
     """Liefert ein Coding-Job-Ergebnis zusätzlich zur Notification als
     Chat-Nachricht aus — an genau den (category, tab_id), in dem der Job
@@ -150,8 +158,17 @@ def _deliver_job_result_to_chat(delivery: dict) -> None:
     with history_lock:
         _get_display_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_full"]})
         _get_api_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_short"]})
+    # Läuft außerhalb jeder Pipeline-Runde (der Job kann Minuten/Stunden vorher
+    # gestartet worden sein) — hat deshalb kein pipeline._thread_id zur Hand,
+    # sondern muss den aktuell aktiven Thread des Ziel-Tabs selbst nachschlagen.
+    # Ohne das würde ein Job-Ergebnis, das eintrifft während ein Thread aktiv
+    # ist, außerhalb von dessen Fenster landen (build_history_window() liest
+    # dann ausschließlich nach thread_id, siehe session_memory.py).
+    thread_id = _active_thread_ids.get(tab_id)
+    project_id = session_memory.get_thread_project_id(thread_id) if thread_id is not None else None
     session_memory.append_message(
         category, tab_id, "assistant", delivery["chat_text_short"], display_text=delivery["chat_text_full"],
+        thread_id=thread_id, project_id=project_id,
     )
 
     cb = manager.get_event_callback_for_tab(tab_id)
@@ -569,6 +586,16 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return session_memory.get_transcript(int(sid))
         except Exception as e:
             return {"error": str(e)}
+    if resource == "threads":
+        return session_memory.list_threads()
+    if resource == "thread_messages":
+        tid = req_data.get("thread_id")
+        if tid is None:
+            return {"error": "thread_id erforderlich"}
+        try:
+            return session_memory.get_thread_messages(int(tid))
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "notification_history":
         try:
             return dispatcher.list_recent(int(req_data.get("limit", 30)))
@@ -650,31 +677,40 @@ _ENTITY_FIELDS = {
                      "gesperrt"},
     "ausgaben":     {"belegnummer", "status", "lieferant", "kategorie", "beschreibung", "datum",
                      "faellig_am", "bezahlt_am", "offener_betrag", "betrag", "gesperrt"},
+    "threads":      {"title", "project_id"},
 }
 
 # 'add' braucht pro Entität einen Pflicht-Bezeichner — bei den meisten 'name', bei
 # den aus SevDesk importierten Typen die jeweilige SevDesk-eigene Nummer.
 _ENTITY_REQUIRED_FIELD = {
     "todos": "name", "projekte": "name", "kontakte": "name",
-    "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer",
+    "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer", "threads": "title",
 }
 _ENTITY_ADD_FN = {
     "todos": local_data.add_todo, "projekte": local_data.add_projekt, "kontakte": local_data.add_kontakt,
     "rechnungen": local_data.add_rechnung, "ausgaben": local_data.add_ausgabe,
+    "threads": session_memory.create_thread,
 }
 _ENTITY_UPDATE_FN = {
     "todos": local_data.update_todo, "projekte": local_data.update_projekt, "kontakte": local_data.update_kontakt,
     "seite": local_data.update_seite, "rechnungen": local_data.update_rechnung, "ausgaben": local_data.update_ausgabe,
+    "threads": session_memory.update_thread,
 }
 _ENTITY_DELETE_FN = {
     "todos": local_data.delete_todo, "projekte": local_data.delete_projekt, "kontakte": local_data.delete_kontakt,
     "rechnungen": local_data.delete_rechnung, "ausgaben": local_data.delete_ausgabe,
+    "threads": session_memory.delete_thread,
 }
 
 
-def _do_entity_action(entity: str, action: str, data: dict) -> None:
-    """Blockierende Mutation für Todos/Projekte/Kontakte/Seiten/Rechnungen/Ausgaben —
-    Layer 1 DATA, kein LLM-Umweg."""
+def _do_entity_action(entity: str, action: str, data: dict) -> int | None:
+    """Blockierende Mutation für Todos/Projekte/Kontakte/Seiten/Rechnungen/Ausgaben/
+    Threads — Layer 1 DATA, kein LLM-Umweg. Gibt bei action=="add" die neue
+    Zeilen-id zurück (sonst None) — seit Teil 2 (Threads) gebraucht: das Frontend
+    muss einen frisch angelegten freien Thread sofort per SET_THREAD aktivieren
+    können, ohne extra über die Liste danach suchen zu müssen. Für die anderen
+    Entitäten ändert sich dadurch nichts (ihre Add-Funktionen gaben die id schon
+    vorher zurück, nur bisher ungenutzt)."""
     if entity not in _ENTITY_FIELDS:
         raise ValueError(f"Unbekannte Entität: {entity}")
     fields = {k: v for k, v in data.items() if k in _ENTITY_FIELDS[entity]}
@@ -689,7 +725,7 @@ def _do_entity_action(entity: str, action: str, data: dict) -> None:
         if not required_val:
             raise ValueError(f"{required_field} erforderlich")
         fields[required_field] = required_val
-        _ENTITY_ADD_FN[entity](**fields)
+        return _ENTITY_ADD_FN[entity](**fields)
     elif action == "update":
         item_id = data.get("id")
         if not item_id:
@@ -858,6 +894,7 @@ async def handle_connection(websocket):
     # Warte kurz auf CLIENT_HELLO um Role und Raumname zu erkennen
     role = "client"
     pending_msgs = []
+    initial_thread_id = None  # aus client_hello, siehe SET_THREAD-Reconnect-Fall unten
     try:
         first_raw = await asyncio.wait_for(websocket.recv(), timeout=1.5)
         pending_msgs.append(first_raw)
@@ -867,6 +904,7 @@ async def handle_connection(websocket):
                 name = first_data.get("name", "")
                 role = first_data.get("role", "client")
                 tab_id = first_data.get("tab_id") or client_id
+                initial_thread_id = first_data.get("thread_id")
                 if name:
                     manager.set_name(client_id, name)
                     manager.set_role(client_id, role)
@@ -906,6 +944,20 @@ async def handle_connection(websocket):
     pipeline.set_chat_target(category, tab_id)
     manager.set_tab_client(tab_id, client_id)
     manager.register_pipeline(client_id, pipeline)
+
+    # Reconnect-Fall für Threads (Teil 2): anders als _thinking_enabled/_model
+    # (bewusst NICHT persistiert, siehe pipeline.py) übersteht ein aktiver
+    # Thread einen Reconnect wie der Modus — ein aktiver Thread ist eine
+    # inhaltliche Zuordnung laufender Nachrichten, kein Session-lokaler
+    # UI-Toggle, ihn bei jedem WLAN-Hänger unbemerkt zu verlieren wäre der
+    # überraschendere, schlechtere Default. client_hello trägt ihn mit (siehe
+    # jarvis.js), hier derselbe Lookup wie im SET_THREAD-Handler.
+    if initial_thread_id is not None:
+        initial_thread_project_id = await loop.run_in_executor(
+            None, session_memory.get_thread_project_id, initial_thread_id
+        )
+        _active_thread_ids[tab_id] = initial_thread_id
+        pipeline.set_thread(initial_thread_id, initial_thread_project_id)
 
     if role == "dashboard":
         init_mode = "assistent"
@@ -1023,6 +1075,15 @@ async def handle_connection(websocket):
                     # nicht an"-Diagnose, 2026-07-31).
                     pipeline.set_chat_target(category, tab_id)
                     manager.set_tab_client(tab_id, client_id)
+                    # Reconnect-Fall für Threads (Teil 2) — derselbe Lookup wie
+                    # bei der Erstverbindung oben, siehe dortiger Kommentar.
+                    resend_thread_id = data.get("thread_id")
+                    if resend_thread_id is not None:
+                        resend_thread_project_id = await loop.run_in_executor(
+                            None, session_memory.get_thread_project_id, resend_thread_id
+                        )
+                        _active_thread_ids[tab_id] = resend_thread_id
+                        pipeline.set_thread(resend_thread_id, resend_thread_project_id)
                     if name:
                         manager.set_name(client_id, name)
                         manager.set_role(client_id, role)
@@ -1047,6 +1108,29 @@ async def handle_connection(websocket):
                     pipeline.set_thinking(bool(data.get("enabled")))
                 elif data.get("type") == P.SET_LLM_MODEL:
                     pipeline.set_model(data.get("model", ""))
+                elif data.get("type") == P.SET_THREAD:
+                    # Bewusst NICHT wie SET_MODE/SET_THINKING rein synchron —
+                    # die brauchen keine DB, dieser Lookup schon (project_id
+                    # zum Thread, damit pipeline.py beides denormalisiert auf
+                    # jede Nachricht schreiben kann). run_in_executor wie bei
+                    # jedem anderen DB-Zugriff in dieser Schleife.
+                    new_thread_id = data.get("thread_id")
+                    thread_project_id = None
+                    if new_thread_id is not None:
+                        thread_project_id = await loop.run_in_executor(
+                            None, session_memory.get_thread_project_id, new_thread_id
+                        )
+                    # Thread-Nachrichten tragen DENSELBEN tab_id wie threadlose
+                    # (nur zusätzlich thread_id) — ohne diesen Cursor-Vorstoß bei
+                    # JEDEM Wechsel würde das threadlose Fenster (Cursor-basiert,
+                    # kennt thread_id nicht) beim Zurückwechseln auf "Kein Thema"
+                    # die Nachrichten aus der Thread-Phase wieder mit anzeigen,
+                    # obwohl sie fachlich dem Thread gehören (gefunden beim Testen
+                    # von build_history_window()). Symmetrisch zu SESSION_RESET,
+                    # das denselben Vorstoß schon beim "+ Neuer Chat" macht.
+                    await loop.run_in_executor(None, session_memory.advance_cursor, category, tab_id)
+                    _active_thread_ids[tab_id] = new_thread_id
+                    pipeline.set_thread(new_thread_id, thread_project_id)
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
                     result = await loop.run_in_executor(None, _handle_data_request, resource, data, category, tab_id)
@@ -1067,8 +1151,11 @@ async def handle_connection(websocket):
                     entity = data.get("entity", "")
                     action = data.get("action", "")
                     try:
-                        await loop.run_in_executor(None, _do_entity_action, entity, action, data)
-                        send_json({"type": P.ENTITY_ACTION_ACK, "ok": True, "entity": entity, "action": action})
+                        new_id = await loop.run_in_executor(None, _do_entity_action, entity, action, data)
+                        ack = {"type": P.ENTITY_ACTION_ACK, "ok": True, "entity": entity, "action": action}
+                        if new_id is not None:
+                            ack["id"] = new_id
+                        send_json(ack)
                         asyncio.create_task(_push_dashboard_update())
                     except Exception as e:
                         send_json({"type": P.ENTITY_ACTION_ACK, "ok": False, "entity": entity, "action": action, "error": str(e)})
@@ -1138,6 +1225,11 @@ async def handle_connection(websocket):
                     else:
                         learning.reject_suggestion(data["id"])
                 elif data.get("type") == P.SESSION_RESET:
+                    # "+ Neuer Chat" landet immer im threadlosen Grundzustand
+                    # (Teil 2) — No-Op für Clients, die nie SET_THREAD senden
+                    # (_active_thread_ids[tab_id] ist dann ohnehin schon None).
+                    _active_thread_ids[tab_id] = None
+                    pipeline.set_thread(None)
                     with history_lock:
                         old_history = list(_get_api_history(category, tab_id))
                         _clear_api_history(category, tab_id)

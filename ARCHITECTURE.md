@@ -67,6 +67,8 @@ Eine `JarvisPipeline`-Instanz pro Client — History ist **pro Client-Kategorie 
 
 Seit der messages/threads-Migration (2026-07-31, Teil 1, siehe ROADMAP.md) ist die `messages`-Tabelle in `sessions.db` die eigentliche Quelle: jede Nachricht wird sofort beim Anhängen persistiert, das Prompt-Fenster wird pro Turn frisch aus SQLite gelesen (`session_memory.build_history_window()`) — überlebt dadurch einen Server-Neustart, auch mitten in einem laufenden Turn. Die `api_histories`-Dicts unten existieren als In-Memory-Struktur weiterhin (füttern u.a. noch die alte `sessions`-Tabelle/Lernextraktion), dienen aber nur noch als temporärer Vergleichswert (`pipeline.py::_verify_reconstruction()`) — Entfernung folgt in einem eigenen, späteren Schritt.
 
+Seit Teil 2 (Threads, 2026-07-31, manuelles Chat-Etikett) kann pro Web-Tab zusätzlich ein Thread aktiv sein (`pipeline._thread_id`, gesetzt über `SET_THREAD`/`client_hello`) — ist einer aktiv, umgeht `build_history_window()` die Tab-Cursor-Fensterbildung komplett und liest stattdessen alle Nachrichten mit passender `thread_id`. Zwei unabhängige, gleichrangige Fensterbildungs-Strategien, keine Hierarchie zwischen beiden. `_verify_reconstruction()` unterdrückt sich bei aktivem Thread selbst (das Vergleichsgerüst kennt Threads nicht).
+
 ```
 Wohnzimmer   ──→ JarvisPipeline ──┐
 Schlafzimmer ──→ JarvisPipeline ──┼──→ messages (SQLite, category='voice')   ← Quelle

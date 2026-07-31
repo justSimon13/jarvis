@@ -427,7 +427,8 @@ def clean_content(content):
 
 def append_message(category: str, tab_id: str, role: str, content, display_text: str | None = None,
                     attachments: list[dict] | None = None, client_name: str | None = None,
-                    data_scope: str = "own", created_at: str | None = None) -> int:
+                    data_scope: str = "own", created_at: str | None = None,
+                    thread_id: int | None = None, project_id: int | None = None) -> int:
     """Persistiert eine einzelne Nachricht. Aufgerufen an JEDER Stelle, an der
     pipeline.py heute self.history/client_messages einen neuen Eintrag anhängt
     (siehe pipeline.py::process_text/_run_llm) — kein Diff am Ende einer Runde.
@@ -446,21 +447,33 @@ def append_message(category: str, tab_id: str, role: str, content, display_text:
 
     created_at: nur für die Migration alter sessions-Zeilen (dort ist nur das
     Session-Datum bekannt, nicht der echte Zeitpunkt jeder einzelnen Nachricht) —
-    im Normalfall None, dann wird "jetzt" verwendet."""
+    im Normalfall None, dann wird "jetzt" verwendet.
+
+    thread_id/project_id: manuelle Etiketten (Teil 2, siehe ROADMAP.md) — None
+    solange kein Thread aktiv ist (Fensterbildung bleibt dann tab-/cursor-basiert
+    wie in Teil 1). Bei gesetztem thread_id wird im selben Aufruf zusätzlich
+    threads.last_activity_at aktualisiert — zentral hier verankert, nicht an
+    jeder Aufrufstelle einzeln (dieselbe Idee wie clean_content())."""
     content = clean_content(content)
     with _get_db() as conn:
         cur = conn.execute(
             "INSERT INTO messages (role, content, display_text, attachments, client_name, "
-            "category, tab_id, data_scope, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "category, tab_id, thread_id, project_id, data_scope, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 role,
                 json.dumps(content, ensure_ascii=False),
                 display_text,
                 json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                client_name, category, tab_id, data_scope,
+                client_name, category, tab_id, thread_id, project_id, data_scope,
                 created_at or datetime.now().isoformat(),
             ),
         )
+        if thread_id is not None:
+            conn.execute(
+                "UPDATE threads SET last_activity_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), thread_id),
+            )
     return cur.lastrowid
 
 
@@ -555,11 +568,25 @@ def rewind_cursor_to_session(category: str, tab_id: str, session_id: int) -> boo
     return True
 
 
-def build_history_window(category: str, tab_id: str, limit: int = 150) -> list[dict]:
+def build_history_window(category: str, tab_id: str, thread_id: int | None = None,
+                          limit: int = 150) -> list[dict]:
     """Baut das Prompt-Fenster frisch aus SQLite — Ersatz für list(self.history).
     Kompression (compress_tool_history/compress_attachment_history) wendet der
     Aufrufer (pipeline.py) an, NICHT hier — session_memory.py kennt bewusst keine
-    LLM-spezifische Logik. content kommt deserialisiert zurück (json.loads)."""
+    LLM-spezifische Logik. content kommt deserialisiert zurück (json.loads).
+
+    thread_id: ist ein Thread aktiv (Teil 2, siehe ROADMAP.md), umgeht das Fenster
+    Cursor/tab_id KOMPLETT — gelesen wird dann ausschließlich nach thread_id
+    (zwei unabhängige, gleichrangige Fensterbildungs-Strategien, keine Hierarchie
+    zwischen Tab-Cursor und Thread). Weiterhin auf `limit` gedeckelt — auch ein
+    langlebiger Thread bleibt kostenseitig begrenzt, kein unbegrenztes Fenster."""
+    if thread_id is not None:
+        with _get_db() as conn:
+            rows = conn.execute(
+                "SELECT role, content FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
+                (thread_id, limit),
+            ).fetchall()
+        return [{"role": r[0], "content": json.loads(r[1])} for r in reversed(rows)]
     cursor = get_cursor(category, tab_id)
     with _get_db() as conn:
         if category == "voice":
@@ -734,3 +761,90 @@ def _repair_one(category: str, tab_id: str) -> bool:
                 (category, tab_id, last_clean_id),
             )
     return True
+
+
+# ── Threads — manuelle Chat-Themen-Etiketten (Teil 2) ──────────────────────────
+#
+# Threads sind Etiketten, keine Behälter (siehe docs-draft/JARVIS-Datenmodell-
+# und-API.md) — messages.thread_id verweist auf eine Zeile hier, aber Löschen
+# eines Threads löscht/entkoppelt NIE die schon damit verknüpften Nachrichten.
+# Rein manuell in diesem Durchgang: kein automatisches Erkennen/Zuordnen.
+
+def create_thread(title: str, project_id: int | None = None, data_scope: str = "own") -> int:
+    """last_activity_at wird SOFORT bei der Anlage gesetzt (nicht erst bei der
+    ersten Nachricht) — sonst sortiert ein frisch angelegter, noch unbenutzter
+    Thread in list_threads() als NULL unvorhersehbar ein."""
+    now = datetime.now().isoformat()
+    with _get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO threads (title, project_id, last_activity_at, data_scope) VALUES (?, ?, ?, ?)",
+            (title, project_id, now, data_scope),
+        )
+    return cur.lastrowid
+
+
+def update_thread(thread_id: int, **fields) -> None:
+    """Rename/Projekt-Neuzuordnung. Signatur passend zur _ENTITY_UPDATE_FN-
+    Aufrufkonvention in server.py (fn(item_id, **fields))."""
+    allowed = {"title", "project_id"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    with _get_db() as conn:
+        conn.execute(f"UPDATE threads SET {set_clause} WHERE id = ?", (*fields.values(), thread_id))
+
+
+def delete_thread(thread_id: int) -> None:
+    """Löscht NUR die Thread-Zeile. messages.thread_id bleibt unangetastet —
+    Threads sind Etiketten, keine Behälter (siehe Modul-Kommentar oben)."""
+    with _get_db() as conn:
+        conn.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
+
+
+def list_threads(limit: int = 50) -> list[dict]:
+    """Für die Sidebar (jarvis-web) — neueste Aktivität zuerst."""
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, title, project_id, last_activity_at FROM threads "
+            "ORDER BY last_activity_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [{"id": r[0], "title": r[1], "project_id": r[2], "last_activity_at": r[3]} for r in rows]
+
+
+def get_thread_project_id(thread_id: int) -> int | None:
+    """Für den SET_THREAD-Handler in server.py — pipeline.py braucht sowohl
+    thread_id als auch dessen project_id, um beides denormalisiert auf jede
+    messages-Zeile zu schreiben (spart einen Join beim Lesen)."""
+    with _get_db() as conn:
+        row = conn.execute("SELECT project_id FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    return row[0] if row else None
+
+
+def get_thread_messages(thread_id: int) -> list[dict]:
+    """Für die Chat-Anzeige beim Wechsel in einen Thread. text = display_text,
+    falls gesetzt (z.B. Coding-Job-Ergebnis: volle Fassung für die UI), sonst
+    _extract_text() über den deserialisierten content — dieselbe Kombination,
+    mit der Teil 1 bereits sessions.transcript für die Anzeige aufbereitet hat,
+    hier nur neu zusammengesetzt (_extract_text() kannte display_text bisher
+    nicht). Reine Platzhalter (is_placeholder_text(), z.B. '[tool_result]')
+    werden übersprungen — waren nie echter Gesprächsinhalt (siehe Vorfall
+    2026-07-23, is_placeholder_text()-Docstring)."""
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT role, content, display_text FROM messages WHERE thread_id = ? ORDER BY id",
+            (thread_id,),
+        ).fetchall()
+    result = []
+    for role, content_json, display_text in rows:
+        text = display_text
+        if not text:
+            try:
+                text = _extract_text(json.loads(content_json))
+            except Exception:
+                continue
+        if not text or is_placeholder_text(text):
+            continue
+        result.append({"role": role, "text": text})
+    return result
