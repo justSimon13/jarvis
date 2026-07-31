@@ -262,11 +262,28 @@ def _trim_api_history(category: str, tab_id: str):
             del hist[:len(hist) - _ROLLING_WINDOW]
 
 
-def _persist_web_turn(loop, tab_id: str):
+async def _persist_web_turn(loop, tab_id: str) -> None:
     """Schreibt die aktuelle Web-Tab-Session nach jeder Nachricht in sessions.db durch
     (UPDATE der bestehenden Zeile, kein neuer Eintrag) — läuft im Executor, damit der
     SQLite-Write den Event-Loop nicht blockiert. finalize=False: keine Lernextraktion,
-    die läuft nur bei echtem Abschluss (Reset/Wechsel/Shutdown)."""
+    die läuft nur bei echtem Abschluss (Reset/Wechsel/Shutdown).
+
+    AWAITED seit 2026-07-31 (vorher fire-and-forget über asyncio.create_task, ohne dass
+    der Aufrufer je darauf wartete) — Simon meldete Kontextverlust nach einem Server-
+    Neustart im selben, weiterhin verbundenen Chat-Tab: der eigentliche Write lief auf
+    einem SEPARATEN, nicht abgewarteten Task, dessen Ausführung beliebig lange nach
+    Turn-Ende verzögert sein konnte (nächster freier Event-Loop-Tick). Stirbt der Prozess
+    (Absturz, hartes Kill, oder ein Neustart der nicht auf den Task wartet) in genau
+    diesem Fenster, geht der zuletzt abgeschlossene Turn nie in sessions.db — beim
+    Reconnect stellt find_active_session() dann einen veralteten Stand wieder her, dem
+    Modell fehlt der Kontext, obwohl der clientseitige Chatverlauf (rein im Browser-/
+    Tauri-Zustand, nie neu vom Server geladen) unverändert weiter alles anzeigt und so
+    Kontinuität vortäuscht. Alle anderen session_memory.upsert()-Aufrufstellen in dieser
+    Datei (SESSION_RESET/SESSION_LOAD) awaiten den Executor-Call bereits direkt — dieser
+    hier war die einzige Ausnahme. _run_text_turn() läuft selbst schon als eigener,
+    losgelöster Task (siehe _spawn_turn) — das Awaiten hier verzögert weder die
+    Nachrichten-Schleife der Verbindung noch die an den Client gestreamte Antwort (die
+    steht zu diesem Zeitpunkt längst raus), schließt aber das Zeitfenster fast vollständig."""
     with history_lock:
         hist_snapshot = list(_get_api_history("web", tab_id))
         clients_snapshot = sorted(_get_session_clients("web", tab_id))
@@ -275,12 +292,9 @@ def _persist_web_turn(loop, tab_id: str):
     def _do():
         return session_memory.upsert(sid, hist_snapshot, clients=clients_snapshot, category="web", finalize=False, tab_id=tab_id)
 
-    async def _run():
-        new_sid = await loop.run_in_executor(None, _do)
-        if new_sid is not None:
-            _set_active_session_id(tab_id, new_sid)
-
-    asyncio.create_task(_run())
+    new_sid = await loop.run_in_executor(None, _do)
+    if new_sid is not None:
+        _set_active_session_id(tab_id, new_sid)
 
 
 _QA_REGISTRY = {
@@ -949,7 +963,7 @@ async def handle_connection(websocket):
                                 _trim_api_history(category, tab_id)
                                 _save_history()
                                 if category == "web":
-                                    _persist_web_turn(loop, tab_id)
+                                    await _persist_web_turn(loop, tab_id)
                                 asyncio.create_task(_push_dashboard_update())
                             except Exception as e:
                                 print(f"[server] Unerwarteter Fehler bei Text-Turn ({client_id}): {e}", flush=True)
@@ -1220,16 +1234,42 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop_event.set)
 
-    async with websockets.serve(
+    # Bewusst NICHT "async with websockets.serve(...):" — dessen __aexit__ ruft
+    # server.close() mit dem Default close_connections=True auf, was VOR dem
+    # eigentlichen Sichern (unten) auf jeden einzelnen offenen Verbindungs-
+    # Handler wartet (websockets' eigene Server._close()-Logik). Steckt eine
+    # Verbindung dabei gerade in einem lange laufenden LLM-Call (loop.
+    # run_in_executor in _run_text_turn/_run_audio_turn — läuft unabhängig vom
+    # WebSocket-Status weiter, auch nachdem der Server die Verbindung selbst
+    # bereits geschlossen hat), blockiert das den KOMPLETTEN Shutdown, bis
+    # dieser Call fertig ist. Dauert das länger als systemds TimeoutStopSec
+    # (Default 90s, kein eigener Wert in install_server.sh gesetzt), killt
+    # systemd den Prozess hart (SIGKILL) — _save_all_sessions_on_shutdown()
+    # läuft dann NIE, der komplette laufende Verlauf (nicht nur der eine
+    # in-flight Turn) ist weg. Erklärt einen von Simon gemeldeten Kontext-
+    # verlust nach einem Neustart MITTEN in einem aktiven Gespräch (2026-07-31)
+    # — alle vorherigen erfolgreichen Restores liefen über scripts/
+    # auto_update.sh, das einen Neustart bewusst zurückstellt bis KEIN Client
+    # mehr verbunden ist (siehe dort), weshalb dieser Fall vorher nie auftrat.
+    # Jetzt umgekehrte Reihenfolge: erst der schnelle, synchrone Snapshot unter
+    # history_lock (braucht keine geschlossenen Verbindungen), danach erst
+    # server.close()/wait_closed() — ein noch laufender Turn kann den
+    # Shutdown weiterhin verzögern, aber nicht mehr den vorherigen Save
+    # verhindern.
+    server = await websockets.serve(
         handle_connection, HOST, PORT,
         ping_interval=30,
         ping_timeout=120,
         max_size=20 * 1024 * 1024,  # Default 1MiB reicht nicht für Bild-/PDF-Anhänge im Chat
-    ):
-        await stop_event.wait()
+    )
+    await stop_event.wait()
 
     print("[server] Shutdown-Signal empfangen — sichere Sessions...", flush=True)
     await loop.run_in_executor(None, _save_all_sessions_on_shutdown)
+
+    server.close()
+    await server.wait_closed()
+    print("[server] Shutdown abgeschlossen.", flush=True)
 
 
 if __name__ == "__main__":
