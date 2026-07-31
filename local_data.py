@@ -94,6 +94,12 @@ def _get_db() -> sqlite3.Connection:
     # Trend-Chart: bekannte Pipeline-Projekte werden im jeweiligen Monat als
     # erwarteter Zufluss eingebucht statt nur pauschal in die Gesamtschätzung.
     _ensure_column(conn, "projekte", "erwartetes_abschlussdatum", "TEXT")
+    # Geschätzter Aufwand in Stunden (seit 2026-07-31) — Gegenstück zu
+    # geschaetzter_wert (Euro): Grundlage für den effektiven Stundensatz und
+    # den Abgleich Schätzung vs. tatsächlichem Aufwand. Kaufmännisches Feld,
+    # bewusst NICHT Teil der Mac-Worker-Coding-Job-Spalten unten (die sind
+    # technisch, dieses hier fachlich/kaufmännisch wie geschaetzter_wert).
+    _ensure_column(conn, "projekte", "estimated_hours", "REAL")
     # Mac-Worker-Coding-Jobs (seit 2026-07-30, Migrationsschritt C aus
     # docs-draft/JARVIS-Konzept-2026-07-28.md vorgezogen): additiv, bestehende
     # Zeilen bleiben unberührt. 'path' muss zeichengenau mit einem Eintrag in
@@ -309,21 +315,21 @@ def list_projekte(status_filter: str | list[str] | None = None) -> list[dict]:
     conn = _get_db()
     if status_filter is None:
         rows = conn.execute(
-            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte ORDER BY id"
+            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum, estimated_hours FROM projekte ORDER BY id"
         ).fetchall()
     elif isinstance(status_filter, str):
         rows = conn.execute(
-            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte WHERE status = ? ORDER BY id",
+            "SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum, estimated_hours FROM projekte WHERE status = ? ORDER BY id",
             (status_filter,)
         ).fetchall()
     else:
         placeholders = ",".join("?" * len(status_filter))
         rows = conn.execute(
-            f"SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum FROM projekte WHERE status IN ({placeholders}) ORDER BY id",
+            f"SELECT id, name, status, beschreibung, typ, notizen, externe_id, geschaetzter_wert, erwartetes_abschlussdatum, estimated_hours FROM projekte WHERE status IN ({placeholders}) ORDER BY id",
             list(status_filter)
         ).fetchall()
     conn.close()
-    cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "externe_id", "geschaetzter_wert", "erwartetes_abschlussdatum"]
+    cols = ["id", "name", "status", "beschreibung", "typ", "notizen", "externe_id", "geschaetzter_wert", "erwartetes_abschlussdatum", "estimated_hours"]
     results = [dict(zip(cols, r)) for r in rows]
     # Gleicher Hinweis wie in query() (LLM-Pfad) — sonst hat das Frontend keine
     # Möglichkeit zu wissen ob es Unterseiten gibt, ohne pro Projekt einen
@@ -363,7 +369,7 @@ def list_coding_projects() -> list[dict]:
 
 def add_projekt(name: str, status: str | None = None, beschreibung: str | None = None,
                  typ: str | None = None, geschaetzter_wert: float | None = None,
-                 erwartetes_abschlussdatum: str | None = None,
+                 erwartetes_abschlussdatum: str | None = None, estimated_hours: float | None = None,
                  path: str | None = None, repo: str | None = None, base_branch: str | None = None,
                  client_id: str | None = None, autonomy: str | None = None,
                  data_scope: str | None = None) -> int:
@@ -371,10 +377,10 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
     now = _now()
     cur = conn.execute(
         """INSERT INTO projekte (name, status, beschreibung, typ, geschaetzter_wert,
-                                  erwartetes_abschlussdatum, path, repo, base_branch, client_id,
+                                  erwartetes_abschlussdatum, estimated_hours, path, repo, base_branch, client_id,
                                   autonomy, data_scope, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum, estimated_hours,
          path, repo, base_branch, client_id, autonomy, data_scope, now, now)
     )
     conn.commit()
@@ -386,7 +392,7 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
-               "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+               "estimated_hours", "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
                "issue_repo", "delivery", "coding_doc"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
@@ -731,7 +737,7 @@ _QUERY_META = {
     },
     "projekte": {
         "cols": ["id", "name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
-                 "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+                 "estimated_hours", "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
                  "issue_repo", "delivery", "coding_doc"],
         "default_limit": 200, "search_col": "name", "status_col": "status", "unterseiten": True,
     },
@@ -792,7 +798,8 @@ def write(database: str, properties: dict) -> int:
                                      "source", "external_id", "repo", "body", "labels"}})
     if database == "projekte":
         return add_projekt(**{k: v for k, v in properties.items()
-                               if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert", "erwartetes_abschlussdatum"}})
+                               if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert",
+                                        "erwartetes_abschlussdatum", "estimated_hours"}})
     if database == "rechnungen":
         return add_rechnung(**{k: v for k, v in properties.items() if k in set(_RECHNUNGEN_COLS) - {"id"}})
     if database == "ausgaben":

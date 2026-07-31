@@ -391,6 +391,25 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return coding_jobs.list_jobs(status_filter=req_data.get("status"))
         except Exception as e:
             return {"error": str(e)}
+    if resource == "allowed_coding_paths":
+        # Für das Coding-Auswahlfeld 'path' in der Projektansicht (jarvis-web) —
+        # dieselbe Abfrage wie das LLM-Tool list_allowed_coding_paths
+        # (tools.py), hier als Layer-1-Resource ohne LLM-Umweg. client_id
+        # bestimmt den zugeordneten Worker (siehe assign_mac_worker); ohne
+        # client_id irgendein verbundener local_exec-Client. local_exec.dispatch()
+        # blockiert den aufrufenden Thread bis zu 60s — unkritisch, läuft schon
+        # via run_in_executor (siehe DATA_REQUEST-Handler), blockiert also nicht
+        # den Event-Loop, nur einen Executor-Thread.
+        try:
+            target_conn_id = coding_jobs.resolve_worker_connection(req_data.get("client_id") or None)
+            if not target_conn_id:
+                return {"error": "Kein passender Mac-Worker verbunden (Rolle nicht zugeordnet oder nicht verbunden)."}
+            result = local_exec.dispatch("list_allowed_paths", target_conn_id=target_conn_id)
+            if not result.get("ok"):
+                return {"error": result.get("error", "Fehler beim Abfragen der freigegebenen Pfade.")}
+            return result.get("data", {})
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "tickets":
         return local_data.list_tickets()
     if resource == "sync_tickets":
@@ -588,7 +607,9 @@ def _handle_overlay_dismiss(event_id: str, action: str, minutes: int) -> None:
 _ENTITY_FIELDS = {
     "todos":        {"name", "status", "datum", "prioritaet", "bereich", "aufwand", "notizen",
                      "source", "external_id", "repo", "body", "labels"},
-    "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum"},
+    "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
+                     "estimated_hours", "path", "repo", "issue_repo", "base_branch", "client_id", "autonomy",
+                     "delivery", "coding_doc", "data_scope"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
     "rechnungen":   {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
