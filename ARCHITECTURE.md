@@ -65,11 +65,15 @@ Zugriff läuft über Tailscale Serve (`https://jarvis.tail47e1d9.ts.net`, siehe 
 
 Eine `JarvisPipeline`-Instanz pro Client — History ist **pro Client-Kategorie geteilt** (`"voice"` vs. `"web"`, seit 2026-07-19, siehe `CLAUDE.md` Architektur-Entscheidungen), Kontext (`brain.db`, `knowledge/`) bleibt für alle geteilt.
 
+Seit der messages/threads-Migration (2026-07-31, Teil 1, siehe ROADMAP.md) ist die `messages`-Tabelle in `sessions.db` die eigentliche Quelle: jede Nachricht wird sofort beim Anhängen persistiert, das Prompt-Fenster wird pro Turn frisch aus SQLite gelesen (`session_memory.build_history_window()`) — überlebt dadurch einen Server-Neustart, auch mitten in einem laufenden Turn. Die `api_histories`-Dicts unten existieren als In-Memory-Struktur weiterhin (füttern u.a. noch die alte `sessions`-Tabelle/Lernextraktion), dienen aber nur noch als temporärer Vergleichswert (`pipeline.py::_verify_reconstruction()`) — Entfernung folgt in einem eigenen, späteren Schritt.
+
 ```
 Wohnzimmer   ──→ JarvisPipeline ──┐
-Schlafzimmer ──→ JarvisPipeline ──┼──→ api_histories["voice"]  (in-memory, Server)
+Schlafzimmer ──→ JarvisPipeline ──┼──→ messages (SQLite, category='voice')   ← Quelle
+                                   │     api_histories["voice"]  (in-memory, nur noch Vergleichswert)
                                    │     shared_context           (brain.db, knowledge/)
-jarvis-web   ──→ JarvisPipeline ──┘──→ api_histories["web"][tab_id]
+jarvis-web   ──→ JarvisPipeline ──┘──→ messages (SQLite, category='web', tab_id)   ← Quelle
+                                         api_histories["web"][tab_id]  (in-memory, nur noch Vergleichswert)
 ```
 
 **Gleichzeitiger Input:** Ein globaler `llm_semaphore = threading.Semaphore(1)` — pro Prozess kann nur ein LLM-Call gleichzeitig laufen (FIFO über alle Clients). Der Anthropic-Client hat ein explizites Timeout (120s, `llm.py`), damit ein hängender Call den Semaphore nicht unbegrenzt blockiert (siehe ROADMAP.md, Vorfall 2026-07-22).
@@ -199,7 +203,6 @@ Static Prompt  (Anthropic Prompt Cache, TTL 1h — bewusst länger als das 5-Min
 ├── knowledge/simon/_core.md     ← Wer Simon ist                    [immer]
 ├── knowledge/<topic>/_summary   ← passende Wissenstopics           [immer, NICHT modul-gated]
 ├── brain.behavior, brain.events, brain.followups, brain.memory     [immer, NICHT modul-gated]
-├── session_memory               ← Letzte Sessions (sessions.db)    [immer]
 ├── local_data.py: Todos         ← nur wenn "todos" aktives Modul
 └── local_data.py: Projekte      ← nur wenn "projects" aktives Modul
 
@@ -426,7 +429,9 @@ tools.py                ← Alle LLM-Tool-Definitionen + execute()-Dispatch
 llm.py                  ← Anthropic Streaming + Prompt Caching (1h TTL)
 stt.py                  ← ElevenLabs Scribe
 tts.py                  ← ElevenLabs TTS
-session_memory.py       ← Session-Zusammenfassungen (Haiku), tab_id-Restore
+session_memory.py       ← messages/threads (SQLite, Prompt-Quelle seit 2026-07-31, siehe
+                           ROADMAP.md) + Legacy sessions-Tabelle (Session-Zusammenfassungen,
+                           bleibt vorerst bestehen)
 config.py               ← Secrets + Hardware-/Deployment-Konstanten aus .env
 main.py                 ← Standalone CLI (unverändert)
 services/
