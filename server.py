@@ -166,8 +166,13 @@ def _deliver_job_result_to_chat(delivery: dict) -> None:
     # dann ausschließlich nach thread_id, siehe session_memory.py).
     thread_id = _active_thread_ids.get(tab_id)
     project_id = session_memory.get_thread_project_id(thread_id) if thread_id is not None else None
-    session_memory.append_message(
-        category, tab_id, "assistant", delivery["chat_text_short"], display_text=delivery["chat_text_full"],
+    # append_or_extend_message() statt append_message(): der Normalfall hier ist "Job gestartet,
+    # seither nichts mehr geschrieben" — die letzte Zeile ist dann schon 'assistant', eine
+    # zweite in Folge würde die Rollen-Abwechslung brechen (API lehnt mit 400 ab). Ohne diesen
+    # Fix wäre das Ergebnis im NORMALFALL nie im Kontext (Thread-Umbau Teil A) — JARVIS wüsste
+    # beim awaiting_review-Review im Chat nicht, dass der Job fertig ist.
+    session_memory.append_or_extend_message(
+        category, tab_id, delivery["chat_text_short"], delivery["chat_text_full"],
         thread_id=thread_id, project_id=project_id,
     )
 
@@ -681,10 +686,13 @@ _ENTITY_FIELDS = {
 }
 
 # 'add' braucht pro Entität einen Pflicht-Bezeichner — bei den meisten 'name', bei
-# den aus SevDesk importierten Typen die jeweilige SevDesk-eigene Nummer.
+# den aus SevDesk importierten Typen die jeweilige SevDesk-eigene Nummer. Kein
+# Eintrag (z.B. "threads", seit Thread-Umbau Teil A) = kein Pflichtfeld — "+ Neuer
+# Chat" legt Threads seitdem immer unbenannt an, Umbenennen ist ein separater,
+# späterer Schritt (Seitenleiste), kein Teil des Anlegens mehr.
 _ENTITY_REQUIRED_FIELD = {
     "todos": "name", "projekte": "name", "kontakte": "name",
-    "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer", "threads": "title",
+    "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer",
 }
 _ENTITY_ADD_FN = {
     "todos": local_data.add_todo, "projekte": local_data.add_projekt, "kontakte": local_data.add_kontakt,
@@ -718,13 +726,14 @@ def _do_entity_action(entity: str, action: str, data: dict) -> int | None:
     if action == "add":
         if entity == "seite":
             raise ValueError("Seiten werden nur über die Migration angelegt")
-        required_field = _ENTITY_REQUIRED_FIELD[entity]
-        required_val = fields.get(required_field)
-        if isinstance(required_val, str):
-            required_val = required_val.strip()
-        if not required_val:
-            raise ValueError(f"{required_field} erforderlich")
-        fields[required_field] = required_val
+        required_field = _ENTITY_REQUIRED_FIELD.get(entity)
+        if required_field is not None:
+            required_val = fields.get(required_field)
+            if isinstance(required_val, str):
+                required_val = required_val.strip()
+            if not required_val:
+                raise ValueError(f"{required_field} erforderlich")
+            fields[required_field] = required_val
         return _ENTITY_ADD_FN[entity](**fields)
     elif action == "update":
         item_id = data.get("id")
@@ -1131,6 +1140,51 @@ async def handle_connection(websocket):
                     await loop.run_in_executor(None, session_memory.advance_cursor, category, tab_id)
                     _active_thread_ids[tab_id] = new_thread_id
                     pipeline.set_thread(new_thread_id, thread_project_id)
+                elif data.get("type") == P.MOVE_MESSAGES:
+                    # Thread-Umbau Teil A — verschiebt eine oder mehrere vollständige
+                    # Runden (nie einzelne Zeilen, siehe session_memory.py::
+                    # get_round_bounds) in einen anderen Thread. mode="single_round"
+                    # (nur diese eine Runde) vs. der Standard "from_here" (ab hier
+                    # alles). fn wird VOR dem run_in_executor-Aufruf ausgewählt statt
+                    # als Lambda mit if/else darin — reine Übersichtlichkeit.
+                    move_message_id = data.get("message_id")
+                    move_target = data.get("target_thread_id")
+                    move_mode = data.get("mode", "from_here")
+                    move_fn = session_memory.move_round if move_mode == "single_round" else session_memory.move_from_here
+                    try:
+                        moved_ok = await loop.run_in_executor(None, move_fn, move_message_id, move_target)
+                        if moved_ok:
+                            send_json({"type": P.MOVE_MESSAGES_ACK, "ok": True})
+                        else:
+                            send_json({"type": P.MOVE_MESSAGES_ACK, "ok": False,
+                                       "error": "Nachricht ist kein gültiger, abgeschlossener Rundenanfang."})
+                    except Exception as e:
+                        send_json({"type": P.MOVE_MESSAGES_ACK, "ok": False, "error": str(e)})
+                elif data.get("type") == P.MERGE_THREADS:
+                    merge_source = data.get("source_thread_id")
+                    merge_target = data.get("target_thread_id")
+                    try:
+                        merged_ok = await loop.run_in_executor(None, session_memory.merge_threads, merge_source, merge_target)
+                        if merged_ok:
+                            # Betroffene, gerade verbundene Tabs umhängen — sonst würde die
+                            # nächste dort geschriebene Nachricht unter einer inzwischen
+                            # gelöschten thread_id landen (kein pipeline._thread_id-Update
+                            # ohne das). Nur DIESE Tabs bekommen den Push, alle anderen sind
+                            # von einem Merge zweier Threads unbeteiligt.
+                            for affected_tab_id, active_id in list(_active_thread_ids.items()):
+                                if active_id == merge_source:
+                                    _active_thread_ids[affected_tab_id] = merge_target
+                                    affected_pipeline = manager.get_pipeline_for_tab(affected_tab_id)
+                                    if affected_pipeline:
+                                        affected_pipeline.set_thread(merge_target, session_memory.get_thread_project_id(merge_target))
+                                    affected_cb = manager.get_event_callback_for_tab(affected_tab_id)
+                                    if affected_cb:
+                                        affected_cb({"type": P.THREAD_REASSIGNED, "old_thread_id": merge_source, "new_thread_id": merge_target})
+                            send_json({"type": P.MERGE_THREADS_ACK, "ok": True})
+                        else:
+                            send_json({"type": P.MERGE_THREADS_ACK, "ok": False, "error": "Threads nicht gefunden oder identisch."})
+                    except Exception as e:
+                        send_json({"type": P.MERGE_THREADS_ACK, "ok": False, "error": str(e)})
                 elif data.get("type") == P.DATA_REQUEST:
                     resource = data.get("resource", "")
                     result = await loop.run_in_executor(None, _handle_data_request, resource, data, category, tab_id)

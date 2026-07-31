@@ -17,9 +17,9 @@ PCM_DTYPE = "int16"
 STATE = "state"               # {"type": "state", "state": "idle|listening|thinking|speaking|tool_running"}
 STATUS = "status"             # {"type": "status", "text": "..."}
 TRANSCRIPT = "transcript"     # {"type": "transcript", "text": "..."} — erkannter Text
-RESPONSE_START = "response_start"  # {"type": "response_start"}
+RESPONSE_START = "response_start"  # {"type": "response_start", "user_message_id": N|null} — id seit Thread-Umbau Teil A, für die Verschieben-Aktion im Chat
 RESPONSE_CHUNK = "response_chunk"  # {"type": "response_chunk", "text": "..."}
-RESPONSE_DONE = "response_done"    # {"type": "response_done", "text": "..."}
+RESPONSE_DONE = "response_done"    # {"type": "response_done", "text": "...", "assistant_message_id": N|null} — id nur bei abgeschlossenem Turn gesetzt (nicht mitten in einem Tool-Loop), seit Thread-Umbau Teil A
 TOOL = "tool"                 # {"type": "tool", "name": "..."}
 ERROR = "error"               # {"type": "error", "message": "..."}
 PONG = "pong"                 # {"type": "pong"}
@@ -53,6 +53,11 @@ SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coa
 SET_THINKING  = "set_thinking"   # {"type": "set_thinking", "enabled": bool} — Adaptive Thinking pro Client/Session (Default aus)
 SET_LLM_MODEL = "set_llm_model"  # {"type": "set_llm_model", "model": "claude-sonnet-5"|"claude-opus-5"|"claude-haiku-4-5"|"claude-fable-5"}
 SET_THREAD    = "set_thread"     # {"type": "set_thread", "thread_id": N|null} — aktiven Thread für diesen Tab setzen/löschen (Teil 2, manuelles Etikett)
+MOVE_MESSAGES     = "move_messages"      # Client → Server: {"type": ..., "message_id": N, "mode": "from_here"|"single_round", "target_thread_id": N} — Thread-Umbau Teil A
+MOVE_MESSAGES_ACK = "move_messages_ack"  # Server → Client: {"type": ..., "ok": bool, "error": "..."}
+MERGE_THREADS     = "merge_threads"      # Client → Server: {"type": ..., "source_thread_id": N, "target_thread_id": N} — Thread-Umbau Teil A
+MERGE_THREADS_ACK = "merge_threads_ack"  # Server → Client: {"type": ..., "ok": bool, "error": "..."}
+THREAD_REASSIGNED = "thread_reassigned"  # Server → Client: {"type": ..., "old_thread_id": N, "new_thread_id": N} — der gerade aktive Thread dieses Tabs wurde wegzusammengeführt, siehe MERGE_THREADS
 
 # ── Event-Overlay (Server → Dashboard) ───────────────────────────────────────
 OVERLAY_EVENT   = "overlay_event"   # {"type": "overlay_event", "event_id": "...", "title": "...", "icon": "...", "send": "...", "snooze_minutes": 10}

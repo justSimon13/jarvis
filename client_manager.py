@@ -207,6 +207,17 @@ class ClientManager:
                 return None
             return self._event_handlers.get(client_id)
 
+    def get_pipeline_for_tab(self, tab_id: str):
+        """Wie get_event_callback_for_tab(), aber liefert die JarvisPipeline-Instanz
+        statt des Event-Callbacks — gebraucht z.B. beim Zusammenführen zweier
+        Threads (Thread-Umbau Teil A), um pipeline.set_thread() für einen
+        gerade verbundenen, betroffenen Tab serverseitig nachzuziehen."""
+        with self._lock:
+            client_id = self._tab_to_client.get(tab_id)
+            if not client_id:
+                return None
+            return self._pipelines.get(client_id)
+
     def set_active(self, client_id: str):
         with self._lock:
             if client_id in self._clients:

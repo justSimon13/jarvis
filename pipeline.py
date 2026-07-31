@@ -309,7 +309,11 @@ class JarvisPipeline:
 
             with self._history_lock:
                 self.history.append({"role": "user", "content": content})
-            session_memory.append_message(
+            # Rückgabewert wird gebraucht (Thread-Umbau Teil A) — an RESPONSE_START
+            # durchgereicht, damit das Frontend diese Bubble echt identifizieren
+            # kann (bisher nur ein clientseitiger ts/Index-Wert, kein Verschieben-
+            # Anker möglich, siehe _run_llm()).
+            user_message_id = session_memory.append_message(
                 category, tab_id, "user", content, client_name=self._room,
                 attachments=(
                     [{"filename": a.get("filename"), "mime_type": a.get("mime_type")} for a in attachments]
@@ -333,7 +337,7 @@ class JarvisPipeline:
             try:
                 response, final_messages, turn_cost = self._run_llm(
                     system_static, system_dynamic, history_snapshot, use_tts=use_tts,
-                    category=category, tab_id=tab_id,
+                    category=category, tab_id=tab_id, user_message_id=user_message_id,
                 )
             except Exception:
                 session_memory.delete_messages_after(category, tab_id, turn_start_id)
@@ -457,6 +461,7 @@ class JarvisPipeline:
         use_tts: bool = True,
         category: str = "voice",
         tab_id: str = "",
+        user_message_id: int | None = None,
     ) -> tuple[str, list[dict], float]:
         client_messages = messages.copy()
         full_response = ""
@@ -487,7 +492,14 @@ class JarvisPipeline:
                                  thinking=self._thinking_enabled, model=self._model) as s:
                     for chunk in s.text_stream:
                         if not response_started:
-                            self._emit(P.RESPONSE_START)
+                            # user_message_id (Thread-Umbau Teil A): identifiziert die
+                            # zugehörige User-Bubble im Frontend echt (statt nur über
+                            # einen clientseitigen ts/Index-Wert) — Grundlage fürs
+                            # Verschieben von Nachrichten zwischen Threads. Kann bei
+                            # einem mehrstufigen Tool-Loop mehrfach pro Turn feuern
+                            # (response_started wird jede Loop-Iteration neu False) —
+                            # derselbe Wert jedes Mal, harmlos wiederholt.
+                            self._emit(P.RESPONSE_START, user_message_id=user_message_id)
                             response_started = True
                             t_first_token = time.monotonic()
                             print(f"[pipeline] LLM erstes Token: {t_first_token - t_llm_start:.2f}s", flush=True)
@@ -549,6 +561,17 @@ class JarvisPipeline:
             if final.stop_reason == "refusal" and not turn_text.strip():
                 turn_text = "Diese Anfrage wurde aus Sicherheitsgründen abgelehnt."
 
+            # stop_reason="end_turn" mit leerem turn_text (kein Tool-Aufruf, keinerlei
+            # sichtbarer Text — z.B. ein rein denkender, sonst inhaltsloser Turn) blieb
+            # bisher unbehandelt: turn_text passierte den `if turn_text:`-Schutz weiter unten
+            # nicht, es wurde GAR NICHTS persistiert. Die Runde hinterließ dadurch keinen
+            # sauberen Abschluss (reine String-assistant-Zeile) — bricht die Annahme, auf der
+            # die Rundenerkennung fürs Verschieben von Nachrichten zwischen Threads aufbaut
+            # (session_memory.py, "Thread-Umbau Teil A"). Wie refusal/max_tokens jetzt IMMER
+            # mit einem nicht-leeren Platzhalter abgeschlossen.
+            if final.stop_reason == "end_turn" and not turn_text.strip():
+                turn_text = "(keine Antwort)"
+
             # stop_reason="max_tokens": Antwort wurde mitten im Generieren abgeschnitten,
             # weil das Output-Limit erreicht wurde. War bisher UNBEHANDELT — weder
             # "end_turn"/"tool_use" noch "refusal" griffen, die Schleife oben lief mit
@@ -590,14 +613,26 @@ class JarvisPipeline:
                 else:
                     turn_text = (turn_text or "") + "\n\n*(Antwort abgeschnitten — Token-Limit erreicht.)*"
 
-            self._emit(P.RESPONSE_DONE, text=turn_text)
+            # Persistieren VOR dem Emit (nicht wie sonst danach) — RESPONSE_DONE soll die
+            # echte id der gerade geschriebenen Zeile tragen (Thread-Umbau Teil A, Grundlage
+            # fürs Verschieben von Nachrichten). Nur für den abschließenden Fall gesetzt;
+            # bei stop_reason=="tool_use" (weiter unten, eigener Zweig) gibt es an dieser
+            # Stelle noch keine abschließende Zeile, assistant_message_id bleibt None.
+            assistant_message_id = None
+            if final.stop_reason in ("end_turn", "refusal", "max_tokens"):
+                # turn_text ist an dieser Stelle für alle drei Gründe garantiert nicht-leer
+                # (refusal/end_turn oben, max_tokens immer) — die Runde bekommt IMMER einen
+                # sauberen, reinen String-Abschluss.
+                full_response = turn_text
+                client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
+                assistant_message_id = session_memory.append_message(
+                    category, tab_id, "assistant", turn_text,
+                    thread_id=self._thread_id, project_id=self._project_id,
+                )
+
+            self._emit(P.RESPONSE_DONE, text=turn_text, assistant_message_id=assistant_message_id)
 
             if final.stop_reason in ("end_turn", "refusal", "max_tokens"):
-                full_response = turn_text
-                if turn_text:
-                    client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
-                    session_memory.append_message(category, tab_id, "assistant", turn_text,
-                                                   thread_id=self._thread_id, project_id=self._project_id)
                 break
 
             if final.stop_reason == "tool_use":
