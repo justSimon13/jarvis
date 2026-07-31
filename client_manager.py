@@ -15,6 +15,20 @@ class ClientManager:
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._capabilities: dict[str, list[str]] = {}  # client_id → ["local_exec", ...] (z.B. Tauri-Desktop-App)
         self._worker_ids: dict[str, str] = {}           # client_id → worker_id (nur Tauri-Desktop-App, sonst nicht gesetzt)
+        # tab_id → client_id (nur "web"-Kategorie relevant) — client_id ist ein
+        # server-internes, PRO VERBINDUNG neues Handle (str(id(websocket)) in
+        # server.py), tab_id dagegen die vom Browser stabil in sessionStorage
+        # gehaltene UUID. _event_handlers bleibt bewusst NUR unter client_id
+        # geführt (unverändert, wie schon immer) — diese Zuordnung ist eine
+        # SEPARATE Indirektion für Code, das gezielt an einen bestimmten Tab
+        # zustellen will (Coding-Job-Ergebnisse/-Fortschritt), ohne
+        # get_dashboard_event_callbacks()/broadcast_event() (beide iterieren
+        # weiterhin nur über client_id-Keys) zu berühren — eine zweite
+        # Registrierung DIREKT in _event_handlers unter tab_id wurde bewusst
+        # verworfen, das hätte eine implizite, leicht brechende Abhängigkeit
+        # geschaffen (ein künftiger Refactor der Broadcast-Funktionen auf eine
+        # direkte _event_handlers-Iteration hätte dann still doppelt zugestellt).
+        self._tab_to_client: dict[str, str] = {}
         # worker_id → Rolle ("mac-private"/"mac-work", passend zu projekte.client_id).
         # Rein In-Memory — Persistenz über einen Server-Neustart hinweg ist Sache
         # von services/coding_jobs.py (_load_worker_assignments/assign_worker,
@@ -164,8 +178,34 @@ class ClientManager:
             self._pipelines.pop(client_id, None)
             self._capabilities.pop(client_id, None)
             self._worker_ids.pop(client_id, None)
+            # WERTBASIERT löschen (nicht per tab_id-Schlüssel) — race-sicher bei
+            # einem schnellen Reconnect: hat set_tab_client() für denselben
+            # tab_id inzwischen schon die NEUE client_id eingetragen, bevor der
+            # (verzögerte) unregister() der alten Verbindung hier ankommt,
+            # schlägt der Wertvergleich fehl und der aktuelle Eintrag bleibt
+            # unangetastet. Ein reines "del self._tab_to_client[tab_id]" hätte
+            # genau diese Race gehabt.
+            for tab_id, cid in list(self._tab_to_client.items()):
+                if cid == client_id:
+                    del self._tab_to_client[tab_id]
             if self._active == client_id:
                 self._active = next(iter(self._clients), None)
+
+    def set_tab_client(self, tab_id: str, client_id: str):
+        """Merkt sich, welche client_id (aktuelle Verbindung) zu einem stabilen
+        Browser-tab_id gehört — Grundlage für get_event_callback_for_tab()."""
+        with self._lock:
+            self._tab_to_client[tab_id] = client_id
+
+    def get_event_callback_for_tab(self, tab_id: str) -> callable | None:
+        """Wie get_event_callback(), aber über tab_id statt client_id aufgelöst
+        (löst intern zu client_id auf, _event_handlers bleibt unverändert nur
+        unter client_id geführt — siehe Kommentar bei self._tab_to_client)."""
+        with self._lock:
+            client_id = self._tab_to_client.get(tab_id)
+            if not client_id:
+                return None
+            return self._event_handlers.get(client_id)
 
     def set_active(self, client_id: str):
         with self._lock:

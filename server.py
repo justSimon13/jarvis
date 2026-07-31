@@ -138,16 +138,20 @@ def _deliver_job_result_to_chat(delivery: dict) -> None:
     diesem Tab kollidieren würde. Stattdessen direkt über den bestehenden
     coding_job_result-Typ, den jarvis-web jetzt auch eingehend behandelt.
 
-    Für 'web' ist tab_id identisch mit der Connection-client_id (siehe
-    client_hello-Handling weiter unten) — get_event_callback(tab_id) trifft
-    deshalb direkt die richtige Verbindung, kein eigener Tab-Lookup nötig."""
+    tab_id ist die vom Browser stabil gehaltene UUID, NICHT dieselbe wie die
+    Connection-client_id (server-internes, pro Verbindung neues Handle) — die
+    Zustellung läuft deshalb über get_event_callback_for_tab(), die intern
+    über die client_manager.py::_tab_to_client-Zuordnung auflöst (Root Cause
+    eines echten Bugs, 2026-07-31: hier stand vorher fälschlich
+    get_event_callback(tab_id), ein Key der nie registriert wurde — Plan/
+    Fortschritt kamen deshalb nie im Chat an, obwohl der Tab verbunden war)."""
     category = delivery["category"]
     tab_id = delivery["tab_id"]
     with history_lock:
         _get_display_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_full"]})
         _get_api_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_short"]})
 
-    cb = manager.get_event_callback(tab_id)
+    cb = manager.get_event_callback_for_tab(tab_id)
     if cb:
         cb({"type": P.CODING_JOB_RESULT, "job_id": delivery.get("job_id"), "result": delivery["chat_text_full"]})
 
@@ -168,7 +172,7 @@ def _relay_job_progress(data: dict) -> None:
         print(f"[server] coding_job_progress verworfen: kein category/tab_id für job_id={job_id} hinterlegt.", flush=True)
         return
     _category, tab_id = target
-    cb = manager.get_event_callback(tab_id)
+    cb = manager.get_event_callback_for_tab(tab_id)
     if not cb:
         print(f"[server] coding_job_progress verworfen: Tab {tab_id!r} (job_id={job_id}) gerade nicht verbunden.", flush=True)
         return
@@ -389,6 +393,21 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
     if resource == "coding_jobs":
         try:
             return coding_jobs.list_jobs(status_filter=req_data.get("status"))
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "coding_job":
+        # SINGULAR, ein Job per id — nicht zu verwechseln mit "coding_jobs"
+        # (Plural, Liste) oben. Für die selbstaktualisierende Job-Karte im
+        # Chat (jarvis-web): coding_job_created/_progress/_result-Ereignisse
+        # sind dort nur das Signal "etwas hat sich geändert", die Karte holt
+        # den vollständigen Stand danach jedes Mal frisch hierüber — keine
+        # strukturierten Felder durch mehrere WS-Payload-Formen hindurchreichen.
+        job_id = req_data.get("id")
+        if job_id is None:
+            return {"error": "id erforderlich"}
+        try:
+            job = coding_jobs.get_job_status(int(job_id))
+            return job if "id" in job else {"error": "Job nicht gefunden"}
         except Exception as e:
             return {"error": str(e)}
     if resource == "allowed_coding_paths":
@@ -886,6 +905,7 @@ async def handle_connection(websocket):
     if manager.get_name(client_id):
         pipeline.set_room(manager.get_name(client_id))
     pipeline.set_chat_target(category, tab_id)
+    manager.set_tab_client(tab_id, client_id)
     manager.register_pipeline(client_id, pipeline)
 
     if role == "dashboard":
@@ -1003,6 +1023,7 @@ async def handle_connection(websocket):
                     # Bisher übersehen (gefunden bei der "Live-Fortschritt kommt
                     # nicht an"-Diagnose, 2026-07-31).
                     pipeline.set_chat_target(category, tab_id)
+                    manager.set_tab_client(tab_id, client_id)
                     if name:
                         manager.set_name(client_id, name)
                         manager.set_role(client_id, role)
