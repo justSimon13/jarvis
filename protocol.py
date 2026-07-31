@@ -108,6 +108,16 @@ CODING_JOB_RESULT = "coding_job_result"  # {"type": "coding_job_result", "job_id
 # get_job_chat_target).
 CODING_JOB_PROGRESS = "coding_job_progress"  # {"type": "coding_job_progress", "job_id": int, "text": "liest hello.py"}
 
+# Server → Web-Tab-Client, unaufgefordert: ein neuer Job wurde angelegt (siehe
+# services/coding_jobs.py::start_job(), direkt nach dem DB-Insert, nur wenn
+# category/tab_id gesetzt sind — gleiche Bedingung wie bei CODING_JOB_RESULTs
+# Chat-Zustellung). Flüchtig wie CODING_JOB_PROGRESS, KEINE History-Persistierung
+# — für jarvis-webs selbstaktualisierende Job-Karte im Chat: das Signal, an
+# genau dieser Stelle im Gesprächsverlauf eine Karte einzufügen, die sich
+# danach über CODING_JOB_PROGRESS/CODING_JOB_RESULT (als reine "neu laden"-
+# Signale, siehe data_request "coding_job") selbst aktualisiert.
+CODING_JOB_CREATED = "coding_job_created"  # {"type": "coding_job_created", "job_id": int}
+
 # Job-Ansicht in jarvis-web (Freigeben/Nachbessern/Verwerfen-Knöpfe) — Client →
 # Server, ruft DIESELBEN services/coding_jobs.py-Funktionen wie die Tools
 # approve_coding_job/revise_coding_job/discard_coding_job (server.py ruft sie

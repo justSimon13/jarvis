@@ -63,6 +63,7 @@ class NotificationDispatcher:
         priority: str = "normal",
         expires_in_min: int = 60,
         bypass_rate_limit: bool = False,
+        exclude_tab_id: str | None = None,
     ) -> str | None:
         """
         Erstellt eine Notification und liefert sie sofort aus wenn Clients verbunden.
@@ -80,6 +81,12 @@ class NotificationDispatcher:
             sonst könnten mehrere Job-Ergebnisse in derselben Stunde das Budget
             für z.B. Proactive-Reminder aufbrauchen, obwohl die selbst nie
             geprüft wurden.
+        exclude_tab_id: ein einzelner Web-Tab, der bei der SOFORT-Zustellung
+            übersprungen wird (z.B. weil er das Ergebnis bereits live als
+            eigene Karte im Chat sieht, siehe services/coding_jobs.py). Betrifft
+            NUR die Live-Zustellung unten — nicht die DB-Zeile/deliver_pending(),
+            eine Notification gilt weiterhin als zugestellt sobald IRGENDein
+            Dashboard-Client sie live bekommen hat.
 
         Gibt die notification_id zurück, oder None wenn Rate-Limit greift.
         """
@@ -111,7 +118,7 @@ class NotificationDispatcher:
             self._db.commit()
 
         print(f"[dispatcher] Notification: {text[:80]}", flush=True)
-        self._deliver_now(notification)
+        self._deliver_now(notification, exclude_tab_id=exclude_tab_id)
         return notification["id"]
 
     def deliver_pending(self, client_id: str):
@@ -188,13 +195,22 @@ class NotificationDispatcher:
 
     # ── Intern ────────────────────────────────────────────────────────────────
 
-    def _deliver_now(self, notification: dict):
-        """Sofortzustellung an alle aktuell verbundenen Dashboard-Clients."""
+    def _deliver_now(self, notification: dict, exclude_tab_id: str | None = None):
+        """Sofortzustellung an alle aktuell verbundenen Dashboard-Clients.
+
+        exclude_tab_id: übersprungen per Objekt-Identität — get_event_callback_
+        for_tab() löst über client_manager.py::_tab_to_client zum selben,
+        unter client_id abgelegten Callback-Objekt auf wie
+        get_dashboard_event_callbacks(). Kein exclude_tab_id oder kein passend
+        verbundener Tab (None) → niemand wird übersprungen."""
         channels = json.loads(notification["channels"])
         delivered = False
+        excluded_cb = self._manager.get_event_callback_for_tab(exclude_tab_id) if exclude_tab_id else None
 
         if "dashboard" in channels:
             for cb, _ in self._manager.get_dashboard_event_callbacks():
+                if excluded_cb is not None and cb is excluded_cb:
+                    continue
                 try:
                     cb({
                         "type":     "notification_push",

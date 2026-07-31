@@ -55,6 +55,7 @@ from pathlib import Path
 import brain
 import knowledge
 import local_data
+import protocol as P
 from services import local_exec
 
 _DB_PATH = Path.home() / ".jarvis" / "jobs.db"
@@ -456,6 +457,10 @@ def start_job(instruction: str | None = None, title: str | None = None,
     conn.commit()
     print(f"[coding_jobs] Job #{job_id} angelegt mit category={category!r}, tab_id={tab_id!r} "
           f"(bestimmt ob Ergebnis/Fortschritt als Chat-Nachricht zugestellt werden kann).", flush=True)
+    # VOR allen drei Rückgabe-Pfaden unten (sofort dispatcht/hinter anderen Jobs
+    # vorgemerkt/kein Worker verbunden) — sonst bekäme ein zunächst wartender
+    # Job nie eine Karte im Chat, siehe jarvis-web::CodingJobCard.vue.
+    _emit_job_created(job_id, category, tab_id)
     # Nur tatsächlich offene Jobs FÜR DASSELBE (client_id, cwd) zählen (status
     # running/pending/awaiting_review — ein wartender Job hat den Checkout
     # weiterhin auf dem Job-Branch, das Arbeitsverzeichnis ist nicht frei),
@@ -777,6 +782,10 @@ def resolve_job_result(payload: dict) -> dict | None:
         # Muster wie coding_engine._notify — eine verpasste Fertig-Meldung ist
         # genauso schlimm wie keine.
         priority="high", expires_in_min=1440,
+        # Der Tab, der den Job gestartet hat, sieht das Ergebnis bereits live
+        # als Karte im Chat (siehe jarvis-web::CodingJobCard.vue) — der Toast
+        # dort wäre redundant. Andere Tabs/Fenster bekommen ihn unverändert.
+        exclude_tab_id=tab_id,
     )
 
     # Der Worker ist jetzt frei — falls Jobs auf 'pending' warten, den ältesten
@@ -875,14 +884,31 @@ def list_jobs(status_filter: str | None = None) -> list[dict]:
     return jobs
 
 
-def _notify(text: str, priority: str = "normal", expires_in_min: int = 60) -> None:
+def _emit_job_created(job_id: int, category: str | None, tab_id: str | None) -> None:
+    """Signalisiert jarvis-web SOFORT, dass ein neuer Job angelegt wurde — für
+    die selbstaktualisierende Job-Karte im Chat (siehe protocol.py::
+    CODING_JOB_CREATED). Flüchtig wie CODING_JOB_PROGRESS, keine History-
+    Persistierung. Direkter Versand wie bei _notify() unten — kein Umweg über
+    server.py nötig, coding_jobs.py hält bereits eine _manager-Referenz."""
+    if not category or not tab_id or not _manager:
+        return
+    cb = _manager.get_event_callback_for_tab(tab_id)
+    if cb:
+        cb({"type": P.CODING_JOB_CREATED, "job_id": job_id})
+
+
+def _notify(text: str, priority: str = "normal", expires_in_min: int = 60,
+            exclude_tab_id: str | None = None) -> None:
     """bypass_rate_limit=True: Job-Ergebnisse sind angefordert und selten — ein
     vom allgemeinen 3/h-Limit verworfenes Ergebnis sieht aus wie "nichts
-    passiert" und hat real mehrfach zu Fehldiagnosen geführt (2026-07-31)."""
+    passiert" und hat real mehrfach zu Fehldiagnosen geführt (2026-07-31).
+
+    exclude_tab_id: der Tab, der den Job gestartet hat, sieht das Ergebnis
+    bereits live als Karte im Chat — kein zusätzlicher Toast dort (2026-07-31)."""
     if _dispatcher:
         _dispatcher.notify(
             text, channels=["dashboard"], priority=priority, expires_in_min=expires_in_min,
-            bypass_rate_limit=True,
+            bypass_rate_limit=True, exclude_tab_id=exclude_tab_id,
         )
     else:
         print(f"[coding_jobs] (kein Dispatcher) {text}", flush=True)
