@@ -197,6 +197,11 @@ class JarvisPipeline:
         # aufgerufen wird (server.py, direkt nach der Konstruktion).
         self._category: str | None = None
         self._tab_id: str | None = None
+        # Aktiver Thread (Teil 2, manuelles Etikett — siehe ROADMAP.md), None =
+        # kein Thread aktiv, Fensterbildung bleibt tab-/cursor-basiert wie in
+        # Teil 1. Beide von set_thread() gesetzt, nie einzeln.
+        self._thread_id: int | None = None
+        self._project_id: int | None = None
 
     def set_room(self, room: str):
         self._room = room
@@ -205,6 +210,15 @@ class JarvisPipeline:
         self._category = category
         self._tab_id = tab_id
         print(f"[pipeline] set_chat_target: category={category!r}, tab_id={tab_id!r}", flush=True)
+
+    def set_thread(self, thread_id: int | None, project_id: int | None = None):
+        """Reiner In-Memory-Attribut-Set, KEINE eigene DB-Arbeit — der project_id-
+        Lookup zu einem thread_id ist Sache des Aufrufers (server.py, via
+        run_in_executor), sonst würde diese Methode entgegen dem Muster von
+        set_mode()/set_thinking() synchron blockierende SQLite-Arbeit auf dem
+        Event-Loop-Thread auslösen."""
+        self._thread_id = thread_id
+        self._project_id = project_id if thread_id is not None else None
 
     def set_mode(self, mode: str):
         self._mode = mode
@@ -301,8 +315,9 @@ class JarvisPipeline:
                     [{"filename": a.get("filename"), "mime_type": a.get("mime_type")} for a in attachments]
                     if attachments else None
                 ),
+                thread_id=self._thread_id, project_id=self._project_id,
             )
-            history_snapshot = session_memory.build_history_window(category, tab_id)
+            history_snapshot = session_memory.build_history_window(category, tab_id, thread_id=self._thread_id)
             history_snapshot = llm.compress_attachment_history(history_snapshot)
             history_snapshot = llm.compress_tool_history(history_snapshot)
             self._verify_reconstruction(history_snapshot)
@@ -385,6 +400,14 @@ class JarvisPipeline:
         API-Runde verwendet. Nur loggt, blockiert nie. Entfernen ist ein eigener,
         späterer Aufräum-Schritt (self.history speist bis dahin weiterhin die
         alte sessions-Tabelle/learning.process_session, siehe save_session())."""
+        if self._thread_id is not None:
+            # self.history kennt Threads nicht (rein tab-bezogen, siehe Teil 1) —
+            # sobald ein Thread aktiv ist, liest build_history_window() komplett
+            # anders (nach thread_id statt Tab-Cursor). Ein Vergleich wäre
+            # garantiert divergent und damit reines Rauschen statt eines echten
+            # Signals (siehe Teil-2-Plan) — deshalb hier unterdrückt, NICHT das
+            # restliche Gerüst (bleibt für den threadlosen Fall unverändert).
+            return
         with self._history_lock:
             legacy = list(self.history)
         if not legacy and sqlite_snapshot:
@@ -573,12 +596,14 @@ class JarvisPipeline:
                 full_response = turn_text
                 if turn_text:
                     client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
-                    session_memory.append_message(category, tab_id, "assistant", turn_text)
+                    session_memory.append_message(category, tab_id, "assistant", turn_text,
+                                                   thread_id=self._thread_id, project_id=self._project_id)
                 break
 
             if final.stop_reason == "tool_use":
                 client_messages = client_messages + [{"role": "assistant", "content": final.content}]
-                session_memory.append_message(category, tab_id, "assistant", _serialize_content(final.content))
+                session_memory.append_message(category, tab_id, "assistant", _serialize_content(final.content),
+                                               thread_id=self._thread_id, project_id=self._project_id)
                 tool_results = []
                 for block in final.content:
                     if block.type == "tool_use":
@@ -598,7 +623,8 @@ class JarvisPipeline:
                             "content": result,
                         })
                 client_messages = client_messages + [{"role": "user", "content": tool_results}]
-                session_memory.append_message(category, tab_id, "user", tool_results)
+                session_memory.append_message(category, tab_id, "user", tool_results,
+                                               thread_id=self._thread_id, project_id=self._project_id)
                 client_messages = llm.compress_tool_history(client_messages)
                 self._emit(P.STATE, state="thinking")
 
