@@ -1234,16 +1234,42 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop_event.set)
 
-    async with websockets.serve(
+    # Bewusst NICHT "async with websockets.serve(...):" — dessen __aexit__ ruft
+    # server.close() mit dem Default close_connections=True auf, was VOR dem
+    # eigentlichen Sichern (unten) auf jeden einzelnen offenen Verbindungs-
+    # Handler wartet (websockets' eigene Server._close()-Logik). Steckt eine
+    # Verbindung dabei gerade in einem lange laufenden LLM-Call (loop.
+    # run_in_executor in _run_text_turn/_run_audio_turn — läuft unabhängig vom
+    # WebSocket-Status weiter, auch nachdem der Server die Verbindung selbst
+    # bereits geschlossen hat), blockiert das den KOMPLETTEN Shutdown, bis
+    # dieser Call fertig ist. Dauert das länger als systemds TimeoutStopSec
+    # (Default 90s, kein eigener Wert in install_server.sh gesetzt), killt
+    # systemd den Prozess hart (SIGKILL) — _save_all_sessions_on_shutdown()
+    # läuft dann NIE, der komplette laufende Verlauf (nicht nur der eine
+    # in-flight Turn) ist weg. Erklärt einen von Simon gemeldeten Kontext-
+    # verlust nach einem Neustart MITTEN in einem aktiven Gespräch (2026-07-31)
+    # — alle vorherigen erfolgreichen Restores liefen über scripts/
+    # auto_update.sh, das einen Neustart bewusst zurückstellt bis KEIN Client
+    # mehr verbunden ist (siehe dort), weshalb dieser Fall vorher nie auftrat.
+    # Jetzt umgekehrte Reihenfolge: erst der schnelle, synchrone Snapshot unter
+    # history_lock (braucht keine geschlossenen Verbindungen), danach erst
+    # server.close()/wait_closed() — ein noch laufender Turn kann den
+    # Shutdown weiterhin verzögern, aber nicht mehr den vorherigen Save
+    # verhindern.
+    server = await websockets.serve(
         handle_connection, HOST, PORT,
         ping_interval=30,
         ping_timeout=120,
         max_size=20 * 1024 * 1024,  # Default 1MiB reicht nicht für Bild-/PDF-Anhänge im Chat
-    ):
-        await stop_event.wait()
+    )
+    await stop_event.wait()
 
     print("[server] Shutdown-Signal empfangen — sichere Sessions...", flush=True)
     await loop.run_in_executor(None, _save_all_sessions_on_shutdown)
+
+    server.close()
+    await server.wait_closed()
+    print("[server] Shutdown abgeschlossen.", flush=True)
 
 
 if __name__ == "__main__":
