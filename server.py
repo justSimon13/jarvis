@@ -1290,6 +1290,15 @@ async def main():
     brain.sync()
     knowledge.rebuild_index()
     session_memory.migrate_sessions_to_messages()
+    # Beide Läufe idempotent, immer bei jedem Start (nicht nur einmalig) — siehe
+    # jeweilige Docstrings. clean_stored_content() repariert bereits gespeicherte
+    # Zeilen mit response-only Feldern (Vorfall 2026-07-31, "Extra inputs are not
+    # permitted"). repair_dangling_turns() räumt Turn-Reste auf, die ein harter
+    # Prozess-Abbruch (SIGKILL mitten in einem Call) hinterlassen haben kann —
+    # der turn_start_id-Rollback in pipeline.py greift dort nicht, weil kein
+    # Python-Exception-Handler mehr läuft.
+    session_memory.clean_stored_content()
+    session_memory.repair_dangling_turns()
     _load_history()
     stt.load_model()
     alarm_service.init(manager)
