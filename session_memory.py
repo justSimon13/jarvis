@@ -383,6 +383,48 @@ def _cursor_tab_key(category: str, tab_id: str) -> str:
     return tab_id if category != "voice" else ""
 
 
+# Erlaubte Felder je Block-Typ für die WIEDER AN DIE API GESCHICKTE Fassung eines
+# Content-Blocks (Request-Schema) — bewusst eine Allowlist, NICHT "alles außer
+# bekannten Störfeldern": Response-Objekte (final.content aus einem Streaming-
+# Response, siehe pipeline.py::_serialize_content) tragen zusätzliche,
+# response-only Felder, die das Request-Schema nicht kennt. Vorfall 2026-07-31:
+# ein TextBlock brachte ein `parsed_output`-Feld mit (vermutlich SDK-intern für
+# strukturierte Ausgaben) — beim WIEDER-Senden dieser Nachricht quittierte die
+# API JEDEN Folge-Call ab diesem Turn mit "Extra inputs are not permitted"
+# (400), der Chat war ab der entsprechenden Nachricht komplett unbenutzbar.
+# thinking/signature bewusst BEIDE behalten (nicht nur thinking) — bei
+# aktiviertem Thinking verlangt die API beim Fortsetzen eines Tool-Loops den
+# Block inkl. intakter signature zurück, sonst schlägt der NÄCHSTE Call fehl.
+# tool_result/image/document haben keinen Eintrag hier — die baut pipeline.py
+# selbst als reine, bereits minimale Dicts (nie aus .model_dump()), bleiben
+# unverändert durch.
+_BLOCK_ALLOWED_FIELDS = {
+    "text": {"type", "text"},
+    "tool_use": {"type", "id", "name", "input"},
+    "thinking": {"type", "thinking", "signature"},
+    "redacted_thinking": {"type", "data"},
+}
+
+
+def clean_content(content):
+    """Reduziert Content-Blöcke auf die für einen erneuten API-Request gültigen
+    Felder (siehe _BLOCK_ALLOWED_FIELDS) — zentrales Sicherheitsnetz auf der
+    Speicher-Ebene, wird von append_message() auf JEDE Nachricht angewendet
+    (nicht nur an der einen Aufrufstelle, die den Vorfall vom 2026-07-31
+    verursacht hat) und von clean_stored_content() für bereits gespeicherte
+    Zeilen. Unbekannte Block-Typen (z.B. tool_result/image/document) bleiben
+    unverändert — die werden nie aus SDK-Response-Objekten gebaut."""
+    if not isinstance(content, list):
+        return content
+    result = []
+    for b in content:
+        if isinstance(b, dict):
+            allowed = _BLOCK_ALLOWED_FIELDS.get(b.get("type"))
+            b = {k: v for k, v in b.items() if k in allowed} if allowed else b
+        result.append(b)
+    return result
+
+
 def append_message(category: str, tab_id: str, role: str, content, display_text: str | None = None,
                     attachments: list[dict] | None = None, client_name: str | None = None,
                     data_scope: str = "own", created_at: str | None = None) -> int:
@@ -392,9 +434,11 @@ def append_message(category: str, tab_id: str, role: str, content, display_text:
 
     content: exakt der Wert, der ins Anthropic-API-`content`-Feld ginge (String
     oder eine Liste reiner Dicts als Content-Blöcke) — wird hier JSON-encoded
-    gespeichert, nie verlustbehaftet geglättet. SDK-Objekte (z.B. final.content
-    aus einem Streaming-Response) müssen vom Aufrufer vorher in reine Dicts
-    umgewandelt werden (siehe pipeline.py::_serialize_content).
+    gespeichert, nie verlustbehaftet geglättet (aber siehe clean_content(): auf
+    API-gültige Felder REDUZIERT, response-only Felder werden entfernt). SDK-
+    Objekte (z.B. final.content aus einem Streaming-Response) müssen vom
+    Aufrufer vorher in reine Dicts umgewandelt werden (siehe pipeline.py::
+    _serialize_content) — das Feld-Filtern übernimmt dann diese Funktion.
 
     display_text: nur setzen wenn die UI-Anzeige vom API-Inhalt abweichen soll
     (z.B. Coding-Job-Ergebnis: kurze Version an die API, volle an die UI) — sonst
@@ -403,6 +447,7 @@ def append_message(category: str, tab_id: str, role: str, content, display_text:
     created_at: nur für die Migration alter sessions-Zeilen (dort ist nur das
     Session-Datum bekannt, nicht der echte Zeitpunkt jeder einzelnen Nachricht) —
     im Normalfall None, dann wird "jetzt" verwendet."""
+    content = clean_content(content)
     with _get_db() as conn:
         cur = conn.execute(
             "INSERT INTO messages (role, content, display_text, attachments, client_name, "
@@ -576,3 +621,116 @@ def migrate_sessions_to_messages() -> None:
             )
         migrated += 1
     print(f"[session] Migration: {migrated} alte Sessions nach messages übertragen.", flush=True)
+
+
+def clean_stored_content() -> None:
+    """Einmaliger, idempotenter Reparaturlauf beim Serverstart für bereits
+    gespeicherte messages-Zeilen, deren content noch response-only Felder trägt
+    (siehe clean_content()) — append_message() filtert das erst seit dem Fix vom
+    2026-07-31, ältere Zeilen (inkl. aller vor diesem Fix mit Sonnet/Opus/Fable
+    entstandenen tool_use-Turns) können noch die kaputte Fassung enthalten, die
+    beim erneuten Senden an die API mit 'Extra inputs are not permitted'
+    scheitert — ohne diesen Lauf bliebe ein bereits betroffener Chat auch nach
+    dem Code-Fix weiter unbenutzbar. Eine bereits saubere Zeile wird identisch
+    zurückgeschrieben (kein Diff), ein zweiter Lauf ist ein No-Op."""
+    with _get_db() as conn:
+        rows = conn.execute("SELECT id, content FROM messages").fetchall()
+    fixed = 0
+    for mid, content_json in rows:
+        try:
+            content = json.loads(content_json)
+        except Exception:
+            continue
+        cleaned = clean_content(content)
+        if cleaned != content:
+            with _get_db() as conn:
+                conn.execute(
+                    "UPDATE messages SET content = ? WHERE id = ?",
+                    (json.dumps(cleaned, ensure_ascii=False), mid),
+                )
+            fixed += 1
+    if fixed:
+        print(f"[session] Content-Bereinigung: {fixed} Nachricht(en) von response-only Feldern befreit.", flush=True)
+
+
+def _last_clean_assistant_id(rows: list[tuple], floor: int) -> int:
+    """Höchste id einer 'sauber abgeschlossenen' assistant-Nachricht in rows
+    (content ist ein reiner String — genau die Form, in der pipeline.py einen
+    normal beendeten Turn (end_turn/refusal/max_tokens) persistiert, siehe
+    process_text()/_run_llm()) — alles danach ist ein unvollständiger Rest.
+    floor, wenn keine gefunden wird (kein abgeschlossener Turn seit dem Cursor)."""
+    last = floor
+    for mid, role, content_json in rows:
+        if role != "assistant":
+            continue
+        try:
+            content = json.loads(content_json)
+        except Exception:
+            continue
+        if isinstance(content, str):
+            last = mid
+    return last
+
+
+def repair_dangling_turns() -> None:
+    """Einmaliger, idempotenter Reparaturlauf beim Serverstart für Turns, die
+    durch einen HARTEN Prozess-Abbruch (SIGKILL, z.B. ein Server-Neustart
+    WÄHREND eines laufenden LLM-/Tool-Calls) unvollständig in messages hängen
+    geblieben sind. Der turn_start_id-Rollback in pipeline.py::process_text()
+    greift nur bei einer Python-Exception — stirbt der Prozess hart, läuft kein
+    except-Block mehr, ein bereits abgeschlossener Tool-Runden-Rest (z.B.
+    assistant(tool_use)+user(tool_result) ohne folgende Antwort, oder sogar nur
+    ein assistant(tool_use) ohne jeden tool_result) bleibt stehen. Der NÄCHSTE
+    Turn würde dort eine weitere 'user'-Nachricht anhängen — zwei
+    aufeinanderfolgende 'user'-Rollen, dieselbe 'roles must alternate'-Klasse
+    wie der Vorfall vom 2026-07-22, nur über SQLite reproduzierbar. Läuft NACH
+    migrate_sessions_to_messages() (findet auch dort entstandene unsaubere
+    Enden), vor dem eigentlichen Server-Start — zu diesem Zeitpunkt läuft
+    garantiert kein Turn mehr, jeder nicht sauber abgeschlossene Rest ist per
+    Definition ein Überbleibsel von vor dem Neustart."""
+    with _get_db() as conn:
+        web_tab_ids = [r[0] for r in conn.execute(
+            "SELECT DISTINCT tab_id FROM messages WHERE category = 'web'"
+        ).fetchall()]
+    repaired = 0
+    for tab_id in web_tab_ids:
+        if _repair_one("web", tab_id):
+            repaired += 1
+    if _repair_one("voice", ""):
+        repaired += 1
+    if repaired:
+        print(f"[session] Reparatur: {repaired} unvollständige(r) Turn(s) beim Start bereinigt.", flush=True)
+
+
+def _repair_one(category: str, tab_id: str) -> bool:
+    cursor = get_cursor(category, tab_id)
+    with _get_db() as conn:
+        if category == "voice":
+            rows = conn.execute(
+                "SELECT id, role, content FROM messages WHERE category = ? AND id > ? ORDER BY id",
+                (category, cursor),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, role, content FROM messages WHERE category = ? AND tab_id = ? AND id > ? ORDER BY id",
+                (category, tab_id, cursor),
+            ).fetchall()
+    if not rows:
+        return False
+    last_clean_id = _last_clean_assistant_id(rows, cursor)
+    if rows[-1][0] == last_clean_id:
+        return False
+    # NICHT delete_messages_after() — die filtert exakt auf tab_id (korrekt fürs
+    # Turn-Rollback, siehe dortige Docstring), aber bei 'voice' wurden die zu
+    # löschenden Zeilen ggf. unter VERSCHIEDENEN echten Verbindungs-tab_ids
+    # geschrieben (Sentinel '' matcht dort NIE etwas — build_history_window()
+    # ignoriert tab_id beim Lesen für 'voice' aus demselben Grund, siehe dort).
+    with _get_db() as conn:
+        if category == "voice":
+            conn.execute("DELETE FROM messages WHERE category = ? AND id > ?", (category, last_clean_id))
+        else:
+            conn.execute(
+                "DELETE FROM messages WHERE category = ? AND tab_id = ? AND id > ?",
+                (category, tab_id, last_clean_id),
+            )
+    return True

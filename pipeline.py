@@ -59,7 +59,12 @@ def _serialize_content(content):
     """content-Wert für session_memory.append_message(): String bleibt String,
     reine Dicts (z.B. selbstgebaute tool_result-Blöcke) bleiben unverändert, eine
     Liste von Anthropic-SDK-Content-Blöcken (Pydantic-Objekte, z.B. final.content
-    aus einem Streaming-Response) wird zu reinen Dicts für die JSON-Persistierung."""
+    aus einem Streaming-Response) wird zu reinen Dicts konvertiert (`.model_dump()`).
+    NUR die Objekt→Dict-Konvertierung — das Filtern auf API-gültige Felder (ein
+    `.model_dump()` bringt response-only Felder wie `parsed_output` mit, die das
+    Request-Schema nicht kennt, siehe Vorfall 2026-07-31) übernimmt zentral
+    session_memory.append_message()/clean_content(), nicht diese Funktion — sonst
+    müssten zwei Allowlists in zwei Dateien synchron gehalten werden."""
     if isinstance(content, list):
         return [b.model_dump() if hasattr(b, "model_dump") else b for b in content]
     return content
@@ -395,7 +400,16 @@ class JarvisPipeline:
             )
             return
         for i, (a, b) in enumerate(zip(sqlite_snapshot, legacy)):
-            if a.get("role") != b.get("role") or a.get("content") != b.get("content"):
+            # b["content"] kann rohe Anthropic-SDK-Objekte enthalten (self.history
+            # hält client_messages unverändert, siehe process_text) — ohne
+            # Normalisierung wäre JEDER tool_use-Turn ein "Mismatch" (Pydantic-
+            # Objekt != Dict), das hätte den eigentlich informativen Fall (2026-07-31:
+            # ein per .model_dump() reingeleaktes `parsed_output`-Feld) im
+            # strukturellen Rauschen untergehen lassen — genau das ist beim
+            # produktiven Vorfall passiert. Beide Seiten deshalb über denselben
+            # _serialize_content() laufen lassen, bevor verglichen wird.
+            b_content = _serialize_content(b.get("content"))
+            if a.get("role") != b.get("role") or a.get("content") != b_content:
                 print(
                     f"[migration-verify] MISMATCH bei Index {i} (tab={self._tab_id!r}): "
                     f"rollen sqlite={a.get('role')!r} legacy={b.get('role')!r}", flush=True,
