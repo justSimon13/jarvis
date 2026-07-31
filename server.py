@@ -150,6 +150,9 @@ def _deliver_job_result_to_chat(delivery: dict) -> None:
     with history_lock:
         _get_display_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_full"]})
         _get_api_history(category, tab_id).append({"role": "assistant", "content": delivery["chat_text_short"]})
+    session_memory.append_message(
+        category, tab_id, "assistant", delivery["chat_text_short"], display_text=delivery["chat_text_full"],
+    )
 
     cb = manager.get_event_callback_for_tab(tab_id)
     if cb:
@@ -247,8 +250,12 @@ def _check_satellite_timeout() -> bool:
                     "role": "system",
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                 })
+        old_cursor = session_memory.advance_cursor("voice", "")
         if old:
-            session_memory.save(old, clients=sorted(_session_clients["voice"]), category="voice")
+            session_memory.save(
+                old, clients=sorted(_session_clients["voice"]), category="voice",
+                first_message_id=old_cursor + 1,
+            )
         _session_clients["voice"] = set()
         hours = (now - _last_activity_ts) / 3600
         print(f"[server] Neue Session nach {hours:.1f}h Inaktivität (Satellite)", flush=True)
@@ -279,15 +286,22 @@ async def _persist_web_turn(loop, tab_id: str) -> None:
     Turn-Ende verzögert sein konnte (nächster freier Event-Loop-Tick). Stirbt der Prozess
     (Absturz, hartes Kill, oder ein Neustart der nicht auf den Task wartet) in genau
     diesem Fenster, geht der zuletzt abgeschlossene Turn nie in sessions.db — beim
-    Reconnect stellt find_active_session() dann einen veralteten Stand wieder her, dem
-    Modell fehlt der Kontext, obwohl der clientseitige Chatverlauf (rein im Browser-/
+    Reconnect stellte find_active_session() dann einen veralteten Stand wieder her, dem
+    Modell fehlte der Kontext, obwohl der clientseitige Chatverlauf (rein im Browser-/
     Tauri-Zustand, nie neu vom Server geladen) unverändert weiter alles anzeigt und so
     Kontinuität vortäuscht. Alle anderen session_memory.upsert()-Aufrufstellen in dieser
     Datei (SESSION_RESET/SESSION_LOAD) awaiten den Executor-Call bereits direkt — dieser
     hier war die einzige Ausnahme. _run_text_turn() läuft selbst schon als eigener,
     losgelöster Task (siehe _spawn_turn) — das Awaiten hier verzögert weder die
     Nachrichten-Schleife der Verbindung noch die an den Client gestreamte Antwort (die
-    steht zu diesem Zeitpunkt längst raus), schließt aber das Zeitfenster fast vollständig."""
+    steht zu diesem Zeitpunkt längst raus), schließt aber das Zeitfenster fast vollständig.
+
+    Nachtrag (messages/threads-Migration): der Reconnect-Restore über
+    find_active_session() (der hier beschriebene Anlass) existiert seitdem gar nicht
+    mehr — pipeline.py baut das Prompt-Fenster jetzt bei JEDEM Turn frisch aus
+    session_memory.build_history_window() (SQLite), nicht nur beim Reconnect. Dieser
+    Fix bleibt trotzdem in Kraft: die Zeile hier aktualisiert weiterhin die (jetzt
+    Legacy-)sessions-Tabelle, awaited bleibt awaited."""
     with history_lock:
         hist_snapshot = list(_get_api_history("web", tab_id))
         clients_snapshot = sorted(_get_session_clients("web", tab_id))
@@ -869,30 +883,15 @@ async def handle_connection(websocket):
     # zugewiesen (vorher konstruiert hätte sie fälschlich immer "voice" bekommen).
     category = _category_for_role(role)
 
-    # Web-Tab reconnected mit einer tab_id, die der Prozess noch nicht kennt (z.B.
-    # nach einem Server-Neustart) — Verlauf aus sessions.db zurückholen, statt bei
-    # null anzufangen. Der Tab hatte bisher über einen Neustart hinweg keine stabile
-    # Identität, obwohl der Verlauf durch die laufenden Upserts längst in der DB lag
-    # (2026-07-22: 'der Chat sollte schon wieder mitgegeben werden').
-    if category == "web" and tab_id not in api_histories["web"]:
-        restored = session_memory.find_active_session(tab_id)
-        if restored:
-            api_hist = _get_api_history(category, tab_id)
-            disp_hist = _get_display_history(category, tab_id)
-            for msg in restored["transcript"]:
-                text = msg.get("text", "")
-                if not text:
-                    continue
-                role_ = msg.get("role")
-                # api_hist braucht den Eintrag auch bei einem reinen Tool-Platzhalter
-                # (sonst bricht die Rollen-Abwechslung beim nächsten LLM-Call), aber
-                # disp_hist zeigt sowas nie als eigene Chat-Blase — Platzhalter wie
-                # "[tool_result]" waren nie echter Gesprächsinhalt.
-                api_hist.append({"role": role_, "content": text})
-                if not session_memory.is_placeholder_text(text):
-                    disp_hist.append({"role": role_, "content": text, "client": "jarvis-web"})
-            _set_active_session_id(tab_id, restored["id"])
-            print(f"[server] Web-Tab {tab_id[:8]}: {len(api_hist)} Nachrichten aus Session {restored['id']} wiederhergestellt.", flush=True)
+    # Ein Web-Tab-Reconnect (z.B. nach einem Server-Neustart) braucht keinen
+    # manuellen Verlaufs-Restore mehr: pipeline.py baut das Prompt-Fenster jetzt
+    # bei jedem Turn frisch aus session_memory.build_history_window() (SQLite,
+    # überlebt einen Neustart) statt aus diesem In-Memory-Dict — der frühere
+    # Restore-Block (fand statt über session_memory.find_active_session()) ist
+    # damit überflüssig geworden, nicht nur redundant, siehe ROADMAP.md/
+    # Migrationsplan messages/threads. api_histories["web"] startet für einen
+    # reconnectenden Tab entsprechend leer und dient nur noch als temporäres
+    # Vergleichs-Gerüst (siehe pipeline.py::_verify_reconstruction).
 
     pipeline = JarvisPipeline(
         client_id=client_id,
@@ -1150,6 +1149,13 @@ async def handle_connection(websocket):
                                 "role": "system",
                                 "timestamp": datetime.utcnow().isoformat() + "Z",
                             })
+                    # Ersatz für "Liste leeren" im messages-Strom: Cursor auf den
+                    # aktuellen Stand vorrücken statt Zeilen zu löschen (siehe
+                    # session_memory.advance_cursor). Vor dem Vorrücken gelesen,
+                    # damit old_cursor die Grenze VOR dieser (jetzt beendeten)
+                    # Session markiert — an save()/upsert() weitergereicht, damit
+                    # eine spätere SESSION_LOAD-Fortsetzung den richtigen Punkt kennt.
+                    old_cursor = await loop.run_in_executor(None, session_memory.advance_cursor, category, tab_id)
                     # Nur an diesen einen Client (Tab/Raum) — bei "web" ist die History
                     # jetzt pro Tab isoliert, andere Tabs sind von diesem Reset nicht betroffen.
                     send_json({"type": P.SESSION_BREAK})
@@ -1160,12 +1166,15 @@ async def handle_connection(websocket):
                             # noch finalisieren (Lernextraktion) statt blind neu einzufügen.
                             await loop.run_in_executor(
                                 None, session_memory.upsert, _get_active_session_id(tab_id),
-                                old_history, clients_snapshot, category, True,
+                                old_history, clients_snapshot, category, True, tab_id, old_cursor + 1,
                             )
                             _set_active_session_id(tab_id, None)
                         else:
                             await loop.run_in_executor(
-                                None, lambda: session_memory.save(old_history, clients=clients_snapshot, category=category)
+                                None, lambda: session_memory.save(
+                                    old_history, clients=clients_snapshot, category=category,
+                                    first_message_id=old_cursor + 1,
+                                )
                             )
                     _reset_session_clients(category, tab_id)
                     print(f"[server] Session ({category}) manuell zurückgesetzt.", flush=True)
@@ -1178,36 +1187,57 @@ async def handle_connection(websocket):
                     send_json({"type": P.SESSION_DELETE_ACK, "session_id": sid, "ok": ok})
                 elif data.get("type") == P.SESSION_LOAD:
                     sid = data.get("session_id")
-                    # Aktuelle Session (eigener Tab/Raum) abschließen falls nicht leer
-                    with history_lock:
-                        old = list(_get_api_history(category, tab_id))
-                    if old:
-                        clients_snapshot = sorted(_get_session_clients(category, tab_id))
+                    # Cross-Tab-Fortsetzung ist ein Thread-Feature und hier bewusst nicht
+                    # unterstützt (siehe ROADMAP.md/Migrationsplan messages/threads) — VOR
+                    # jeder Änderung geprüft, damit ein fremder tab_id-Versuch komplett
+                    # folgenlos bleibt statt einen halben Zustand zu hinterlassen.
+                    allowed = await loop.run_in_executor(None, session_memory.session_belongs_to_tab, sid, category, tab_id)
+                    if not allowed:
+                        send_json({"type": P.ERROR, "message": "Diese Session gehört zu einem anderen Tab und kann hier nicht geladen werden."})
+                    else:
+                        # Aktuelle Session (eigener Tab/Raum) abschließen falls nicht leer
+                        with history_lock:
+                            old = list(_get_api_history(category, tab_id))
+                        old_cursor = await loop.run_in_executor(None, session_memory.get_cursor, category, tab_id)
+                        if old:
+                            clients_snapshot = sorted(_get_session_clients(category, tab_id))
+                            if category == "web":
+                                await loop.run_in_executor(
+                                    None, session_memory.upsert, _get_active_session_id(tab_id),
+                                    old, clients_snapshot, category, True, tab_id, old_cursor + 1,
+                                )
+                            else:
+                                await loop.run_in_executor(
+                                    None, lambda: session_memory.save(
+                                        old, clients=clients_snapshot, category=category,
+                                        first_message_id=old_cursor + 1,
+                                    )
+                                )
+                        _reset_session_clients(category, tab_id)
+                        # Cursor auf den Punkt vor der geladenen Session zurücksetzen — das
+                        # messages-Fenster (künftige LLM-Runden) umfasst danach automatisch
+                        # genau diese alte Session plus alles, was seither in diesem Tab
+                        # dazukam ("fortsetzen"). Kann False liefern (Alt-Session ohne
+                        # first_message_id) — dann bleibt der Cursor unverändert, nur die
+                        # Legacy-Anzeige unten wird trotzdem geladen.
+                        rewound = await loop.run_in_executor(None, session_memory.rewind_cursor_to_session, category, tab_id, sid)
+                        if not rewound:
+                            print(f"[server] SESSION_LOAD: Session {sid} hat keine first_message_id — messages-Fenster bleibt unverändert.", flush=True)
+                        # Transcript laden und als neue api_history (eigener Tab/Raum) setzen —
+                        # weitere Nachrichten in diesem Tab schreiben ab jetzt die GELADENE
+                        # Zeile fort (statt eine neue anzulegen), das ist ja "fortsetzen".
+                        transcript = await loop.run_in_executor(None, session_memory.get_transcript, sid)
+                        with history_lock:
+                            hist = _get_api_history(category, tab_id)
+                            hist.clear()
+                            for msg in transcript:
+                                hist.append({"role": msg["role"], "content": msg["text"]})
+                            # Rolling Window anwenden
+                            if len(hist) > _ROLLING_WINDOW:
+                                del hist[:len(hist) - _ROLLING_WINDOW]
                         if category == "web":
-                            await loop.run_in_executor(
-                                None, session_memory.upsert, _get_active_session_id(tab_id),
-                                old, clients_snapshot, category, True,
-                            )
-                        else:
-                            await loop.run_in_executor(
-                                None, lambda: session_memory.save(old, clients=clients_snapshot, category=category)
-                            )
-                    _reset_session_clients(category, tab_id)
-                    # Transcript laden und als neue api_history (eigener Tab/Raum) setzen —
-                    # weitere Nachrichten in diesem Tab schreiben ab jetzt die GELADENE
-                    # Zeile fort (statt eine neue anzulegen), das ist ja "fortsetzen".
-                    transcript = await loop.run_in_executor(None, session_memory.get_transcript, sid)
-                    with history_lock:
-                        hist = _get_api_history(category, tab_id)
-                        hist.clear()
-                        for msg in transcript:
-                            hist.append({"role": msg["role"], "content": msg["text"]})
-                        # Rolling Window anwenden
-                        if len(hist) > _ROLLING_WINDOW:
-                            del hist[:len(hist) - _ROLLING_WINDOW]
-                    if category == "web":
-                        _set_active_session_id(tab_id, sid)
-                    send_json({"type": P.SESSION_LOAD_ACK, "messages": transcript})
+                            _set_active_session_id(tab_id, sid)
+                        send_json({"type": P.SESSION_LOAD_ACK, "messages": transcript})
                 elif data.get("type") == P.PING:
                     await websocket.send(json.dumps({"type": P.PONG}))
     except websockets.exceptions.ConnectionClosed:
@@ -1259,6 +1289,7 @@ def _save_all_sessions_on_shutdown():
 async def main():
     brain.sync()
     knowledge.rebuild_index()
+    session_memory.migrate_sessions_to_messages()
     _load_history()
     stt.load_model()
     alarm_service.init(manager)

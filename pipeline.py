@@ -55,6 +55,16 @@ _TRUNCATION_HINTS = {
 _DEFAULT_TRUNCATION_HINT = "Bitte erneut versuchen, ggf. mit kürzerem Inhalt oder aufgeteilt auf mehrere Aufrufe."
 
 
+def _serialize_content(content):
+    """content-Wert für session_memory.append_message(): String bleibt String,
+    reine Dicts (z.B. selbstgebaute tool_result-Blöcke) bleiben unverändert, eine
+    Liste von Anthropic-SDK-Content-Blöcken (Pydantic-Objekte, z.B. final.content
+    aus einem Streaming-Response) wird zu reinen Dicts für die JSON-Persistierung."""
+    if isinstance(content, list):
+        return [b.model_dump() if hasattr(b, "model_dump") else b for b in content]
+    return content
+
+
 def _is_noise(text: str) -> bool:
     """True wenn text keine bedeutsame Sprache enthält (nur Geräuschbeschreibungen, Kurzfüller etc.)"""
     if not text:
@@ -263,9 +273,34 @@ class JarvisPipeline:
                 ]
             else:
                 content = text
+
+            category = self._category or "voice"
+            tab_id = self._tab_id or self.client_id
+
+            # turn_start_id VOR dem Persistieren der User-Nachricht gemerkt — bei
+            # Totalausfall der Runde (Exception oder leere Rückgabe unten) löscht
+            # delete_messages_after() ALLES, was diese Runde durabel geschrieben
+            # hat (auch bereits erfolgreiche Tool-Runden), nicht nur die führende
+            # User-Nachricht (siehe ROADMAP.md/Migrationsplan: sonst bliebe bei
+            # einem Fehlschlag in Runde 2+ eines Tool-Loops ein assistant(tool_use)/
+            # user(tool_result)-Rest ohne Fortsetzung stehen — der NÄCHSTE Turn
+            # hängt erneut 'user' an, exakt der "roles must alternate"-Fehler vom
+            # 2026-07-22, nur über SQLite reproduziert).
+            turn_start_id = session_memory.max_message_id(category, tab_id)
+
             with self._history_lock:
                 self.history.append({"role": "user", "content": content})
-                history_snapshot = list(self.history)
+            session_memory.append_message(
+                category, tab_id, "user", content, client_name=self._room,
+                attachments=(
+                    [{"filename": a.get("filename"), "mime_type": a.get("mime_type")} for a in attachments]
+                    if attachments else None
+                ),
+            )
+            history_snapshot = session_memory.build_history_window(category, tab_id)
+            history_snapshot = llm.compress_attachment_history(history_snapshot)
+            history_snapshot = llm.compress_tool_history(history_snapshot)
+            self._verify_reconstruction(history_snapshot)
 
             # Beim ersten Turn der Session: Module erkennen
             if self._active_modules is None:
@@ -275,7 +310,20 @@ class JarvisPipeline:
             system_dynamic = context.build_dynamic_prompt(room=self._room, active_modules=self._active_modules)
 
             self._emit(P.STATE, state="thinking")
-            response, final_messages, turn_cost = self._run_llm(system_static, system_dynamic, history_snapshot, use_tts=use_tts)
+            try:
+                response, final_messages, turn_cost = self._run_llm(
+                    system_static, system_dynamic, history_snapshot, use_tts=use_tts,
+                    category=category, tab_id=tab_id,
+                )
+            except Exception:
+                session_memory.delete_messages_after(category, tab_id, turn_start_id)
+                with self._history_lock:
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history.pop()
+                raise
+
+            if not final_messages and not response:
+                session_memory.delete_messages_after(category, tab_id, turn_start_id)
 
             with self._history_lock:
                 if final_messages:
@@ -324,6 +372,36 @@ class JarvisPipeline:
 
             self._emit(P.STATE, state="idle")
 
+    def _verify_reconstruction(self, sqlite_snapshot: list[dict]):
+        """Temporäres Vergleichs-Gerüst für den Umstieg auf SQLite als Prompt-
+        Quelle (siehe ROADMAP.md/Migrationsplan messages/threads) — self.history
+        bleibt bewusst unverändert als Legacy-Vergleichswert bestehen (mit allen
+        eigenen Mutationen/Kompressionen), NICHT mehr für die tatsächliche
+        API-Runde verwendet. Nur loggt, blockiert nie. Entfernen ist ein eigener,
+        späterer Aufräum-Schritt (self.history speist bis dahin weiterhin die
+        alte sessions-Tabelle/learning.process_session, siehe save_session())."""
+        with self._history_lock:
+            legacy = list(self.history)
+        if not legacy and sqlite_snapshot:
+            # Legacy-Gerüst ist nach einem Reconnect/Neustart leer (der alte
+            # Web-Tab-Restore-Block in server.py wurde entfernt — überflüssig,
+            # seit build_history_window() frisch aus SQLite liest) — erwartete,
+            # bekannte Abweichung, kein Bug-Signal.
+            return
+        if len(sqlite_snapshot) != len(legacy):
+            print(
+                f"[migration-verify] MISMATCH Länge: sqlite={len(sqlite_snapshot)} legacy={len(legacy)} "
+                f"(tab={self._tab_id!r})", flush=True,
+            )
+            return
+        for i, (a, b) in enumerate(zip(sqlite_snapshot, legacy)):
+            if a.get("role") != b.get("role") or a.get("content") != b.get("content"):
+                print(
+                    f"[migration-verify] MISMATCH bei Index {i} (tab={self._tab_id!r}): "
+                    f"rollen sqlite={a.get('role')!r} legacy={b.get('role')!r}", flush=True,
+                )
+                return
+
     def save_session(self):
         with self._history_lock:
             snapshot = list(self.history)
@@ -340,6 +418,8 @@ class JarvisPipeline:
         system_dynamic: str,
         messages: list[dict],
         use_tts: bool = True,
+        category: str = "voice",
+        tab_id: str = "",
     ) -> tuple[str, list[dict], float]:
         client_messages = messages.copy()
         full_response = ""
@@ -479,10 +559,12 @@ class JarvisPipeline:
                 full_response = turn_text
                 if turn_text:
                     client_messages = client_messages + [{"role": "assistant", "content": turn_text}]
+                    session_memory.append_message(category, tab_id, "assistant", turn_text)
                 break
 
             if final.stop_reason == "tool_use":
                 client_messages = client_messages + [{"role": "assistant", "content": final.content}]
+                session_memory.append_message(category, tab_id, "assistant", _serialize_content(final.content))
                 tool_results = []
                 for block in final.content:
                     if block.type == "tool_use":
@@ -502,6 +584,7 @@ class JarvisPipeline:
                             "content": result,
                         })
                 client_messages = client_messages + [{"role": "user", "content": tool_results}]
+                session_memory.append_message(category, tab_id, "user", tool_results)
                 client_messages = llm.compress_tool_history(client_messages)
                 self._emit(P.STATE, state="thinking")
 
