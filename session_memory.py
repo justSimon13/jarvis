@@ -105,6 +105,16 @@ def _get_db() -> sqlite3.Connection:
             data_scope        TEXT NOT NULL DEFAULT 'own'
         )
     """)
+    try:
+        # Getrennt von last_activity_at (das bei jeder Nachricht weiterläuft) —
+        # einmalig bei Anlage gesetzt, nie wieder verändert. Nötig für den
+        # Zeit-Platzhalter eines noch unbenannten Threads ("Unbenannt · HH:MM",
+        # siehe Thread-Umbau Teil A) — mit last_activity_at würde sich der
+        # angezeigte Platzhalter mit jeder neuen Nachricht ändern.
+        conn.execute("ALTER TABLE threads ADD COLUMN created_at TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS daily_summaries (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -477,6 +487,71 @@ def append_message(category: str, tab_id: str, role: str, content, display_text:
     return cur.lastrowid
 
 
+def append_or_extend_message(category: str, tab_id: str, text_for_api: str, text_for_display: str,
+                              thread_id: int | None = None, project_id: int | None = None) -> int:
+    """Für Nachrichten, die AUSSERHALB einer Pipeline-Runde eintreffen (z.B. ein asynchron
+    fertig gewordener Coding-Job, siehe server.py::_deliver_job_result_to_chat) — der
+    Normalfall dort ist, dass der Nutzer seit dem Start nichts mehr geschrieben hat (man
+    startet einen Job und wartet), die letzte Zeile des Fensters also schon 'assistant' ist.
+    Eine zweite assistant-Zeile in Folge würde die Rollen-Abwechslung brechen (die API lehnt
+    das mit 400 ab) — und das Ergebnis IM SPEZIELLEN würde dann bei jedem Servertart aus dem
+    Kontext fallen (siehe repair_dangling_turns/clean_stored_content), es dürfte also gar nicht
+    erst entstehen.
+
+    Ist die letzte Zeile des Fensters (thread-basiert bei gesetztem thread_id, sonst
+    cursor-basiert wie build_history_window()) bereits 'assistant' mit reinem String-content,
+    wird stattdessen ANGEHÄNGT (content/display_text um einen Absatz erweitert, per UPDATE) —
+    zweite, eng begrenzte Ausnahme vom Anhängen-nie-mutieren-Prinzip neben dem Turn-Rollback.
+    Bleibt dabei ein sauberer Rundenabschluss (weiterhin reiner String-content) — verträglich
+    mit der Rundenerkennung (get_round_bounds()). Ist die letzte Zeile 'user' oder es gibt noch
+    keine im Fenster, wird ganz normal eine neue assistant-Zeile angelegt (append_message()).
+
+    Gibt die id der (neuen oder erweiterten) Zeile zurück."""
+    with _get_db() as conn:
+        if thread_id is not None:
+            row = conn.execute(
+                "SELECT id, role, content, display_text FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+        else:
+            cursor = get_cursor(category, tab_id)
+            if category == "voice":
+                row = conn.execute(
+                    "SELECT id, role, content, display_text FROM messages WHERE category = ? AND id > ? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (category, cursor),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id, role, content, display_text FROM messages WHERE category = ? AND tab_id = ? "
+                    "AND id > ? ORDER BY id DESC LIMIT 1",
+                    (category, tab_id, cursor),
+                ).fetchone()
+
+        if row:
+            last_id, last_role, last_content_json, last_display_text = row
+            try:
+                last_content = json.loads(last_content_json)
+            except Exception:
+                last_content = None
+            if last_role == "assistant" and isinstance(last_content, str):
+                new_content = last_content + "\n\n" + text_for_api
+                new_display = (last_display_text or last_content) + "\n\n" + text_for_display
+                conn.execute(
+                    "UPDATE messages SET content = ?, display_text = ? WHERE id = ?",
+                    (json.dumps(new_content, ensure_ascii=False), new_display, last_id),
+                )
+                if thread_id is not None:
+                    conn.execute(
+                        "UPDATE threads SET last_activity_at = ? WHERE id = ?",
+                        (datetime.now().isoformat(), thread_id),
+                    )
+                return last_id
+
+    return append_message(category, tab_id, "assistant", text_for_api, display_text=text_for_display,
+                           thread_id=thread_id, project_id=project_id)
+
+
 def max_message_id(category: str, tab_id: str) -> int:
     """Höchste messages.id für (category, tab_id) — 0 wenn noch keine existiert.
     Für 'voice' kategorie-weit (siehe _cursor_tab_key)."""
@@ -770,15 +845,22 @@ def _repair_one(category: str, tab_id: str) -> bool:
 # eines Threads löscht/entkoppelt NIE die schon damit verknüpften Nachrichten.
 # Rein manuell in diesem Durchgang: kein automatisches Erkennen/Zuordnen.
 
-def create_thread(title: str, project_id: int | None = None, data_scope: str = "own") -> int:
+def create_thread(title: str | None = None, project_id: int | None = None, data_scope: str = "own") -> int:
     """last_activity_at wird SOFORT bei der Anlage gesetzt (nicht erst bei der
     ersten Nachricht) — sonst sortiert ein frisch angelegter, noch unbenutzter
-    Thread in list_threads() als NULL unvorhersehbar ein."""
+    Thread in list_threads() als NULL unvorhersehbar ein.
+
+    title=None (Thread-Umbau Teil A, seitdem der Normalfall — "+ Neuer Chat"
+    legt immer unbenannt an, Umbenennen ist ein separater, späterer Schritt in
+    der Seitenleiste): created_at wird trotzdem gesetzt, damit die UI einen
+    stabilen Zeit-Platzhalter ("Unbenannt · HH:MM") anzeigen kann, der sich
+    NICHT mit jeder neuen Nachricht ändert (anders als last_activity_at)."""
     now = datetime.now().isoformat()
     with _get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO threads (title, project_id, last_activity_at, data_scope) VALUES (?, ?, ?, ?)",
-            (title, project_id, now, data_scope),
+            "INSERT INTO threads (title, project_id, last_activity_at, created_at, data_scope) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (title, project_id, now, now, data_scope),
         )
     return cur.lastrowid
 
@@ -803,14 +885,18 @@ def delete_thread(thread_id: int) -> None:
 
 
 def list_threads(limit: int = 50) -> list[dict]:
-    """Für die Sidebar (jarvis-web) — neueste Aktivität zuerst."""
+    """Für die Sidebar (jarvis-web) — neueste Aktivität zuerst. created_at fürs
+    Rendern des Zeit-Platzhalters unbenannter Threads ("Unbenannt · HH:MM")."""
     with _get_db() as conn:
         rows = conn.execute(
-            "SELECT id, title, project_id, last_activity_at FROM threads "
+            "SELECT id, title, project_id, last_activity_at, created_at FROM threads "
             "ORDER BY last_activity_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [{"id": r[0], "title": r[1], "project_id": r[2], "last_activity_at": r[3]} for r in rows]
+    return [
+        {"id": r[0], "title": r[1], "project_id": r[2], "last_activity_at": r[3], "created_at": r[4]}
+        for r in rows
+    ]
 
 
 def get_thread_project_id(thread_id: int) -> int | None:
@@ -830,14 +916,18 @@ def get_thread_messages(thread_id: int) -> list[dict]:
     hier nur neu zusammengesetzt (_extract_text() kannte display_text bisher
     nicht). Reine Platzhalter (is_placeholder_text(), z.B. '[tool_result]')
     werden übersprungen — waren nie echter Gesprächsinhalt (siehe Vorfall
-    2026-07-23, is_placeholder_text()-Docstring)."""
+    2026-07-23, is_placeholder_text()-Docstring).
+
+    id (Thread-Umbau Teil A): die echte messages.id je Eintrag — das Frontend
+    braucht sie, um eine sichtbare User-Bubble als Verschieben-Anker zu
+    identifizieren (move_round()/move_from_here() unten)."""
     with _get_db() as conn:
         rows = conn.execute(
-            "SELECT role, content, display_text FROM messages WHERE thread_id = ? ORDER BY id",
+            "SELECT id, role, content, display_text FROM messages WHERE thread_id = ? ORDER BY id",
             (thread_id,),
         ).fetchall()
     result = []
-    for role, content_json, display_text in rows:
+    for mid, role, content_json, display_text in rows:
         text = display_text
         if not text:
             try:
@@ -846,5 +936,147 @@ def get_thread_messages(thread_id: int) -> list[dict]:
                 continue
         if not text or is_placeholder_text(text):
             continue
-        result.append({"role": role, "text": text})
+        result.append({"id": mid, "role": role, "text": text})
     return result
+
+
+# ── Runden-Erkennung + Verschieben/Zusammenführen (Thread-Umbau Teil A) ────────
+#
+# Eine Runde beginnt bei einer role='user'-Zeile, deren content NICHT
+# ausschließlich aus tool_result-Blöcken besteht (echte neue Nutzer-Eingabe,
+# nicht die Fortsetzung eines Tool-Loops), und endet bei der ersten
+# darauffolgenden role='assistant'-Zeile mit reinem String-content (derselbe
+# "sauberer Rundenabschluss"-Test wie _last_clean_assistant_id() oben). Dank
+# des end_turn-Leerstring-Fixes (pipeline.py) und append_or_extend_message()
+# (statt einer zweiten assistant-Zeile in Folge) ist das ein verlässlicher
+# Test: jede abgeschlossene Runde ist in sich stimmig (beginnt user, endet
+# assistant) — das Verschieben EINES ODER MEHRERER vollständiger Runden aus/in
+# eine id-geordnete Sequenz erhält die Rollen-Abwechslung deshalb immer, egal
+# an welcher Stelle.
+
+def _is_tool_result_content(content) -> bool:
+    """True nur für die Form, in der pipeline.py einen tool_result-Block
+    anhängt (siehe _run_llm()) — eine Liste, in der JEDER Block type=='tool_result'
+    ist. Eine echte neue User-Eingabe (auch mit Anhängen) hat nie diese Form."""
+    return (
+        isinstance(content, list) and bool(content)
+        and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    )
+
+
+def get_round_bounds(message_id: int) -> tuple[int, int] | None:
+    """Prüft, ob message_id ein gültiger Rundenanfang ist (role='user', nicht
+    tool_result-förmig) und findet, falls ja, das Rundenende — die id der
+    ersten darauffolgenden role='assistant'-Zeile mit reinem String-content,
+    IM SELBEN thread_id. None wenn message_id kein gültiger Rundenanfang ist,
+    oder die Runde noch nicht sauber abgeschlossen ist (z.B. gerade live in
+    Bearbeitung) — ein Verschieben ist dann nicht möglich."""
+    with _get_db() as conn:
+        start_row = conn.execute(
+            "SELECT role, content, thread_id FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not start_row:
+            return None
+        role, content_json, thread_id = start_row
+        if role != "user" or thread_id is None:
+            return None
+        try:
+            content = json.loads(content_json)
+        except Exception:
+            return None
+        if _is_tool_result_content(content):
+            return None
+
+        rows = conn.execute(
+            "SELECT id, role, content FROM messages WHERE thread_id = ? AND id >= ? ORDER BY id",
+            (thread_id, message_id),
+        ).fetchall()
+    for mid, r, c_json in rows:
+        if r != "assistant":
+            continue
+        try:
+            c = json.loads(c_json)
+        except Exception:
+            continue
+        if isinstance(c, str):
+            return (message_id, mid)
+    return None
+
+
+def _touch_threads(*thread_ids: int) -> None:
+    now = datetime.now().isoformat()
+    with _get_db() as conn:
+        for tid in thread_ids:
+            conn.execute("UPDATE threads SET last_activity_at = ? WHERE id = ?", (now, tid))
+
+
+def move_round(message_id: int, target_thread_id: int) -> bool:
+    """"Nur diese Runde" — verschiebt genau eine vollständige Runde
+    (message_id bis zu ihrem sauberen Abschluss) in einen anderen Thread.
+    False wenn message_id kein gültiger, abgeschlossener Rundenanfang ist."""
+    with _get_db() as conn:
+        source_row = conn.execute("SELECT thread_id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not source_row or source_row[0] is None:
+        return False
+    source_thread_id = source_row[0]
+    bounds = get_round_bounds(message_id)
+    if not bounds:
+        return False
+    start_id, end_id = bounds
+    project_id = get_thread_project_id(target_thread_id)
+    with _get_db() as conn:
+        conn.execute(
+            "UPDATE messages SET thread_id = ?, project_id = ? "
+            "WHERE thread_id = ? AND id BETWEEN ? AND ?",
+            (target_thread_id, project_id, source_thread_id, start_id, end_id),
+        )
+    _touch_threads(source_thread_id, target_thread_id)
+    return True
+
+
+def move_from_here(message_id: int, target_thread_id: int) -> bool:
+    """Standard — verschiebt die Runde ab message_id UND alle nachfolgenden
+    Runden desselben Threads. Filtert ausschließlich über thread_id (nicht
+    tab_id/category) — ein Thread kann tab-/geräteübergreifend fortgesetzt
+    werden (client_hello trägt thread_id, siehe Teil 2), tab_id ist keine
+    stabile Thread-Kennung. False wenn message_id kein gültiger, abgeschlossener
+    Rundenanfang ist."""
+    bounds = get_round_bounds(message_id)
+    if not bounds:
+        return False
+    with _get_db() as conn:
+        source_row = conn.execute("SELECT thread_id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    source_thread_id = source_row[0]
+    project_id = get_thread_project_id(target_thread_id)
+    with _get_db() as conn:
+        conn.execute(
+            "UPDATE messages SET thread_id = ?, project_id = ? WHERE thread_id = ? AND id >= ?",
+            (target_thread_id, project_id, source_thread_id, message_id),
+        )
+    _touch_threads(source_thread_id, target_thread_id)
+    return True
+
+
+def merge_threads(source_thread_id: int, target_thread_id: int) -> bool:
+    """Verschmilzt zwei Threads: alle Nachrichten von source_thread_id wandern
+    zu target_thread_id (Reihenfolge im Ziel ergibt sich automatisch aus
+    ORDER BY id, wie jedes Lesen es ohnehin tut), danach wird der jetzt leere
+    Quell-Thread gelöscht. Kein message_id-Anker nötig (anders als move_*) —
+    der GANZE Quell-Thread wird übernommen. Server.py ist dafür zuständig,
+    gerade verbundene Tabs mit source_thread_id als aktivem Thread auf
+    target_thread_id umzuhängen (THREAD_REASSIGNED), sonst würde die nächste
+    dort geschriebene Nachricht unter einer gelöschten thread_id landen."""
+    if source_thread_id == target_thread_id:
+        return False
+    project_id = get_thread_project_id(target_thread_id)
+    with _get_db() as conn:
+        row = conn.execute("SELECT id FROM threads WHERE id = ?", (source_thread_id,)).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            "UPDATE messages SET thread_id = ?, project_id = ? WHERE thread_id = ?",
+            (target_thread_id, project_id, source_thread_id),
+        )
+    _touch_threads(target_thread_id)
+    delete_thread(source_thread_id)
+    return True
