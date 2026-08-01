@@ -124,6 +124,13 @@ def _get_db() -> sqlite3.Connection:
     for column in ("path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
                    "issue_repo", "delivery", "coding_doc"):
         _ensure_column(conn, "projekte", column, "TEXT")
+    # 'coding_model'/'coding_max_budget_usd' (seit 2026-08-01, Vorfall Job #39 —
+    # ohne explizites --model lief der Lauf auf dem Account-Default statt auf
+    # dem günstigeren Sonnet): Default-Auflösung analog zu 'delivery', siehe
+    # coding_jobs.py::start_job(). Eigene REAL-Spalte für das Budget statt TEXT
+    # wie die übrigen Coding-Felder — ein numerischer Wert, kein Enum/String.
+    _ensure_column(conn, "projekte", "coding_model", "TEXT")
+    _ensure_column(conn, "projekte", "coding_max_budget_usd", "REAL")
     # Externe Ticket-Quellen (z.B. GitHub Issues, siehe services/tickets.py):
     # zusätzliche, nullable Felder für todos — bestehende Zeilen bleiben
     # unberührt (ALTER TABLE ADD COLUMN mit NULL-Default).
@@ -359,11 +366,13 @@ def list_coding_projects() -> list[dict]:
     mit, nur wenn tatsächlich ein Coding-Job startet."""
     conn = _get_db()
     rows = conn.execute(
-        "SELECT id, name, path, repo, base_branch, client_id, autonomy, issue_repo, delivery, coding_doc "
+        "SELECT id, name, path, repo, base_branch, client_id, autonomy, issue_repo, delivery, coding_doc, "
+        "coding_model, coding_max_budget_usd "
         "FROM projekte WHERE path IS NOT NULL ORDER BY id",
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "path", "repo", "base_branch", "client_id", "autonomy", "issue_repo", "delivery", "coding_doc"]
+    cols = ["id", "name", "path", "repo", "base_branch", "client_id", "autonomy", "issue_repo", "delivery", "coding_doc",
+            "coding_model", "coding_max_budget_usd"]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -393,7 +402,7 @@ def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
     allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
                "estimated_hours", "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
-               "issue_repo", "delivery", "coding_doc"}
+               "issue_repo", "delivery", "coding_doc", "coding_model", "coding_max_budget_usd"}
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:

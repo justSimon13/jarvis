@@ -688,7 +688,7 @@ _ENTITY_FIELDS = {
                      "source", "external_id", "repo", "body", "labels"},
     "projekte":     {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
                      "estimated_hours", "path", "repo", "issue_repo", "base_branch", "client_id", "autonomy",
-                     "delivery", "coding_doc", "data_scope"},
+                     "delivery", "coding_doc", "data_scope", "coding_model", "coding_max_budget_usd"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
     "seite":        {"titel", "inhalt"},
     "rechnungen":   {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
@@ -1285,6 +1285,11 @@ async def handle_connection(websocket):
                         action_result = await loop.run_in_executor(None, coding_jobs.revise_job, job_id_arg, data.get("comment"))
                     elif job_action == "discard":
                         action_result = await loop.run_in_executor(None, coding_jobs.discard_job, job_id_arg)
+                    elif job_action == "continue":
+                        # Fortsetzen eines 'incomplete'-Jobs (Turn-Limit erreicht,
+                        # aber bereits committet) — kein comment-Konzept wie bei
+                        # approve/revise, siehe coding_jobs.py::continue_job().
+                        action_result = await loop.run_in_executor(None, coding_jobs.continue_job, job_id_arg)
                     else:
                         action_result = f"Unbekannte Aktion: {job_action}"
                     send_json({"type": P.CODING_JOB_ACTION_ACK, "id": job_id_arg, "action": job_action, "result": action_result})

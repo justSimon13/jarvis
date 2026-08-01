@@ -310,6 +310,26 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "continue_coding_job",
+        "description": (
+            "Setzt einen unvollständigen Job (status='incomplete' — das Turn-Limit wurde erreicht, bevor die "
+            "Aufgabe abgeschlossen war, aber bereits erstellte Änderungen wurden committet) per --resume fort, "
+            "mit einer knappen 'Setze die Arbeit fort'-Anweisung statt eines Plans (anders als "
+            "approve_coding_job, das einen zuvor gebilligten Plan voraussetzt). Nur für Jobs mit "
+            "status='incomplete' (siehe check_coding_job_status), sonst Fehlermeldung ohne Wirkung."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (aus check_coding_job_status/start_coding_job).",
+                },
+            },
+            "required": ["id"],
+        },
+    },
+    {
         "name": "sync_project",
         "description": (
             "Zieht sofort den aktuellen main-Stand von GitHub (git pull), OHNE einen Coding-Task zu "
@@ -1365,6 +1385,9 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
 
         if tool_name == "discard_coding_job":
             return coding_jobs.discard_job(tool_input["id"])
+
+        if tool_name == "continue_coding_job":
+            return coding_jobs.continue_job(tool_input["id"])
 
         if tool_name == "list_allowed_coding_paths":
             target_conn_id = coding_jobs.resolve_worker_connection(tool_input.get("client_id"))

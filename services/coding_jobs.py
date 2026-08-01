@@ -54,6 +54,7 @@ from pathlib import Path
 
 import brain
 import knowledge
+import llm
 import local_data
 import protocol as P
 from services import local_exec
@@ -132,6 +133,14 @@ def _get_db() -> sqlite3.Connection:
     # bisherige Fall.
     for column in ("delivery", "issue_repo", "coding_doc"):
         _ensure_column(conn, "jobs", column, "TEXT")
+    # coding_model/coding_max_budget_usd (seit 2026-08-01, Vorfall Job #39):
+    # Snapshot aus dem jeweiligen projekte-Feld bei start_job(), gleicher Grund
+    # wie delivery/issue_repo/coding_doc oben — ein Resume soll mit demselben
+    # Modell/Budget laufen wie der ursprüngliche Start, nicht mit einem
+    # zwischenzeitlich geänderten Projekt-Default. Kein Backfill — NULL fällt
+    # bei beiden auf den in start_job() aufgelösten Default zurück.
+    _ensure_column(conn, "jobs", "coding_model", "TEXT")
+    _ensure_column(conn, "jobs", "coding_max_budget_usd", "REAL")
     conn.commit()
     return conn
 
@@ -369,6 +378,31 @@ def _build_resume_fallback_prompt(mode: str, comment: str | None, plan_text: str
     return f"{base}Passe den Plan an{extra}"
 
 
+def _build_continue_prompt(instruction: str, coding_doc: str | None = None) -> str:
+    """Server-authored Prompt fürs Fortsetzen eines 'incomplete'-Jobs (Turn-
+    Limit erreicht, bevor die Aufgabe abgeschlossen war) — anders als
+    _build_resume_prompt() kein Plan-Konzept ('approve'/'revise'), sondern
+    eine reine, knappe Fortsetzung derselben ursprünglichen instruction. Immer
+    schreibend (es gibt keine read-only-Variante eines Fortsetzens)."""
+    return (
+        "Die vorige Ausführung wurde durch das Turn-Limit unterbrochen, bevor die Aufgabe "
+        "abgeschlossen war. Bereits committete Änderungen bleiben erhalten. Setze die Arbeit "
+        f"fort und schließe sie ab:\n\n{instruction}\n\n{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
+    )
+
+
+def _build_continue_fallback_prompt(instruction: str, coding_doc: str | None = None) -> str:
+    """Fallback für den Fall, dass --resume selbst scheitert (Session nicht
+    mehr fortsetzbar) — gleiches Prinzip wie _build_resume_fallback_prompt(),
+    hier ohne Plantext (den gibt es bei einem einstufigen Lauf nicht), nur die
+    ursprüngliche instruction erneut vollständig mitgegeben."""
+    return (
+        "Setze folgende Aufgabe fort (ursprüngliche Session nicht mehr verfügbar, arbeite "
+        f"anhand des aktuellen Stands im Arbeitsverzeichnis weiter):\n\n{instruction}\n\n"
+        f"{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
+    )
+
+
 def _resolve_project(project_name: str | None) -> dict | str:
     """Löst project (Name oder None) zu einer Zeile aus
     local_data.list_coding_projects() auf. Gibt bei Erfolg ein dict zurück,
@@ -440,15 +474,29 @@ def start_job(instruction: str | None = None, title: str | None = None,
     # delivery-Default 'pr' (bisheriges Verhalten) für Projekte ohne
     # gesetzten Wert — siehe local_data.py's projekte-Spalten-Kommentar.
     delivery = resolved.get("delivery") or "pr"
+    # coding_model/coding_max_budget_usd (seit 2026-08-01, Vorfall Job #39 —
+    # ohne explizites --model lief der Lauf auf dem Account-Default statt auf
+    # dem günstigeren Sonnet, kostete $2.38 für einen einzigen Lauf). Ein
+    # Tippfehler in projekte.coding_model fällt still auf Sonnet zurück statt
+    # den Worker mit einem ungültigen --model-Wert scheitern zu lassen —
+    # gleiches Prinzip wie pipeline.py::set_model().
+    coding_model = resolved.get("coding_model") or "claude-sonnet-5"
+    if coding_model not in llm.MODEL_CATALOG:
+        coding_model = "claude-sonnet-5"
+    coding_max_budget_usd = resolved.get("coding_max_budget_usd") or 5.00
+    if coding_max_budget_usd <= 0:
+        coding_max_budget_usd = 5.00
     cur = conn.execute(
         """INSERT INTO jobs (title, instruction, issue_number, repo, cwd, base_branch, client_id,
                               autonomy, category, tab_id, delivery, issue_repo, coding_doc,
+                              coding_model, coding_max_budget_usd,
                               status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
         (default_title, instruction, issue_number, resolved.get("repo"),
          resolved["path"], resolved["base_branch"], resolved["client_id"],
          resolved.get("autonomy"), category, tab_id, delivery,
-         resolved.get("issue_repo"), resolved.get("coding_doc"), now, now),
+         resolved.get("issue_repo"), resolved.get("coding_doc"),
+         coding_model, coding_max_budget_usd, now, now),
     )
     conn.commit()
     job_id = cur.lastrowid
@@ -509,13 +557,14 @@ def _try_dispatch(job_id: int) -> bool:
     conn = _get_db()
     row = conn.execute(
         "SELECT instruction, issue_number, repo, cwd, base_branch, branch, client_id, autonomy, "
-        "delivery, issue_repo, coding_doc FROM jobs WHERE id = ?",
+        "delivery, issue_repo, coding_doc, coding_model, coding_max_budget_usd FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return False
-    instruction, issue_number, repo, cwd, base_branch, branch, client_id, autonomy, delivery, issue_repo, coding_doc = row
+    (instruction, issue_number, repo, cwd, base_branch, branch, client_id, autonomy, delivery, issue_repo,
+     coding_doc, coding_model, coding_max_budget_usd) = row
 
     target_conn_id = _manager.get_connection_for_role(client_id)
     if not target_conn_id:
@@ -535,6 +584,7 @@ def _try_dispatch(job_id: int) -> bool:
     fields = {
         "cwd": cwd, "base_branch": base_branch, "branch": branch, "job_id": job_id,
         "plan_only": plan_only, "delivery": delivery or "pr",
+        "model": coding_model or "claude-sonnet-5", "max_budget_usd": coding_max_budget_usd or 5.00,
     }
     if issue_number:
         prefix, suffix = _build_issue_prompt_parts(instruction, plan_only=plan_only, coding_doc=coding_doc)
@@ -607,14 +657,15 @@ def _resume_job(job_id: int, mode: str, comment: str | None) -> str:
     dispatchen, Status auf 'running' zurück (spiegelt _try_dispatch())."""
     conn = _get_db()
     row = conn.execute(
-        "SELECT status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc "
-        "FROM jobs WHERE id = ?",
+        "SELECT status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc, "
+        "coding_model, coding_max_budget_usd FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return f"Job #{job_id} nicht gefunden."
-    status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc = row
+    (status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc,
+     coding_model, coding_max_budget_usd) = row
 
     if status != "awaiting_review":
         return f"Job #{job_id} wartet nicht auf Freigabe (Status: {status})."
@@ -629,6 +680,7 @@ def _resume_job(job_id: int, mode: str, comment: str | None) -> str:
         "claude_code_resume", target_conn_id=target_conn_id,
         job_id=job_id, session_id=session_id, cwd=cwd, base_branch=base_branch, branch=branch,
         delivery=delivery or "pr",
+        model=coding_model or "claude-sonnet-5", max_budget_usd=coding_max_budget_usd or 5.00,
         # Beide Prompts server-authored (kein Client baut Prompts) — der Worker
         # wählt nur technisch zwischen ihnen, je nachdem ob --resume gelingt
         # oder die Session nicht mehr fortsetzbar ist (siehe localExec.js).
@@ -658,6 +710,52 @@ def revise_job(job_id: int, comment: str) -> str:
     anhand von comment überarbeiten — bleibt read-only, Job landet wieder auf
     'awaiting_review' statt umzusetzen."""
     return _resume_job(job_id, mode="revise", comment=comment)
+
+
+def continue_job(job_id: int) -> str:
+    """Von tools.execute() aufgerufen ('continue_coding_job'). Setzt einen
+    'incomplete'-Job fort (Turn-Limit erreicht, aber bereits committet, siehe
+    ROADMAP.md/localExec.js::_finishJob) — eigenständig statt ein dritter
+    _resume_job()-mode, weil dessen Prompt-Bau einen zuvor gebilligten Plan
+    voraussetzt ('approve'/'revise'); hier gibt es keinen Plan, nur die
+    ursprüngliche instruction. Struktur an _resume_job() angelehnt: Zeile
+    lesen, prüfen, fire-and-forget dispatchen, Status auf 'running' zurück."""
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc "
+        "FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return f"Job #{job_id} nicht gefunden."
+    status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc = row
+
+    if status != "incomplete":
+        return f"Job #{job_id} ist nicht unvollständig (Status: {status})."
+    if not session_id:
+        return f"Job #{job_id} hat keine Session-ID — kann nicht fortgesetzt werden."
+
+    target_conn_id = _manager.get_connection_for_role(client_id)
+    if not target_conn_id:
+        return f"Kein Worker für Rolle '{client_id}' verbunden — Job #{job_id} bleibt wartend, später erneut versuchen."
+
+    result = local_exec.dispatch_nowait(
+        "claude_code_resume", target_conn_id=target_conn_id,
+        job_id=job_id, session_id=session_id, cwd=cwd, base_branch=base_branch, branch=branch,
+        delivery=delivery or "pr",
+        resume_prompt=_build_continue_prompt(instruction, coding_doc=coding_doc),
+        fallback_prompt=_build_continue_fallback_prompt(instruction, coding_doc=coding_doc),
+        read_only=False,
+    )
+    if not result.get("ok"):
+        return f"Senden an Worker fehlgeschlagen: {result.get('error')} — Job #{job_id} bleibt wartend."
+
+    conn = _get_db()
+    conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
+    conn.commit()
+    conn.close()
+    return f"Fortgesetzt — Job #{job_id} läuft weiter, Ergebnis kommt per Benachrichtigung."
 
 
 def discard_job(job_id: int) -> str:
@@ -771,6 +869,8 @@ def resolve_job_result(payload: dict) -> dict | None:
         status_label = " — wartet auf Freigabe"
     elif status == "discarded":
         status_label = " verworfen"
+    elif status == "incomplete":
+        status_label = " ⚠️ unvollständig — Änderungen committet, Fortsetzung möglich"
     else:
         status_label = " ⚠️ mit Fehler/Abbruch beendet"
     cost = payload.get("cost_usd") or 0.0
@@ -812,7 +912,7 @@ def resolve_job_result(payload: dict) -> dict | None:
     }
 
 
-_TERMINAL_STATUSES = ("done", "failed", "discarded")
+_TERMINAL_STATUSES = ("done", "failed", "discarded", "incomplete")
 
 
 def _enrich_job(data: dict) -> dict:
