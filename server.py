@@ -41,12 +41,26 @@ from services import sleep_coach
 from services import proactive as proactive_service
 from services.notification_dispatcher import NotificationDispatcher
 import local_data
+import thread_naming
 
 HOST = os.getenv("JARVIS_HOST", "0.0.0.0")
 PORT = int(os.getenv("JARVIS_PORT", "8765"))
 
 manager = ClientManager()
 dispatcher = NotificationDispatcher(manager)
+
+
+def _broadcast_web_event(event: dict) -> None:
+    """Schickt event an ALLE verbundenen Web-/Dashboard-Clients — für die
+    automatische Thread-Benennung (Thread-Umbau Teil B, Schritt 1), die
+    anders als THREAD_REASSIGNED (Teil A, dort ändert sich serverseitiger
+    Zustand nur für betroffene Tabs) eine reine Anzeige-Aktualisierung ohne
+    Zustandsrisiko ist — bei mehreren offenen Fenstern sollen alle sofort den
+    neuen Titel sehen, nicht erst beim nächsten eigenen Reconnect. Wird sowohl
+    bei jeder JarvisPipeline-Konstruktion durchgereicht als auch dem
+    Startup-Sweep übergeben (thread_naming.run_startup_sweep())."""
+    for cb, _ in manager.get_dashboard_event_callbacks():
+        cb(event)
 
 # api_history: aktuelle Session → geht an Claude API, wird bei Inaktivität geleert
 # display_history: vollständiges Protokoll → für Transcript-Ansicht im Dashboard
@@ -947,6 +961,7 @@ async def handle_connection(websocket):
         shared_history=_get_api_history(category, tab_id),
         history_lock=history_lock,
         llm_semaphore=llm_semaphore,
+        broadcast_web_event=_broadcast_web_event,
     )
     if manager.get_name(client_id):
         pipeline.set_room(manager.get_name(client_id))
@@ -1455,6 +1470,13 @@ async def main():
     coding_jobs.init(manager, dispatcher)
     local_exec.init(manager)
     learning.init(manager)
+    # Einmaliger Nachhol-Durchlauf für bereits bestehende unbenannte Threads
+    # (Thread-Umbau Teil B, Schritt 1) — der Live-Hook in pipeline.py läuft nur
+    # bei einem NEUEN Turn, ein Thread in dem längst nicht mehr geschrieben
+    # wird würde sonst nie einen Titel bekommen. Eigener Hintergrund-Thread,
+    # blockiert den Server-Start nicht.
+    threading.Thread(target=thread_naming.run_startup_sweep,
+                      args=(_broadcast_web_event,), daemon=True).start()
     print(f"[server] J.A.R.V.I.S. bereit — ws://{HOST}:{PORT}")
 
     loop = asyncio.get_event_loop()

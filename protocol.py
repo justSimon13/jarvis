@@ -58,6 +58,7 @@ MOVE_MESSAGES_ACK = "move_messages_ack"  # Server → Client: {"type": ..., "ok"
 MERGE_THREADS     = "merge_threads"      # Client → Server: {"type": ..., "source_thread_id": N, "target_thread_id": N} — Thread-Umbau Teil A
 MERGE_THREADS_ACK = "merge_threads_ack"  # Server → Client: {"type": ..., "ok": bool, "error": "..."}
 THREAD_REASSIGNED = "thread_reassigned"  # Server → Client: {"type": ..., "old_thread_id": N, "new_thread_id": N} — der gerade aktive Thread dieses Tabs wurde wegzusammengeführt, siehe MERGE_THREADS
+THREAD_TITLE_UPDATED = "thread_title_updated"  # Server → ALLE Web-/Dashboard-Clients: {"type": ..., "thread_id": N, "title": "..."} — automatische Benennung (Thread-Umbau Teil B, Schritt 1), reine Anzeige-Aktualisierung ohne Zustandsrisiko, deshalb Broadcast statt nur an den auslösenden Tab wie THREAD_REASSIGNED
 
 # ── Event-Overlay (Server → Dashboard) ───────────────────────────────────────
 OVERLAY_EVENT   = "overlay_event"   # {"type": "overlay_event", "event_id": "...", "title": "...", "icon": "...", "send": "...", "snooze_minutes": 10}

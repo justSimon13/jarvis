@@ -18,6 +18,7 @@ import llm
 import protocol as P
 import session_memory
 import stt
+import thread_naming
 import tools
 import tracking
 import tts
@@ -161,7 +162,8 @@ class JarvisPipeline:
                  shared_history: list | None = None,
                  history_lock: threading.Lock | None = None,
                  llm_semaphore: threading.Semaphore | None = None,
-                 room: str | None = None):
+                 room: str | None = None,
+                 broadcast_web_event=None):
         """
         client_id      : eindeutiger Name des Clients
         on_event       : callable(event: dict)
@@ -170,10 +172,16 @@ class JarvisPipeline:
         history_lock   : Lock für thread-sicheren History-Zugriff
         llm_semaphore  : stellt sicher dass nur ein LLM-Call gleichzeitig läuft (FIFO)
         room           : Raumname für Dynamic Prompt (= Client-Name)
+        broadcast_web_event : callable(event: dict) | None — schickt an ALLE
+            verbundenen Web-/Dashboard-Clients, nicht nur diesen (Thread-Umbau
+            Teil B, Schritt 1: automatische Thread-Benennung). None für
+            Voice-Only-Kontexte (main.py) — dort ohne Bedeutung, da nie
+            self._thread_id gesetzt wird.
         """
         self.client_id = client_id
         self._on_event = on_event
         self._on_audio = on_audio
+        self._broadcast_web_event = broadcast_web_event
         self.history: list[dict] = shared_history if shared_history is not None else []
         self._history_lock = history_lock or threading.Lock()
         self._llm_semaphore = llm_semaphore or threading.Semaphore(1)
@@ -631,6 +639,17 @@ class JarvisPipeline:
                 )
 
             self._emit(P.RESPONSE_DONE, text=turn_text, assistant_message_id=assistant_message_id)
+
+            # Automatische Thread-Benennung (Thread-Umbau Teil B, Schritt 1) — nur
+            # bei einem ECHTEN Rundenabschluss (assistant_message_id gesetzt, nicht
+            # bei einem tool_use-Zwischenschritt) und nur für Web-Threads. Läuft im
+            # Hintergrund, blockiert die bereits emittierte Antwort nicht — die
+            # Rundenzahl-Prüfung (nur Runde 2/4/8) passiert innerhalb des
+            # Hintergrund-Threads selbst, siehe thread_naming.py.
+            if (self._thread_id is not None and assistant_message_id is not None
+                    and self._broadcast_web_event is not None):
+                threading.Thread(target=thread_naming.maybe_name_thread_on_turn,
+                                  args=(self._thread_id, self._broadcast_web_event), daemon=True).start()
 
             if final.stop_reason in ("end_turn", "refusal", "max_tokens"):
                 break

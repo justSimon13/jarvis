@@ -69,6 +69,20 @@ def compute_cost(usage, model: str | None = None) -> float:
     return cost
 
 
+def complete(system: str, user_text: str, model: str = "claude-haiku-4-5", max_tokens: int = 60) -> tuple[str, object]:
+    """Minimaler, NICHT-streamender Einzel-Call für billige Hintergrund-Aufgaben
+    (z.B. automatische Thread-Benennung, siehe thread_naming.py) — kein
+    Tool-Loop, kein Cache-Control, kein fester 24000-Token-Deckel wie stream().
+    Gibt (Text, usage-Objekt) zurück — usage kann optional durch compute_cost()
+    laufen, nur fürs Logging."""
+    response = _get_client().messages.create(
+        model=model, max_tokens=max_tokens, system=system,
+        messages=[{"role": "user", "content": user_text}],
+    )
+    text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+    return text.strip(), response.usage
+
+
 def compress_tool_history(messages: list[dict]) -> list[dict]:
     """Komprimiert Tool-Results in alten Nachrichten (alle außer der letzten)."""
     last_tool_idx = -1
