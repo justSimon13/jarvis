@@ -133,7 +133,7 @@ CODING_JOB_CREATED = "coding_job_created"  # {"type": "coding_job_created", "job
 # strukturiertes ok/fail für den fachlichen Ausgang (z.B. "Job wartet nicht
 # auf Freigabe"), das Frontend zeigt den Text und lädt die Liste neu, der
 # tatsächliche Status danach ist die verlässliche Quelle.
-CODING_JOB_ACTION     = "coding_job_action"      # {"type": "coding_job_action", "action": "approve"|"revise"|"discard", "id": int, "comment": "..."|None}
+CODING_JOB_ACTION     = "coding_job_action"      # {"type": "coding_job_action", "action": "approve"|"revise"|"discard"|"continue", "id": int, "comment": "..."|None} — "continue" (seit 2026-08-01) setzt einen 'incomplete'-Job (Turn-Limit erreicht, bereits committet) per --resume fort, kein comment nötig
 CODING_JOB_ACTION_ACK = "coding_job_action_ack"  # {"type": "coding_job_action_ack", "id": int, "action": "...", "result": "..."}
 
 # ── Todos/Projekte/Kontakte (Client → Server, Server → Client) — direkte local_data-Mutation ohne LLM ─

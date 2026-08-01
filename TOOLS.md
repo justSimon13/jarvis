@@ -25,6 +25,24 @@ Ausführlich in `ARCHITECTURE.md` ("Coding Engine"). Backing-Modul: `services/co
 | `create_project` | `name, description?, private?` | Neues GitHub-Repo + lokaler Checkout unter `~/apps`. Immer Freigabe-Pflicht. |
 | `sync_tickets` | — | Holt GitHub-Issues über Simons eigenen `gh`-CLI-Login auf dem Mac (`local_exec.dispatch`, nie Server-Token), upserted als Todos (`source="github"`). GitHub `closed` erzwingt lokal `Erledigt`, `open` überschreibt nie einen lokal gesetzten Status. |
 
+### Coding-Jobs (Mac-Worker, `services/coding_jobs.py`)
+
+Anderer Weg als die Coding Engine oben: `claude -p` headless direkt auf dem Mac-Worker
+(`jarvis-web`s `localExec.js`), kein Server-seitiger Worktree, kein Agent SDK. Projekt-Config
+(`path`/`repo`/`base_branch`/`client_id`/`autonomy`/`delivery`/`coding_doc`/`coding_model`/
+`coding_max_budget_usd`) liegt auf `projekte`, siehe `local_data.py`. Diese Sektion fehlte bisher
+komplett in TOOLS.md — hier ergänzt, da `continue_coding_job` (seit 2026-08-01) sonst als
+einziges neues Tool ohne jede Nachbarschaft dokumentiert gewesen wäre.
+
+| Tool | Parameter | Verhalten |
+|---|---|---|
+| `start_coding_job` | `instruction?, title?, project?, issue_number?` | Legt sofort eine Job-Zeile an (auch ohne verbundenen Worker — startet automatisch später) und schickt sie fire-and-forget an den Mac-Worker. `autonomy='careful'` (Projekt-Feld): erste Stufe read-only, Job landet auf `awaiting_review` statt fertig zu sein. Modell (`coding_model`, Default `claude-sonnet-5`) und Budget (`coding_max_budget_usd`, Default `5.00`) kommen aus dem Projekt, werden bei Start in die Job-Zeile gesnapshottet. |
+| `check_coding_job_status` | `id?` | Ohne `id` der zuletzt gestartete Job. Status: `pending`/`running`/`awaiting_review`/`incomplete`/`done`/`failed`/`discarded`. |
+| `approve_coding_job` | `id, comment?` | Setzt den zuvor erstellten Plan eines `awaiting_review`-Jobs um (`--resume`, zweite schreibende Stufe). |
+| `revise_coding_job` | `id, comment` | Lässt den Plan überarbeiten, bleibt read-only, Job wieder `awaiting_review`. |
+| `discard_coding_job` | `id` | Verwirft einen `awaiting_review`-Job vollständig, gibt den Slot frei. |
+| `continue_coding_job` | `id` | Seit 2026-08-01 (Vorfall Job #39): setzt einen `incomplete`-Job (Turn-Limit erreicht, bereits committet) per `--resume` mit einer knappen "Setze die Arbeit fort" fort — kein Plan-Konzept wie bei `approve`. |
+
 ### Todos / Projekte / Kontakte / Unterseiten / Rechnungen / Ausgaben (`local_data.py`)
 
 | Tool | Parameter | Verhalten |
