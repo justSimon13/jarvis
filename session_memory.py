@@ -1080,3 +1080,81 @@ def merge_threads(source_thread_id: int, target_thread_id: int) -> bool:
     _touch_threads(target_thread_id)
     delete_thread(source_thread_id)
     return True
+
+
+# ── Automatische Benennung unbenannter Threads (Thread-Umbau Teil B, Schritt 1) ─
+
+def count_rounds(thread_id: int) -> int:
+    """Zählt echte Rundenanfänge (role='user', NICHT tool_result-förmig, siehe
+    _is_tool_result_content()) im Thread — dieselbe Definition wie
+    get_round_bounds(), hier nur gezählt statt einzeln aufgelöst. Grundlage für
+    die Rundenzahl-Gates in thread_naming.py (Runde 2/4/8 beim Live-Hook,
+    Runde >= 2 beim Startup-Sweep)."""
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT content FROM messages WHERE thread_id = ? AND role = 'user' ORDER BY id",
+            (thread_id,),
+        ).fetchall()
+    count = 0
+    for (content_json,) in rows:
+        try:
+            content = json.loads(content_json)
+        except Exception:
+            continue
+        if not _is_tool_result_content(content):
+            count += 1
+    return count
+
+
+def get_thread_title(thread_id: int) -> str | None:
+    """Billiger Vorab-Check für thread_naming.py — bevor überhaupt eine
+    Rundenzählung oder ein LLM-Call angestoßen wird, lohnt sich zuerst zu
+    prüfen ob der Thread nicht längst benannt ist (der Normalfall im
+    laufenden Betrieb)."""
+    with _get_db() as conn:
+        row = conn.execute("SELECT title FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    return row[0] if row else None
+
+
+def set_auto_title(thread_id: int, title: str) -> bool:
+    """Race-sicheres Schreiben eines automatisch ermittelten Titels — atomares
+    UPDATE mit WHERE title IS NULL statt "erst lesen, dann schreiben". Läuft
+    der Hintergrund-Call gerade während der Nutzer den Thread manuell
+    umbenennt (oder der Thread inzwischen gelöscht/gemergt wurde), greift die
+    WHERE-Bedingung nicht mehr — kein Clobbern eines manuell vergebenen
+    Titels, kein Fehler, einfach ein no-op. Gibt zurück ob tatsächlich
+    geschrieben wurde (rowcount > 0) — der Aufrufer nutzt das, um zu
+    entscheiden ob ein thread_title_updated-Push überhaupt nötig ist."""
+    with _get_db() as conn:
+        cur = conn.execute(
+            "UPDATE threads SET title = ? WHERE id = ? AND title IS NULL",
+            (title, thread_id),
+        )
+    return cur.rowcount > 0
+
+
+def list_named_titles(limit: int = 300) -> list[str]:
+    """Für den Naming-Prompt in thread_naming.py — bewusst NICHT list_threads()
+    wiederverwendet: das ist nach last_activity_at DESC sortiert und auf 50
+    gedeckelt (für die Sidebar gedacht). Ein seit Monaten inaktiver
+    "Steuern"-Thread würde dort nach genug neueren Threads aus dem Fenster
+    fallen und dem Namensgeber nie mehr als Wiederverwendungs-Kandidat
+    angeboten — genau der Fall den die Titel-Konsistenz eigentlich verhindern
+    soll. limit=300 ist eine großzügige Obergrenze, kein erwarteter
+    Normalwert."""
+    with _get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT title FROM threads WHERE title IS NOT NULL AND title != '' "
+            "ORDER BY last_activity_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def list_unnamed_thread_ids() -> list[int]:
+    """Für den einmaligen Startup-Sweep (thread_naming.py) — alle Threads, die
+    der Live-Hook (nur bei neuen Turns aktiv) nie erreicht hat, weil in ihnen
+    längst nicht mehr geschrieben wird."""
+    with _get_db() as conn:
+        rows = conn.execute("SELECT id FROM threads WHERE title IS NULL ORDER BY id").fetchall()
+    return [r[0] for r in rows]
