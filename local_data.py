@@ -376,21 +376,38 @@ def list_coding_projects() -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
-def add_projekt(name: str, status: str | None = None, beschreibung: str | None = None,
-                 typ: str | None = None, geschaetzter_wert: float | None = None,
-                 erwartetes_abschlussdatum: str | None = None, estimated_hours: float | None = None,
-                 path: str | None = None, repo: str | None = None, base_branch: str | None = None,
-                 client_id: str | None = None, autonomy: str | None = None,
-                 data_scope: str | None = None) -> int:
-    conn = _get_db()
+# Beschreibbare Projekt-Felder — EINE Liste für Anlegen und Ändern.
+#
+# Vorher standen hier zwei verschiedene Listen: add_projekt() hatte eine feste
+# Parameter-Signatur, local_data.write() filterte gegen eine eigene, kürzere
+# Menge, und update_projekt() gegen eine dritte, größere. Ergebnis war, dass ein
+# Projekt beim ANLEGEN stillschweigend ohne path/repo/base_branch/client_id
+# entstand, dieselben Felder per Änderung aber problemlos durchgingen — real
+# beobachtet bei den Projekten 14 und 15 (siehe FAZIT-JOBS-UND-CHAT-2026-08-04).
+# Der Fehler war nicht die Liste selbst, sondern dass es mehrere gab.
+PROJEKTE_WRITABLE = {
+    "name", "status", "beschreibung", "typ", "notizen",
+    "geschaetzter_wert", "erwartetes_abschlussdatum", "estimated_hours",
+    # Felder für Mac-Worker-Coding-Jobs
+    "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
+    "issue_repo", "delivery", "coding_doc", "coding_model", "coding_max_budget_usd",
+}
+
+
+def add_projekt(name: str, **fields) -> int:
+    """Legt ein Projekt an. Alle Felder aus PROJEKTE_WRITABLE sind zulässig —
+    dieselben wie beim Ändern, damit ein frisch angelegtes Projekt sofort
+    vollständig sein kann und kein Nachtrag per update nötig ist."""
+    fields = _normalize_fields(fields)
+    fields.pop("name", None)
+    cols = [k for k in fields if k in PROJEKTE_WRITABLE]
     now = _now()
+    columns = ["name", *cols, "created_at", "updated_at"]
+    values = [name, *[fields[k] for k in cols], now, now]
+    placeholders = ", ".join("?" for _ in columns)
+    conn = _get_db()
     cur = conn.execute(
-        """INSERT INTO projekte (name, status, beschreibung, typ, geschaetzter_wert,
-                                  erwartetes_abschlussdatum, estimated_hours, path, repo, base_branch, client_id,
-                                  autonomy, data_scope, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (name, status, beschreibung, typ, geschaetzter_wert, erwartetes_abschlussdatum, estimated_hours,
-         path, repo, base_branch, client_id, autonomy, data_scope, now, now)
+        f"INSERT INTO projekte ({', '.join(columns)}) VALUES ({placeholders})", values
     )
     conn.commit()
     projekt_id = cur.lastrowid
@@ -400,9 +417,7 @@ def add_projekt(name: str, status: str | None = None, beschreibung: str | None =
 
 def update_projekt(projekt_id: int, **fields) -> None:
     fields = _normalize_fields(fields)
-    allowed = {"name", "status", "beschreibung", "typ", "notizen", "geschaetzter_wert", "erwartetes_abschlussdatum",
-               "estimated_hours", "path", "repo", "base_branch", "client_id", "autonomy", "data_scope",
-               "issue_repo", "delivery", "coding_doc", "coding_model", "coding_max_budget_usd"}
+    allowed = PROJEKTE_WRITABLE
     sets = [f"{k} = ?" for k in fields if k in allowed]
     values = [v for k, v in fields.items() if k in allowed]
     if not sets:
@@ -799,6 +814,25 @@ def query(database: str, search: str | None = None, status: str | None = None, l
     return results
 
 
+def unknown_fields(database: str, properties: dict) -> list[str]:
+    """Welche der übergebenen Felder kennt diese Datenbank nicht?
+
+    Damit kann der Aufrufer melden, was verworfen wurde. Ein stillschweigend
+    geschlucktes Feld fällt sonst erst viel später auf — und dann an einer
+    Stelle, die mit der Ursache nichts zu tun hat.
+    """
+    known = {
+        "todos": {"name", "status", "datum", "prioritaet", "bereich", "aufwand",
+                  "source", "external_id", "repo", "body", "labels"},
+        "projekte": PROJEKTE_WRITABLE,
+        "rechnungen": set(_RECHNUNGEN_COLS) - {"id"},
+        "ausgaben": set(_AUSGABEN_COLS) - {"id"},
+    }.get(database)
+    if known is None:
+        return []
+    return sorted(k for k in _normalize_fields(dict(properties)) if k not in known)
+
+
 def write(database: str, properties: dict) -> int:
     properties = _normalize_fields(properties)
     if database == "todos":
@@ -806,9 +840,9 @@ def write(database: str, properties: dict) -> int:
                             if k in {"name", "status", "datum", "prioritaet", "bereich", "aufwand",
                                      "source", "external_id", "repo", "body", "labels"}})
     if database == "projekte":
-        return add_projekt(**{k: v for k, v in properties.items()
-                               if k in {"name", "status", "beschreibung", "typ", "geschaetzter_wert",
-                                        "erwartetes_abschlussdatum", "estimated_hours"}})
+        if not properties.get("name"):
+            raise ValueError("projekte: 'name' ist Pflicht")
+        return add_projekt(**{k: v for k, v in properties.items() if k in PROJEKTE_WRITABLE})
     if database == "rechnungen":
         return add_rechnung(**{k: v for k, v in properties.items() if k in set(_RECHNUNGEN_COLS) - {"id"}})
     if database == "ausgaben":

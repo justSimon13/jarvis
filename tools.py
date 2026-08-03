@@ -759,7 +759,7 @@ DEFINITIONS = [
             "Pausen: key='{feature}_pausiert_bis', value='YYYY-MM-DD'. "
             "'modules': Persönlichkeits-Prompt und Dashboard-Konfiguration. "
             "Basis-Identität: key='base.identity'. "
-            "Modus-Prompt: key='modes.{modus}.prompt' (modus = assistent|coach|fokus). "
+            "Modus-Prompt: key='modes.{modus}.prompt' (modus = assistent|coach|entwickler). "
             "Dashboard-Cards: key='modes.{modus}.cards', value=geordnete Liste von Card-IDs. "
             "Verfügbare Card-IDs: 'transcript' (letztes Gespräch), 'btc' (Bitcoin-Kurs), "
             "'todos' (Todos heute), 'calendar' (Kalender heute), "
@@ -1460,11 +1460,18 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
             return json.dumps(results, ensure_ascii=False)
 
         if tool_name == "data_write":
+            props = tool_input["properties"]
             item_id = local_data.write(
                 database=tool_input["database"],
-                properties=tool_input["properties"],
+                properties=props,
             )
-            return f"Erstellt (id: {item_id})"
+            # Verworfene Felder nennen statt still zu schlucken. Vorher blieb ein
+            # Projekt ohne path/repo zurück, und der Fehler zeigte sich erst
+            # Züge später beim Job-Start als "Projekt nicht gefunden".
+            ignored = local_data.unknown_fields(tool_input["database"], props)
+            hint = (f" Nicht übernommen: {', '.join(ignored)} — unbekanntes Feld für "
+                    f"'{tool_input['database']}'.") if ignored else ""
+            return f"Erstellt (id: {item_id}).{hint}"
 
         if tool_name == "data_update":
             local_data.update(
