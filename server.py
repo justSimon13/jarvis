@@ -369,7 +369,10 @@ _QA_REGISTRY = {
 _DEFAULT_QA_IDS = {
     "assistent": ["alarm", "todo_add", "checkin"],
     "coach":     ["wochenreview", "fortschritt", "ziel_setzen"],
-    "fokus":     ["timer", "naechstes_event"],
+    # Der Entwickler-Modus unterscheidet sich (vorerst) durch Wissen und
+    # Werkzeuge, nicht durch die Oberfläche. Eigene Aktionen erst, wenn sich
+    # zeigt welche fehlen.
+    "entwickler": ["timer", "naechstes_event"],
 }
 
 _CARD_REGISTRY = {
@@ -386,8 +389,8 @@ _CARD_REGISTRY = {
 
 _DEFAULT_CARD_IDS = {
     "assistent": ["transcript", "btc", "weather", "todos", "calendar"],
-    "coach":     ["todos", "calendar"],
-    "fokus":     [],
+    "coach":      ["todos", "calendar"],
+    "entwickler": ["todos", "calendar"],
 }
 
 

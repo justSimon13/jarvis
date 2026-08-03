@@ -11,7 +11,7 @@ class ClientManager:
         self._event_handlers: dict[str, callable] = {} # client_id → send_event(dict)
         self._names: dict[str, str] = {}               # client_id → name
         self._roles: dict[str, str] = {}               # client_id → role ("client"|"dashboard")
-        self._modes: dict[str, str] = {}               # client_id → mode ("assistent"|"coach"|"fokus")
+        self._modes: dict[str, str] = {}               # client_id → mode ("assistent"|"coach"|"entwickler")
         self._pipelines: dict[str, object] = {}        # client_id → JarvisPipeline
         self._capabilities: dict[str, list[str]] = {}  # client_id → ["local_exec", ...] (z.B. Tauri-Desktop-App)
         self._worker_ids: dict[str, str] = {}           # client_id → worker_id (nur Tauri-Desktop-App, sonst nicht gesetzt)

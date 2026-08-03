@@ -49,7 +49,7 @@ LAYOUT_CONFIG    = "layout_config"    # {"type": "layout_config", "cards": [...]
 # ── Drei-Layer-Protokoll (Client ↔ Server) ────────────────────────────────────
 DATA_REQUEST  = "data_request"   # {"type": "data_request", "resource": "todos"|"calendar"|"alarms"|"followups"|"clients"|"btc"}
 DATA_RESPONSE = "data_response"  # {"type": "data_response", "resource": "...", "data": ...}
-SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coach"|"fokus"}
+SET_MODE      = "set_mode"       # {"type": "set_mode", "mode": "assistent"|"coach"|"entwickler"}
 SET_THINKING  = "set_thinking"   # {"type": "set_thinking", "enabled": bool} — Adaptive Thinking pro Client/Session (Default aus)
 SET_LLM_MODEL = "set_llm_model"  # {"type": "set_llm_model", "model": "claude-sonnet-5"|"claude-opus-5"|"claude-haiku-4-5"|"claude-fable-5"}
 SET_THREAD    = "set_thread"     # {"type": "set_thread", "thread_id": N|null} — aktiven Thread für diesen Tab setzen/löschen (Teil 2, manuelles Etikett)

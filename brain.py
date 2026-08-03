@@ -87,9 +87,9 @@ def _seed_modules_quick_actions():
     if not isinstance(modes, dict):
         return
     defaults = {
-        "assistent": ["alarm", "todo_add", "checkin"],
-        "coach":     ["wochenreview", "fortschritt", "ziel_setzen"],
-        "fokus":     ["timer", "naechstes_event"],
+        "assistent":  ["alarm", "todo_add", "checkin"],
+        "coach":      ["wochenreview", "fortschritt", "ziel_setzen"],
+        "entwickler": ["timer", "naechstes_event"],
     }
     changed = False
     for mode_name, mode_cfg in modes.items():
@@ -110,9 +110,9 @@ def _seed_modules_cards():
     if not isinstance(modes, dict):
         return
     defaults = {
-        "assistent": ["transcript", "btc", "weather", "todos", "calendar"],
-        "coach":     ["todos", "calendar"],
-        "fokus":     [],
+        "assistent":  ["transcript", "btc", "weather", "todos", "calendar"],
+        "coach":      ["todos", "calendar"],
+        "entwickler": ["todos", "calendar"],
     }
     changed = False
     for mode_name, mode_cfg in modes.items():
@@ -406,9 +406,9 @@ def migrate_sections():
                         "description": "Performance-Coach",
                         "prompt": "Du agierst als direkter Performance-Coach. Keine Ausreden, klare Fragen.",
                     },
-                    "fokus": {
-                        "description": "Fokus-Modus",
-                        "prompt": "Minimalmodus. Kurze, direkte Antworten. Kein Smalltalk.",
+                    "entwickler": {
+                        "description": "Entwickler",
+                        "prompt": "Webentwicklung und Umsetzung. Technisch präzise, konkrete Vorschläge statt Allgemeinplätze.",
                     },
                 },
             })
