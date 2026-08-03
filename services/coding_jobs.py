@@ -420,8 +420,32 @@ def _resolve_project(project_name: str | None) -> dict | str:
     if project_name:
         matches = [p for p in candidates if p["name"].lower() == project_name.lower()]
         if not matches:
+            # candidates enthält nur Projekte MIT path (siehe
+            # local_data.list_coding_projects). Ein existierendes Projekt ohne
+            # path fiel deshalb als "nicht gefunden" heraus — eine Meldung, die
+            # in die falsche Richtung weist: sie legt nahe, der Name sei falsch,
+            # obwohl nur ein Feld fehlt. Real beobachtet bei den Projekten 14
+            # und 15, dort jeweils vier bis sechs verlorene Züge (siehe
+            # docs-draft/FAZIT-JOBS-UND-CHAT-2026-08-04.md).
+            # query() statt list_projekte(): letztere liefert die Coding-Felder
+            # gar nicht mit, die Prüfung unten würde sie sonst immer als fehlend
+            # melden.
+            existing = next(
+                (p for p in local_data.query("projekte", limit=500)
+                 if (p.get("name") or "").lower() == project_name.lower()),
+                None,
+            )
+            if existing:
+                fehlend = [f for f in ("path", "base_branch", "client_id") if not existing.get(f)]
+                return (
+                    f"Projekt '{existing['name']}' (id {existing['id']}) existiert, ist aber nicht "
+                    f"für Coding-Jobs eingerichtet — es fehlt: {', '.join(fehlend) or 'path'}. "
+                    f"Mit data_update auf 'projekte' nachtragen "
+                    f"(path = absoluter Pfad auf dem Worker, base_branch z.B. 'main', "
+                    f"client_id = Worker-Rolle wie 'mac-work')."
+                )
             names = ", ".join(p["name"] for p in candidates)
-            return f"Projekt '{project_name}' nicht gefunden (verfügbar: {names})."
+            return f"Projekt '{project_name}' nicht gefunden (eingerichtet: {names})."
         return matches[0]
 
     if len(candidates) == 1:
