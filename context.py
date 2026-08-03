@@ -37,9 +37,9 @@ _CHECKIN_KEYWORDS = {"check-in", "checkin", "guten morgen", "morgen check",
 
 # Welche Module jeder Modus standardmäßig lädt (ohne Keyword-Trigger)
 _MODE_DEFAULT_MODULES: dict[str, set[str]] = {
-    "assistent": {"todos", "calendar", "btc"},
-    "coach":     {"todos", "calendar"},
-    "fokus":     set(),
+    "assistent":  {"todos", "calendar", "btc"},
+    "coach":      {"todos", "calendar"},
+    "entwickler": {"todos", "calendar"},
 }
 
 
@@ -95,6 +95,23 @@ def build_static_prompt(mode: str = "assistent", active_modules: set[str] | None
         summary = knowledge.read_summary(topic)
         if summary:
             parts.append(summary)
+
+    # ── Persona: Ausschnitt des Dokument-Index ────────────────────────────────
+    # Additiv NEBEN knowledge_topics oben, nicht als Ersatz — beide Wege können
+    # nebeneinander bestehen, bis der alte nachweislich nicht mehr gebraucht
+    # wird. Unterschied: knowledge_topics LÄDT ganze Topic-Zusammenfassungen in
+    # den Prompt (wächst linear mit jedem Thema), der Index nennt nur Titel und
+    # Kurzfassung und überlässt das Holen dem Modell (siehe Leitregel 2 im
+    # Datenmodell: Dokumente werden gesucht, nicht mitgeschickt).
+    try:
+        from services import personas as personas_service
+        index_section = personas_service.build_index_section(mode, knowledge.list_available())
+        if index_section:
+            parts.append(index_section)
+    except Exception as e:
+        # Ein Fehler beim Index darf nie den ganzen Prompt verhindern — dann
+        # antwortet JARVIS lieber ohne Wissensverzeichnis als gar nicht.
+        print(f"[context] Persona-Index übersprungen: {e}", flush=True)
 
     brain_section = brain.build_prompt_section(mode)
     if brain_section:
