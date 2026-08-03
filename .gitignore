@@ -11,3 +11,7 @@ JARVIS-installer.zip
 server.log
 alarm_registry.json
 .claude/settings.local.json
+# Quellmaterial für Wissens-Importe — gehört nach ~/.jarvis/imports/, nicht ins Repo
+output/
+*.fileloc
+udemy_transcript_*.txt

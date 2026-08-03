@@ -1,0 +1,13 @@
+[Unit]
+Description=Tägliches JARVIS-Backup
+
+[Timer]
+# 04:30 — nach dem nächtlichen Betrieb, vor dem Aufstehen.
+OnCalendar=*-*-* 04:30:00
+# Nachholen, falls der Rechner zur geplanten Zeit aus war. Ohne das fällt ein
+# Backup ersatzlos aus, sobald die Maschine nachts einmal nicht läuft.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

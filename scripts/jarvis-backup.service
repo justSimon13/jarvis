@@ -1,0 +1,17 @@
+[Unit]
+Description=JARVIS Backup (Datenbanken, Wissensdatenbank, Zustandsdateien)
+# Kein Requires/After auf jarvis.service — das Backup läuft bewusst im laufenden
+# Betrieb (VACUUM INTO ist gegenüber Schreibzugriffen sicher) und darf nicht
+# ausfallen, nur weil der Dienst gerade neu startet.
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+# Bewusst der System-Interpreter, nicht .venv/bin/python3 wie bei jarvis.service:
+# backup.py nutzt ausschließlich die Standardbibliothek. Damit funktioniert das
+# Backup auch dann noch, wenn die virtuelle Umgebung kaputt ist — also genau in
+# der Lage, in der man es am ehesten braucht.
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/scripts/backup.py
+StandardOutput=journal
+StandardError=journal
