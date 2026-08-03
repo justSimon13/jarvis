@@ -140,6 +140,14 @@ CODING_JOB_ACTION_ACK = "coding_job_action_ack"  # {"type": "coding_job_action_a
 ENTITY_ACTION     = "entity_action"      # {"type": "entity_action", "entity": "todos"|"projekte"|"kontakte"|"threads", "action": "add"|"update"|"delete"|"complete", "id": ..., ...Felder}
 ENTITY_ACTION_ACK = "entity_action_ack"  # {"type": "entity_action_ack", "ok": bool, "entity": "...", "action": "...", "error": "...", "id": ... (nur bei action=="add" und Erfolg)}
 
+# ── Wissens-Importe (Client → Server, Server → Client) ───────────────────────
+IMPORT_UPLOAD     = "import_upload"      # Client → Server: {"type": ..., "title": str, "topic": str, "model": str?, "budget_usd": float?, "files": [{"filename": str, "data_base64": str}, ...]} — legt einen Import an und legt die Quelldateien unter ~/.jarvis/imports/<id>/ ab. Startet NICHTS, der Lauf ist eine eigene Aktion.
+IMPORT_UPLOAD_ACK = "import_upload_ack"  # Server → Client: {"type": ..., "ok": bool, "id": int?, "plan": {...}?, "error": str?} — plan enthält die Vorschau aus import_adapters.plan() (Kopf, Abschnitte, Einheiten, Kostenschätzung, Hinweise)
+IMPORT_ACTION     = "import_action"      # Client → Server: {"type": ..., "id": int, "action": "start"|"stop"} — startet den Hintergrundlauf oder bittet ihn anzuhalten (kooperativ, nie mitten in einem bezahlten Aufruf)
+IMPORT_ACTION_ACK = "import_action_ack"  # Server → Client: {"type": ..., "ok": bool, "id": int, "action": "...", "error": str?}
+IMPORT_PROGRESS   = "import_progress"    # Server → ALLE Web-Clients: {"type": ..., "import_id": int, "ref": str, "title": str, "outcome": "ok"|"leer", "done": int, "written": int, "empty": int, "skipped": int, "total": int, "cost_usd": float} — nach jeder Einheit. Broadcast wie THREAD_TITLE_UPDATED: reine Anzeige, kein Zustandsrisiko, mehrere offene Fenster sollen mitziehen.
+IMPORT_FINISHED   = "import_finished"    # Server → ALLE Web-Clients: {"type": ..., "import_id": int, "status": "done"|"paused"|"failed", "distilled": int, "empty": int, "skipped": int, "cost_usd": float, "error": str?}
+
 # ── Dokument-Export (Client → Server, Server → Client) ────────────────────────
 GENERATE_DOCUMENT_REQUEST = "generate_document_request"  # {"type": "generate_document_request", "quelle_typ": "projekt"|"seite", "quelle_id": int, "format": "pdf"|"docx"} — Client → Server, Layer 1 DATA (kein LLM-Umweg, z.B. Export-Knopf in ProjekteView.vue). Antwort kommt als document_ready (Erfolg) oder error (Fehlschlag).
 DOCUMENT_READY = "document_ready"  # {"type": "document_ready", "filename": "...", "mime": "...", "data_base64": "..."} — Ergebnis von generate_document (tools.py, LLM-Pfad) ODER generate_document_request (Direkt-Pfad), Client löst Browser-Download aus

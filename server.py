@@ -36,6 +36,10 @@ from services import client_music as client_music_service
 from services import coding_engine
 from services import coding_jobs
 from services import document_export
+from services import import_adapters
+from services import import_runner
+from services import import_store
+from services import import_upload
 from services import local_exec
 from services import sleep_coach
 from services import proactive as proactive_service
@@ -458,6 +462,30 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
         try:
             job = coding_jobs.get_job_status(int(job_id))
             return job if "id" in job else {"error": "Job nicht gefunden"}
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "imports":
+        # Wissens-Importe (services/import_store.py). Reine Leseansicht — das
+        # Anlegen und Starten läuft über eigene Nachrichtentypen, nicht hier.
+        try:
+            return import_store.list_imports(limit=int(req_data.get("limit") or 50))
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "import_running":
+        # Was läuft gerade? Ein frisch geöffnetes Fenster hat die bisherigen
+        # import_progress-Ereignisse nicht gesehen und wüsste sonst nichts von
+        # einem laufenden Import.
+        return import_runner.status()
+    if resource == "import":
+        # SINGULAR, ein Import per id — gleiches Muster wie coding_job oben:
+        # Ereignisse melden nur "etwas hat sich geändert", den vollständigen
+        # Stand holt die Ansicht danach frisch hierüber.
+        import_id = req_data.get("id")
+        if import_id is None:
+            return {"error": "id erforderlich"}
+        try:
+            record = import_store.get(int(import_id))
+            return record if record else {"error": "Import nicht gefunden"}
         except Exception as e:
             return {"error": str(e)}
     if resource == "allowed_coding_paths":
@@ -1155,6 +1183,84 @@ async def handle_connection(websocket):
                     await loop.run_in_executor(None, session_memory.advance_cursor, category, tab_id)
                     _active_thread_ids[tab_id] = new_thread_id
                     pipeline.set_thread(new_thread_id, thread_project_id)
+                elif data.get("type") == P.IMPORT_UPLOAD:
+                    # Legt einen Import an, schreibt die Quelldateien und liefert
+                    # die Plan-Vorschau zurück. Startet bewusst KEINEN Lauf —
+                    # erst sieht Simon, was der Import kosten würde und wie die
+                    # Struktur erkannt wurde. Läuft komplett im Executor, weil
+                    # Base64-Dekodierung und Plattenzugriff den Event-Loop sonst
+                    # für die Dauer eines mehrere Megabyte großen Uploads
+                    # blockieren würden.
+                    def _do_import_upload(payload: dict):
+                        title = (payload.get("title") or "").strip()
+                        topic = (payload.get("topic") or "").strip()
+                        if not title or not topic:
+                            return {"ok": False, "error": "Titel und Topic sind erforderlich."}
+                        new_id = import_store.create(
+                            source_path="", source_type="unbekannt", title=title, topic=topic,
+                            model=payload.get("model"), max_budget_usd=payload.get("budget_usd"),
+                        )
+                        try:
+                            stored = import_upload.store_files(new_id, payload.get("files") or [])
+                            plan = import_adapters.plan(Path(stored["path"]))
+                            if not plan.get("adapter"):
+                                # Kein Kopf erkannt: der Import bleibt bestehen,
+                                # die Dateien auch — aber der Grund steht in der
+                                # Antwort, statt beim Start zu überraschen.
+                                import_store.update(
+                                    new_id, source_path=stored["path"], status="failed")
+                                return {"ok": False, "id": new_id, "plan": plan,
+                                        "error": plan.get("problem")}
+                            import_store.update(
+                                new_id, source_path=stored["path"],
+                                source_type=plan["adapter"], status="planned",
+                                section_count=plan["section_count"],
+                                lecture_count=plan["lecture_count"],
+                            )
+                            return {"ok": True, "id": new_id, "plan": plan, "files": stored["count"]}
+                        except Exception as exc:
+                            import_upload.discard(new_id)
+                            import_store.update(new_id, status="failed")
+                            return {"ok": False, "id": new_id, "error": str(exc)}
+
+                    try:
+                        upload_result = await loop.run_in_executor(None, _do_import_upload, data)
+                    except Exception as e:
+                        upload_result = {"ok": False, "error": str(e)}
+                    send_json({"type": P.IMPORT_UPLOAD_ACK, **upload_result})
+                elif data.get("type") == P.IMPORT_ACTION:
+                    # start: Hintergrundlauf anstoßen. stop: kooperativ anhalten.
+                    # Fortschritt und Abschluss gehen per Broadcast an ALLE
+                    # Web-Clients (wie THREAD_TITLE_UPDATED) — reine Anzeige,
+                    # und bei mehreren offenen Fenstern soll jedes mitziehen.
+                    action_id = data.get("id")
+                    action = data.get("action")
+                    try:
+                        if action == "start":
+                            def _on_progress(update: dict):
+                                _broadcast_web_event({"type": P.IMPORT_PROGRESS, **update})
+
+                            def _on_finished(result: dict):
+                                _broadcast_web_event({"type": P.IMPORT_FINISHED, **result})
+
+                            res = await loop.run_in_executor(
+                                None,
+                                lambda: import_runner.start(int(action_id), _on_progress, _on_finished),
+                            )
+                            send_json({"type": P.IMPORT_ACTION_ACK, "id": action_id,
+                                       "action": action, **res})
+                        elif action == "stop":
+                            stopped = import_runner.request_stop(int(action_id))
+                            send_json({"type": P.IMPORT_ACTION_ACK, "id": action_id,
+                                       "action": action, "ok": stopped,
+                                       "error": None if stopped else "Dieser Import läuft gerade nicht."})
+                        else:
+                            send_json({"type": P.IMPORT_ACTION_ACK, "id": action_id,
+                                       "action": action, "ok": False,
+                                       "error": f"Unbekannte Aktion: {action}"})
+                    except Exception as e:
+                        send_json({"type": P.IMPORT_ACTION_ACK, "id": action_id,
+                                   "action": action, "ok": False, "error": str(e)})
                 elif data.get("type") == P.MOVE_MESSAGES:
                     # Thread-Umbau Teil A — verschiebt eine oder mehrere vollständige
                     # Runden (nie einzelne Zeilen, siehe session_memory.py::
