@@ -53,6 +53,18 @@ Eine Persona ist definiert durch:
 
 **Reihenfolge:** Personas gehören ans Ende der Umsetzung, nicht an den Anfang. Ein Umschalter, der nur den Systemprompt tauscht, ist eine Stunde Arbeit — aber sinnlos, solange die Rollen keine echten Arbeitsweisen und Werkzeuge haben. Der Umschalter existiert bereits in der Web-App und bleibt vorerst funktionslos.
 
+### Nachtrag 02.08. — Persona als Objekt, und was "Fachwissen" konkret heißt
+
+**Eine Persona bekommt ein Datenobjekt** (`personas`, siehe Datenmodell). Die Fassung oben führte sie als reine Konfiguration; sobald eine Rolle einen Index-Ausschnitt und eine Werkzeug-Vorauswahl trägt, ist sie ohnehin adressierbar. Das ändert nichts an "Werkzeuge sind global" — die Vorauswahl bleibt Vorauswahl, keine Berechtigung.
+
+**Fachwissen heißt nicht "vorgeladenes Wissen".** Das war die offene Stelle im Punkt oben. Auflösung: **eine Persona lädt kein Wissen, sie filtert den Index.** Sonst arbeitet die Rolle gegen Leitregel 2 (Dokumente werden gesucht, nicht mitgeschickt) und jedes Gespräch wird teurer, je mehr die Rolle "kann". Der Coach sieht die zu ihm gehörenden Titel im Inhaltsverzeichnis und holt sich, was er braucht. Die **feste Leseliste** aus "Wissen steuert Ausführung" bleibt dem unbeaufsichtigten Lauf vorbehalten — dort ist Suchen zu unzuverlässig, im Gespräch nicht.
+
+**Die Arbeitsweise liegt als Dokument in der Wissensdatenbank**, nicht als Feld an der Persona — konsistent mit "Wissen steuert Ausführung": lesbar, im Gespräch änderbar, mit Historie und verlinkbar. Die Persona hält nur den Zeiger darauf.
+
+**Persona-Seite:** Beschreibung, Werkzeug-Vorauswahl, Themen der Rolle, Zeiger auf die Arbeitsweise — plus, als reine Anzeige, der Stand laufender Importe zu diesen Themen ("SEO-Kurs: 12 von 18 Abschnitten"). Der Lernstand selbst gehört an den Import, nicht an die Rolle.
+
+**Zur Reihenfolge:** eine Rolle mit echtem Index-Ausschnitt und Werkzeug-Vorauswahl ist kein Prompt-Tausch mehr. Der Einwand oben ("sinnlos, solange die Rollen keine echten Arbeitsweisen und Werkzeuge haben") spricht damit nicht mehr gegen einen frühen Zeitpunkt, sondern benennt genau die Voraussetzung, die diese beiden Teile schaffen. Die Werkzeug-Vorauswahl ist davon der kleinste und wirksamste Einzelschritt — sie hängt an keinem der übrigen Punkte.
+
 ---
 
 ## Das Projekt ist die zentrale Einheit
@@ -139,11 +151,27 @@ Der erste Testlauf blieb an einer interaktiven zsh-Abfrage hängen (`compinit: i
 
 **Wichtig zu wissen:** Im Headless-Modus gibt es keine Rückfrage. Fehlt eine Freigabe, bricht der Lauf ab. "Auto-Mode aus" kann also nicht heißen "Claude Code fragt und JARVIS reicht durch".
 
-1. **Ergebnis-Review (Default):** Lauf → Branch → Diff in der Web-App → Akzeptieren (Merge) / Nachbessern (`--resume` mit Kommentar) / Verwerfen (Branch löschen). Der Branch *ist* der Review-Puffer.
+1. **Ergebnis-Review (Default):** Lauf → Branch → Review in der Web-App → Akzeptieren (Merge) / Nachbessern (`--resume` mit Kommentar) / Verwerfen (Branch löschen). Der Branch *ist* der Review-Puffer.
+
+### Was Review konkret heißt
+
+**Nicht: Diffs lesen.** Simon lässt sich den Code von Claude Code erzeugen und kennt die Zusammenhänge im Detail nicht — eine Zeile-für-Zeile-Prüfung ist weder realistisch noch der richtige Hebel. Die Review-Ansicht ist deshalb nicht primär ein Diff-Viewer, sondern beantwortet drei Fragen, die ohne Code-Kenntnis prüfbar sind:
+
+| Frage | Was angezeigt wird |
+|---|---|
+| **Umfang** — wurde nur angefasst, was angefasst werden sollte? | Geänderte Dateien mit Zeilenzahl (`git diff --stat`), abgeglichen mit dem freigegebenen Plan |
+| **Grenzen** — stimmen die Regeln, die ich lesen kann? | Geänderte Konfiguration, Allowlists, Konstanten — reine Daten, kein Code |
+| **Verhalten** — funktioniert es, und funktioniert das Alte noch? | Zusammenfassung des Laufs plus expliziter Testnachweis: was wurde geprüft, mit welchem Ergebnis |
+
+Der vollständige Diff bleibt aufklappbar, ist aber Detail, nicht Einstieg.
+
+**Auffälligkeiten sind wichtiger als Korrektheit.** Eine Datei im Diff, die im Plan nicht vorkam, ist ein Signal — unabhängig davon, ob die Änderung darin gut ist. Deshalb ist der Abgleich Plan ↔ tatsächlich geänderte Dateien der wertvollste Teil der Ansicht.
+
+**Der eigentliche Test ist das laufende System.** Startet es, funktioniert der bisherige Weg noch? Bei additiven Umbauten ist das die Behauptung, die zählt.
 2. **Plan-Review ("Auto-Mode aus"):** Lauf 1 read-only mit `dontAsk` erzeugt einen Plan → Freigabe → Lauf 2 auf derselben Session mit Schreibrechten. Eingriff **vor** dem Schreiben statt bei jedem Dateizugriff.
 3. **Live-Rückfrage pro Tool-Call:** bewusst verworfen. Bräuchte das Agent SDK statt CLI, plus Push, Antwort-UI und Timeout-Regel — und bedeutet 30 Freigabe-Dialoge auf dem Handy pro Task. Für diese Art von Freigabe gibt es bereits einen guten Ort: das Terminal, wenn man davorsitzt.
 
-**UI-Bedarf:** eine Diff-Ansicht mit drei Knöpfen. Der einzige wirklich neue UI-Teil.
+**UI-Bedarf:** eine Review-Ansicht mit drei Knöpfen — oben Zusammenfassung, geänderte Dateien und Testnachweis, darunter der Diff zum Aufklappen. Der einzige wirklich neue UI-Teil.
 
 ---
 
@@ -629,7 +657,7 @@ Deckt auch Fälle ab, an die heute niemand denkt, und ist dieselbe Logik wie bei
 1. **Praxistest** (10 Minuten): `claude -p` in einem Arbeitsprojekt, plus `claude auth status` in beiden Profilen. Klärt die letzte offene Annahme.
 2. **Kanal**: Auftrag rein, Befehl auf dem Mac, Ergebnis raus. Erstmal nur `gh issue list` — harmlos, zeigt sofort, ob der Weg trägt.
 3. **Ein einzelner Claude-Code-Lauf** über denselben Kanal, Branch als Ergebnis.
-4. **Diff-Ansicht** mit drei Knöpfen.
+4. **Review-Ansicht**: Zusammenfassung, geänderte Dateien, Testnachweis, drei Knöpfe. Diff aufklappbar.
 5. **Batch mit Plan-Freigabe** (Morgenplanung).
 
 **C. `data_scope` und fehlende Beziehungen** (additive Spalten, kleinstes Risiko). Muss vor dem ersten Arbeitsprojekt stehen — nachträglich lässt sich die Spalte nicht befüllen.
@@ -646,8 +674,18 @@ Deckt auch Fälle ab, an die heute niemand denkt, und ist dieselbe Logik wie bei
 
 ## Offene Punkte
 
+**Stand 31.07.2026 — Coding-Kanal privat vollständig.** Gebaut und verifiziert: Kanal zum Mac (Tauri-Worker), `jobs`/`queue`/`clients`, Warteschlange mit `pending`, Worker-Routing über `worker_id`, dateibasierte Konfiguration pro Installation (`allowlist.json` mit Pfaden, Konto, Basisverzeichnis, Binary-Pfaden), Job-Ansicht, `autonomy = careful` mit zweistufigem Plan-Review, `delivery` (`local`/`push`/`pr`), `issue_repo`, `coding_doc`, Job-Karte im Chat mit Live-Fortschritt und Freigabe-Knöpfen.
+
+**Als Nächstes: Arbeits-Mac anbinden** (zweiter Worker, `client_id = mac-work`, Projekt mit `data_scope = employer`, `autonomy = careful`, `delivery = local`).
+
+**Kleinere Fehler, zurückgestellt bis nach dem Refactoring:**
+- JARVIS bestätigt "hab's mir gemerkt", ohne `brain_write` aufzurufen — untergräbt die Verlässlichkeit des Gedächtnisses
+- Der Coding-Prompt sagt dem Modell nicht, dass niemand zuhört; es fragt mitten im Lauf nach Bestätigung und bricht dann ab
+- Alte Worker-Zuordnungen lassen sich nicht entfernen (`unassign_mac_worker` ergänzt, Altlasten noch drin)
+- `append_knowledge_section` existiert, wird aber nicht genutzt — der Hinweis greift nur, wenn das Modell die Länge vorab abschätzt
+
 **Technisch zu klären (blockiert):**
-- Läuft `claude -p` im Arbeitsprofil sauber durch, und über welchen Account? (→ Schritt 1)
+- Chat-Kontext geht bei einem Server-Neustart während eines laufenden Aufrufs verloren — `api_histories` liegt nur im Speicher. Wird durch den `messages`/`threads`-Umbau strukturell gelöst.
 
 **Zu schreiben, bevor die erste automatische Demo läuft:**
 - Anleitung "Demo-Projekt anlegen" in der Wissensdatenbank (Stack, Ordnerstruktur, Seed-Daten, Deploy-Konventionen)

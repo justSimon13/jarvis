@@ -112,10 +112,56 @@ Der Bestätigungsschritt für Wiki-Änderungen aus dem Lernlauf.
 |---|---|---|
 | `id` | TEXT PK | |
 | `document_id` | INTEGER FK NULL | NULL = neues Dokument |
+| `import_id` | INTEGER FK NULL | NULL = aus dem Gesprächs-Lernlauf, gesetzt = aus einem Import |
 | `title`, `section` | TEXT | |
 | `content`, `preview` | TEXT | |
 | `status` | TEXT | `open` / `applied` / `rejected` |
 | `created_at` | TEXT | |
+
+### `imports`
+
+Große Wissensquellen einlesen: Kurstranskript, PDF, Buch. **Eigenständiges Objekt mit Lebensdauer — nicht im Chat**, gleiche Begründung wie bei `jobs`. Ein Anhang lebt nur im Prompt; ein fortsetzbarer Lauf braucht eine Ablage.
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `id` | INTEGER PK | Adresse für "Import fortsetzen" |
+| `source_path` | TEXT | Rohdatei im Archiv, **nicht** unter `knowledge/` |
+| `source_type` | TEXT | Adapter, z. B. `udemy_transcript` — der austauschbare Kopf |
+| `title` | TEXT | "SEO-Kurs" |
+| `status` | TEXT | `planned` / `running` / `paused` / `done` / `failed` |
+| `data_scope` | TEXT | Pflicht vor dem Start, siehe unten |
+| `cost_usd`, `max_budget_usd` | REAL | wie bei `jobs` |
+| `created_at`, `updated_at` | TEXT | |
+
+**Drei Schritte, das Modell erst im dritten: normalisieren → schneiden → destillieren.** Die ersten beiden sind deterministisch und kostenlos. Quellenspezifisch ist nur dieser vordere Teil — Destillieren, Schreiben, Verlinken, Fortschritt, Budget sind für alle Quellen gleich. Also eine Pipeline mit austauschbarem Kopf, kein Universal-Importer. Findet sich für eine Quelle kein Kopf, fragt der Import nach, statt zu raten.
+
+**Kein Fortschrittszähler, keine Chunk-Offsets.** Weil der Schnitt deterministisch ist, lässt sich die Abschnittsliste jederzeit kostenlos aus der Quelldatei neu erzeugen. "Wo waren wir?" ist ein Abgleich: neu schneiden, gegen die vorhandenen `document_suggestions` mit dieser `import_id` halten, fehlende Abschnitte abarbeiten. Gespeichert wird nur, was sich nicht rekonstruieren lässt.
+
+**`data_scope` muss vor dem ersten Aufruf feststehen** und wird an jedes erzeugte Dokument durchgereicht — ein Kurs über den Arbeitgeber erzeugt Dokumente mit `employer`. Es ist die einzige Angabe, die beim Start erzwungen wird (siehe Leitregel: das Einzige, was sich nachträglich nicht reparieren lässt).
+
+**Freigabe gebündelt, nicht pro Abschnitt.** Der Lauf produziert durch, der Review passiert danach über `document_suggestions`. Ein Lauf, der nach jedem Abschnitt auf Bestätigung wartet, ist über 18 Abschnitte unbenutzbar.
+
+**Der Rohtext wird kein Dokument.** Gesprochener Kursinhalt ist überwiegend Füllwort; er würde den Index verstopfen, dessen Zusammenfassung ohnehin auf ein bis zwei Sätze kappt. In die Wissensdatenbank kommt nur das Destillat, die Rohdatei bleibt Archiv.
+
+**Beispiel eines Kopfes** (`udemy_transcript`): zweistufige Marker im Text — `=== Sektion ===`, `--- Lektion ---`. Sektion wird ein Dokument, Lektionen werden Abschnitte darin, der Kurs eine Indexseite mit Links. Destilliert wird pro Sektion mit den Lektionsüberschriften im Block, nicht pro Lektion — sonst viele kleine Aufrufe mit vollem Prompt-Overhead je Lektion.
+
+### `personas`
+
+Rollendefinition als Objekt. **Abweichung von der Fassung vom 28.07.**, die Personas bewusst als reine Konfiguration führte: sobald eine Rolle einen Index-Ausschnitt und eine Werkzeug-Vorauswahl hat, ist sie adressierbar — eine wachsende Konfigurationsstruktur wäre dieselbe Sache in unehrlicher Form.
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `id` | TEXT PK | `assistant`, `coach`, `focus` |
+| `name`, `description` | TEXT | |
+| `tools` | TEXT | JSON-Array: Vorauswahl, keine Berechtigung |
+| `index_scope` | TEXT | JSON: welcher Ausschnitt des Dokument-Index mitfährt |
+| `document_id` | INTEGER FK NULL | Zeiger auf das Arbeitsweise-Dokument |
+
+**Eine Persona lädt kein Wissen, sie filtert den Index.** Das folgt aus Leitregel 2 (Dokumente werden gesucht, nicht mitgeschickt) — eine Rolle, die Dokumente vorlädt, arbeitet gegen die zentrale Kostenregel. Der SEO-Coach sieht die SEO-Dokumente im Inhaltsverzeichnis und sucht sich, was er braucht. Die feste Leseliste bleibt dem **unbeaufsichtigten Lauf** vorbehalten, wo Suchen zu unzuverlässig ist.
+
+**Die Arbeitsweise ist ein Dokument, keine Spalte.** Damit ist sie lesbar, im Gespräch änderbar, hat eine Historie und kann verlinkt werden — siehe "Wissen steuert Ausführung" im Konzept.
+
+**Der Lernstand gehört nicht hierher.** Er ist eine Eigenschaft des Imports und wird auf der Persona-Seite nur angezeigt (Verknüpfung über `index_scope`). Sonst stünde derselbe Fortschritt an zwei Orten, sobald zwei Rollen dasselbe Thema führen.
 
 ### `messages`
 
@@ -128,8 +174,12 @@ Ein Strom. Keine Sessions.
 | `text` | TEXT | |
 | `thread_id` | INTEGER FK NULL | Themen-Etikett |
 | `project_id` | INTEGER FK NULL | |
-| `client_id` | TEXT | woher sie kam |
+| `client_id` | TEXT | woher sie kam — **Gerät** (`mac-private`, `jarvis-web`, …) |
+| `tab_id` | TEXT NULL | **Zwischenlösung:** isoliert mehrere gleichzeitig offene Web-Fenster. Entfällt, sobald `thread_id` die Fensterbildung übernimmt — dann wird nach Thema gefenstert, nicht pro Tab. |
+| `data_scope` | TEXT | Default `own` |
 | `created_at` | TEXT | |
+
+`data_scope` gilt ebenso für `threads` und `daily_summaries` — Nachrichten enthalten Arbeitsinhalte, sobald über ein Arbeitsprojekt gesprochen wird.
 
 ### `threads`
 
@@ -138,10 +188,15 @@ Ein Strom. Keine Sessions.
 | `id` | INTEGER PK | |
 | `title` | TEXT | vom Modell vergeben |
 | `project_id` | INTEGER FK NULL | |
+| `collection_id` | TEXT FK NULL | Gruppierung für Themen ohne Projekt |
 | `last_activity_at` | TEXT | |
 | `summary` | TEXT NULL | wenn verdichtet |
 
 **Fensteraufbau:** Nachrichten des laufenden Threads + je eine Zeile zu anderen Threads desselben Tages. Nicht "die letzten N".
+
+**Warum `collection_id` neben `project_id`:** ein Projekt ist die einzige Gruppierungsachse, die es sonst gäbe — für ein Thema wie "Steuern" gibt es kein sinnvolles Projekt, und ein Bereich als Projektzeile getarnt würde Projektliste, Finanzansicht und Stundenschätzung mit einem Ding verseuchen, das keines davon ist. `collections` existiert im Modell ohnehin ("hat es Logik → feste Tabelle, sind es nur Daten → Collection"); für die reine Gruppierung reichen `id`/`name`/`icon`, ohne `fields`/`entries`.
+
+**Bewusst ein einzelner FK, keine n:m-Zuordnung.** Ein Thread liegt in genau einer Gruppe — Ordner, keine Etiketten. Soll ein Thread unter mehreren Kategorien erscheinen, ist das ein anderes Konzept mit anderer Oberfläche und wird dann als solches entschieden, nicht durch eine stillschweigend hinzugefügte Zwischentabelle.
 
 ### `daily_summaries`
 
@@ -173,7 +228,9 @@ Coding-Aufträge. Eigenständige Objekte mit Lebensdauer — **nicht** im Chat.
 | `status` | TEXT | `planned` / `approved` / `running` / `awaiting_review` / `done` / `failed` |
 | `session_id` | TEXT NULL | Claude-Code-Session, für `--resume` |
 | `cost_usd` | REAL NULL | aus `total_cost_usd` |
-| `result` | TEXT NULL | Zusammenfassung des Laufs |
+| `result` | TEXT NULL | Zusammenfassung: was geändert, was bewusst nicht, wo vom Plan abgewichen |
+| `changed_files` | TEXT NULL | JSON: Datei + Zeilenzahl (`git diff --stat`) — Grundlage für den Plan-Abgleich |
+| `test_evidence` | TEXT NULL | was geprüft wurde, mit Ergebnis |
 | `denials` | TEXT NULL | `permission_denials` — Abbruchgrund |
 | `created_at`, `updated_at` | TEXT | |
 
@@ -189,8 +246,11 @@ Geräte, nicht Kunden.
 |---|---|---|
 | `id` | TEXT PK | `mac-private`, `mac-work`, `jarvis-server`, `jarvis-web` |
 | `type` | TEXT | `worker` / `ui` / `speaker` |
+| `expected_account` | TEXT NULL | `email` oder `orgId` aus `claude auth status` |
 | `online` | INTEGER | |
 | `last_seen_at` | TEXT | |
+
+**`expected_account` ist die Absicherung der Kontotrennung.** Der Worker ruft vor jedem Job `claude auth status` auf und vergleicht — bei Abweichung Abbruch statt Ausführung. Damit hängt die Trennung nicht allein an der korrekten Client-Zuordnung des Projekts.
 
 ### `queue`
 
