@@ -14,8 +14,8 @@ from services import apple_music as apple_music_service
 from services import timer as timer_service
 from services import alarm as alarm_service
 from services import client_music as client_music_service
-from services import coding_engine
 from services import coding_jobs
+from services import server_status
 from services import local_exec
 from services import tickets as tickets_service
 from services import document_export
@@ -26,9 +26,9 @@ DEFINITIONS = [
         "description": (
             "Startet einen Coding-Auftrag auf dem Mac-Worker: 'claude -p' läuft headless direkt im "
             "freigegebenen Projektordner (kein Server-seitiger Worktree, kein Claude Agent SDK) und "
-            "liefert am Ende einen Branch + GitHub-PR. ANDERER Weg als delegate_coding_task — dieses "
-            "Tool ist für Mac-Projekte über den Worker-Kanal, delegate_coding_task bleibt für JARVIS' "
-            "eigenes Server-Repo über das Agent SDK. Mehrere Projekte möglich (siehe project-Parameter). "
+            "liefert am Ende einen Branch + Commit (je nach delivery zusätzlich Push/PR). Der EINZIGE Weg, "
+            "Code zu ändern — der frühere server-seitige Weg über das Agent SDK ist entfernt. "
+            "Mehrere Projekte möglich (siehe project-Parameter). "
             "Läuft VOLLSTÄNDIG asynchron — kehrt sofort zurück, wartet auf keine Quittierung. Alle Prüfungen "
             "(Freigabeliste, Konto, git fetch/checkout/pull) laufen danach auf dem Mac; Fehler dabei kommen "
             "als Benachrichtigung (Job failed), NICHT in dieser Antwort — ebenso das eigentliche Ergebnis "
@@ -48,7 +48,15 @@ DEFINITIONS = [
             "sein — der Plan kommt als Chat-Nachricht + Notification, dann approve_coding_job/"
             "revise_coding_job/discard_coding_job verwenden. Bei anderen Autonomiegraden (oder nicht gesetzt) "
             "läuft es wie gehabt in einem einzigen schreibenden Lauf. Mit check_coding_job_status kann der "
-            "Fortschritt zwischendurch abgefragt werden."
+            "Fortschritt zwischendurch abgefragt werden. "
+            "BRANCH UND COMMIT-NACHRICHT: beide optional, beide vorschlagen statt weglassen. Ohne Angabe "
+            "heißt der Branch 'jarvis/job-<id>' (nichtssagend) und die Commit-Nachricht wird aus der ersten "
+            "Zeile des Abschlussberichts geschnitten (schon einmal ein JSON-Fragment aus einem Tool-Log). "
+            "Vorgehen: EINMAL PRO PROJEKT die Konventionen nachlesen — read_repo_file mit path='CLAUDE.md', "
+            "sonst 'GIT_CONVENTIONS.md' — und Branch sowie Commit-Nachricht danach formulieren. Steht dort "
+            "nichts, ein sprechender Name aus Ticketnummer und Thema (z.B. 'feat/mfs-1488-fahrzeug-art-filter'). "
+            "branch darf auch ein BESTEHENDER Branch sein, wenn der Auftrag auf vorhandener Arbeit aufsetzt — "
+            "vorher mit get_repo_state prüfen, was dort schon liegt."
         ),
         "input_schema": {
             "type": "object",
@@ -77,6 +85,21 @@ DEFINITIONS = [
                     "description": (
                         "Nummer eines GitHub-Issues im Repo des Projekts (repo-Feld muss gesetzt sein) — daraus "
                         "wird der Auftrag gebaut, statt instruction direkt zu verwenden."
+                    ),
+                },
+                "branch": {
+                    "type": "string",
+                    "description": (
+                        "Branch-Name für diesen Job, nach den Konventionen des Projekts (siehe Beschreibung). "
+                        "Darf ein bestehender Branch sein, wenn auf vorhandener Arbeit aufgesetzt wird. "
+                        "Ohne Angabe: 'jarvis/job-<id>'. Unbrauchbare Werte fallen still darauf zurück."
+                    ),
+                },
+                "commit_message": {
+                    "type": "string",
+                    "description": (
+                        "Commit-Nachricht in einer Zeile, nach den Konventionen des Projekts. Ohne Angabe "
+                        "schneidet der Worker sie aus dem Abschlussbericht — deutlich schlechter."
                     ),
                 },
             },
@@ -223,7 +246,7 @@ DEFINITIONS = [
             "approve_coding_job/revise_coding_job/discard_coding_job), wurde er verworfen "
             "(status='discarded'), oder gab es einen Fehler? Ohne id der zuletzt gestartete Job. Nutzen wenn "
             "Simon fragt 'läuft der Coding-Job noch?', 'ist der Auftrag fertig?' o.ä. — ANDERES Tool als "
-            "check_coding_task_status (das ist für delegate_coding_task, den server-seitigen Weg)."
+            "check_coding_job_status."
         ),
         "input_schema": {
             "type": "object",
@@ -310,6 +333,119 @@ DEFINITIONS = [
         },
     },
     {
+        "name": "get_server_status",
+        "description": (
+            "Zustand des HP-Servers, auf dem JARVIS selbst läuft: Laufzeit, freier Speicherplatz, "
+            "Arbeitsspeicher und ob die Dienste laufen (jarvis, jarvis-web, jarvis-dashboard, "
+            "jarvis-backup.timer). Optional die letzten Journal-Zeilen EINES dieser Dienste. "
+            "Rein lesend, verändert nichts. "
+            "NICHT für die Projekt-Repos auf den Mac-Workern — dafür get_repo_state/read_repo_file. "
+            "Ersetzt das frühere run_command: dessen schreibende Hälfte (Dienste neu starten, Pakete "
+            "installieren, sudo) ist entfallen. Wenn Simon so etwas will, ihm sagen dass er es per SSH "
+            "macht — das ist schneller als eine Freigabe im Dashboard."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string",
+                    "description": "Dienstname für die Journal-Zeilen (nur zusammen mit log_lines).",
+                },
+                "log_lines": {
+                    "type": "integer",
+                    "description": "Wie viele Journal-Zeilen (1–200). Ohne Angabe kein Log.",
+                },
+            },
+        },
+    },
+    {
+        "name": "read_repo_file",
+        "description": (
+            "Liest eine Datei aus einem Projekt-Repo auf dem Worker-Rechner und gibt den Inhalt zurück. "
+            "OHNE Coding-Job, ohne Branch-Wechsel, ohne Plan, ohne Freigabe, ohne Kosten — der Checkout "
+            "auf dem Rechner wird nicht angefasst (git show). "
+            "IMMER dieses Tool nehmen, wenn Simon etwas ansehen/prüfen/übernehmen will ('schau dir die "
+            "Doku an', 'was steht in der Datei', 'review das mal'). NIEMALS dafür start_coding_job — "
+            "ein Job ist zum Ändern da; für einen Lesevorgang erzeugt er nur einen leeren Branch und "
+            "kann den Inhalt gar nicht zurückliefern. "
+            "branch optional: ohne Angabe der aktuell ausgecheckte Stand, mit Angabe die Datei aus "
+            "diesem Branch (auch wenn ein anderer ausgecheckt ist). "
+            "Dateiname unbekannt? Erst list_repo_files."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":    {"type": "string", "description": "Pfad relativ zur Repo-Wurzel, z.B. 'docs/marketing/trackboxx.md'"},
+                "project": {"type": "string", "description": "Projektname; weglassen wenn nur eines mit Pfad existiert"},
+                "branch":  {"type": "string", "description": "Branch, aus dem gelesen wird (optional)"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "list_repo_files",
+        "description": (
+            "Listet die Dateien eines Projekt-Repos auf dem Worker-Rechner (git ls-tree, rein lesend). "
+            "Für 'welche Dateien gibt es', 'wie heißt die Doku-Datei' — und als Vorstufe zu "
+            "read_repo_file, wenn der genaue Pfad unbekannt ist. Kein Job, keine Kosten."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Projektname; weglassen wenn nur eines mit Pfad existiert"},
+                "branch":  {"type": "string", "description": "Branch (optional, sonst der ausgecheckte Stand)"},
+                "subdir":  {"type": "string", "description": "Nur dieses Unterverzeichnis, z.B. 'docs' (optional)"},
+            },
+        },
+    },
+    {
+        "name": "get_repo_state",
+        "description": (
+            "Zustand eines Projekt-Repos auf dem Worker-Rechner: aktueller Branch, ob der Arbeitsbaum "
+            "sauber ist, geänderte Dateien, die letzten Commits, vorhandene Branches. Rein lesend, "
+            "kein Job, keine Kosten. "
+            "Nutzen bevor ein Coding-Job gestartet wird, der auf bestehender Arbeit aufsetzt — sonst "
+            "muss der Planungslauf raten, was auf dem Zielbranch schon passiert ist. Außerdem für "
+            "Fragen wie 'ist da noch was uncommittet' oder 'welche Branches gibt es'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Projektname; weglassen wenn nur eines mit Pfad existiert"},
+                "branch":  {"type": "string", "description": "Commits dieses Branches statt des ausgecheckten (optional)"},
+            },
+        },
+    },
+    {
+        "name": "answer_coding_job",
+        "description": (
+            "Beantwortet die Rückfrage eines Coding-Jobs und setzt ihn damit fort. Nur für Jobs mit "
+            "status='awaiting_answer' — der Lauf hat sich unterbrochen, weil eine Entscheidung fehlt "
+            "(z.B. zwei gleichwertige Wege, eine fehlende Angabe im Auftrag). Das ist KEIN Fehlschlag, "
+            "sondern ein normaler Zwischenstand: bereits vorgenommene Änderungen bleiben bestehen, der "
+            "Job läuft in derselben Session weiter. "
+            "Die Frage steht im Ergebnis des Jobs (check_coding_job_status). "
+            "Wann selbst antworten, wann Simon fragen: geht die Antwort eindeutig aus Auftrag, Ticket "
+            "oder Projektkontext hervor, selbst antworten und Simon nur informieren. Ist es eine "
+            "inhaltliche oder gestalterische Entscheidung, die er treffen sollte, ihm die Frage "
+            "vorlegen statt zu raten — eine falsch geratene Antwort kostet einen ganzen Lauf."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Job-ID (aus check_coding_job_status/start_coding_job).",
+                },
+                "answer": {
+                    "type": "string",
+                    "description": "Die Antwort auf die Rückfrage, in einem oder zwei Sätzen.",
+                },
+            },
+            "required": ["id", "answer"],
+        },
+    },
+    {
         "name": "continue_coding_job",
         "description": (
             "Setzt einen unvollständigen Job (status='incomplete' — das Turn-Limit wurde erreicht, bevor die "
@@ -330,28 +466,6 @@ DEFINITIONS = [
         },
     },
     {
-        "name": "sync_project",
-        "description": (
-            "Zieht sofort den aktuellen main-Stand von GitHub (git pull), OHNE einen Coding-Task zu "
-            "starten — schnell und kostenlos, kein LLM-Sub-Aufruf. Rührt den Checkout nur an wenn er "
-            "gerade sauber ist und ein reiner Fast-Forward möglich ist, sonst wird ehrlich gemeldet dass "
-            "gerade nicht gepullt werden konnte. Nutzen wenn Simon fragt 'kannst du pullen?', 'bist du "
-            "aktuell?', 'zieh dir den neuesten Stand' o.ä. — NICHT für 'füge X hinzu' o.ä., das ist "
-            "delegate_coding_task. Vor jedem delegate_coding_task passiert das ohnehin schon automatisch, "
-            "dieses Tool ist nur für den direkten 'pull jetzt'-Wunsch ohne dass gerade ein Task ansteht."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "project": {
-                    "type": "string",
-                    "description": "Name eines mit create_project angelegten Projekts. Weglassen = das j.a.r.v.i.s.-Server-Repo selbst.",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
         "name": "sync_tickets",
         "description": (
             "Holt die aktuellen GitHub Issues aus den konfigurierten Repos (brain.config.ticket_repos — "
@@ -365,104 +479,6 @@ DEFINITIONS = [
             "lokaler Ausführung, sonst ehrliche Fehlermeldung statt stillem Nichtstun."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "commit_and_push",
-        "description": (
-            "Committet uncommittete Änderungen DIREKT im Live-Checkout (nicht über einen isolierten "
-            "Coding-Task-Worktree) und pusht sie sofort zu GitHub — landet damit OHNE PR-Review direkt "
-            "auf dem aktuell ausgecheckten Branch (meist main). Fragt IMMER zuerst eine Freigabe im "
-            "Dashboard mit dem vollen Diff an — das ist hier die einzige Kontrollinstanz. Läuft asynchron "
-            "im Hintergrund — Ergebnis kommt per Notification, nicht in dieser Antwort. Nutzen wenn Simon "
-            "sagt 'push das', 'commit und push', 'schieb das hoch' o.ä. für Änderungen die schon im "
-            "Checkout liegen (z.B. von einem vorherigen Coding-Task der direkt im Live-Checkout "
-            "geschrieben hat, oder von Simon selbst) — NICHT für 'füge X hinzu' o.ä., das ist "
-            "delegate_coding_task."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "project": {
-                    "type": "string",
-                    "description": "Name eines mit create_project angelegten Projekts. Weglassen = das j.a.r.v.i.s.-Server-Repo selbst.",
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Commit-Message (optional, sinnvoller Default falls weggelassen).",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "run_command",
-        "description": (
-            "Führt einen beliebigen Shell-Befehl auf dem HP-Server aus — für alles, wofür es kein "
-            "dediziertes Tool gibt (Logs prüfen, Speicherplatz checken, einen anderen Service neu "
-            "starten, ein Paket installieren, etc.). "
-            "Read-only Befehle aus einer engen Whitelist (ls/cat/pwd/head/tail/wc/stat/file/which/df/du/"
-            "ps/whoami/uname/date/uptime/free/hostname/ss/netstat/grep/sort/uniq/cut/tr/column/awk, "
-            "außerdem 'systemctl status/is-active/list-*', 'git status/log/diff/show/branch/remote', "
-            "'journalctl' ohne Vacuum/Rotate-Flags, 'sed' ohne -i) laufen SOFORT und geben das Ergebnis "
-            "direkt in dieser Antwort zurück — auch verkettet mit Pipes, solange JEDES Segment aus der "
-            "Whitelist kommt (z.B. 'ss -tlnp | grep 8080' oder 'journalctl -u jarvis | tail -50'). Bei "
-            "einem Fehler (falscher Pfad, Datei existiert nicht, o.ä.) SELBST nachhaken und mit einem "
-            "korrigierten Befehl erneut versuchen (z.B. 'ls ~/' um zu sehen was es wirklich gibt), nicht "
-            "einfach aufgeben oder Simon unkommentiert den rohen Fehler zeigen. "
-            "Alle anderen Befehle (alles was schreibt/verändert, sudo, unbekannte Programme, Verkettung "
-            "mit &&/;/Umleitung) fragen IMMER zuerst eine Freigabe im Dashboard mit dem vollen Befehl an — "
-            "das ist dort die einzige Kontrollinstanz. Laufen asynchron im Hintergrund, Ergebnis kommt "
-            "per Notification, NICHT in dieser Antwort — hier kann NICHT selbst nachgeprüft/nachgebessert "
-            "werden, das sollte Simon so mitgeteilt werden statt einen Erfolg vorzutäuschen. Braucht ein "
-            "sudo-Befehl ein Passwort, öffnet sich automatisch ein Passwort-Popup im Dashboard. "
-            "NICHT nutzen für Dinge mit eigenem Tool: pullen → sync_project, committen+pushen → "
-            "commit_and_push, programmieren → delegate_coding_task, Projekt/Repo anlegen → create_project."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Der auszuführende Shell-Befehl (vollständig, inkl. Pipes/Flags falls nötig).",
-                },
-                "cwd": {
-                    "type": "string",
-                    "description": "Arbeitsverzeichnis (absoluter Pfad). Weglassen = das j.a.r.v.i.s.-Server-Repo.",
-                },
-            },
-            "required": ["command"],
-        },
-    },
-    {
-        "name": "create_project",
-        "description": (
-            "Legt ein komplett neues Projekt an: GitHub-Repository unter Simons Account PLUS lokaler "
-            "Checkout auf dem HP-Server, in einem festen, begrenzten Projekte-Ordner (JARVIS kann damit "
-            "keine anderen Ordner auf dem Server anfassen). Fragt IMMER zuerst eine Freigabe im Dashboard "
-            "an — nach außen sichtbar (bei public) und nicht mit einem einfachen Undo rückgängig zu "
-            "machen. Läuft asynchron im Hintergrund — Ergebnis (angelegt/abgelehnt/Fehler) kommt per "
-            "Notification, nicht in dieser Antwort. Nutzen wenn Simon ein komplett neues Projekt starten "
-            "will (z.B. 'erstell mir Projekt XY'), NICHT für Änderungen an einem bestehenden Projekt — "
-            "dafür delegate_coding_task."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Projekt-/Repo-Name — nur Buchstaben, Zahlen, Punkt, Unterstrich, Bindestrich.",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Kurzbeschreibung des Projekts (optional).",
-                },
-                "private": {
-                    "type": "boolean",
-                    "description": "true = privates Repo (Default), false = öffentlich.",
-                },
-            },
-            "required": ["name"],
-        },
     },
     {
         "name": "data_query",
@@ -1371,6 +1387,8 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
                 issue_number=tool_input.get("issue_number"),
                 category=category,
                 tab_id=tab_id,
+                branch=tool_input.get("branch"),
+                commit_message=tool_input.get("commit_message"),
             )
 
         if tool_name == "check_coding_job_status":
@@ -1389,6 +1407,9 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
         if tool_name == "continue_coding_job":
             return coding_jobs.continue_job(tool_input["id"])
 
+        if tool_name == "answer_coding_job":
+            return coding_jobs.answer_job(tool_input["id"], tool_input.get("answer", ""))
+
         if tool_name == "list_allowed_coding_paths":
             target_conn_id = coding_jobs.resolve_worker_connection(tool_input.get("client_id"))
             if not target_conn_id:
@@ -1405,6 +1426,38 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
             result = local_exec.dispatch("add_allowed_path", target_conn_id=target_conn_id, path=tool_input["path"])
             if not result.get("ok"):
                 return result.get("error", "Fehler beim Hinzufügen des Pfads.")
+            return json.dumps(result.get("data", {}), ensure_ascii=False)
+
+        if tool_name == "get_server_status":
+            return json.dumps(
+                server_status.get_status(
+                    service=tool_input.get("service"),
+                    log_lines=int(tool_input.get("log_lines") or 0),
+                ),
+                ensure_ascii=False,
+            )
+
+        if tool_name in ("read_repo_file", "list_repo_files", "get_repo_state"):
+            # Lesende Repo-Abfragen. Gemeinsamer Zweig, weil sich die drei nur
+            # in Aktion und Feldern unterscheiden — Projektauflösung, Worker-
+            # Suche und Fehlerbehandlung sind identisch.
+            resolved = coding_jobs.resolve_project_for_read(tool_input.get("project"))
+            if isinstance(resolved, str):
+                return resolved
+            target_conn_id = coding_jobs.resolve_worker_connection(resolved["client_id"])
+            if not target_conn_id:
+                return (f"Kein Worker für Rolle '{resolved['client_id']}' verbunden — "
+                        f"das Repo liegt auf einem anderen Rechner, der gerade nicht erreichbar ist.")
+            aktion = {"read_repo_file": "repo_file", "list_repo_files": "repo_files",
+                      "get_repo_state": "repo_state"}[tool_name]
+            felder = {"cwd": resolved["path"], "branch": tool_input.get("branch")}
+            if tool_name == "read_repo_file":
+                felder["path"] = tool_input["path"]
+            elif tool_name == "list_repo_files":
+                felder["subdir"] = tool_input.get("subdir")
+            result = local_exec.dispatch(aktion, target_conn_id=target_conn_id, **felder)
+            if not result.get("ok"):
+                return result.get("error", "Repo-Abfrage fehlgeschlagen.")
             return json.dumps(result.get("data", {}), ensure_ascii=False)
 
         if tool_name == "diagnose_coding_worker":
@@ -1425,8 +1478,6 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
         if tool_name == "unassign_mac_worker":
             return coding_jobs.unassign_worker(tool_input["worker_id"])
 
-        if tool_name == "sync_project":
-            return coding_engine.sync_project(tool_input.get("project"))
 
         if tool_name == "sync_tickets":
             r = tickets_service.sync_tickets()
@@ -1437,18 +1488,8 @@ def execute(tool_name: str, tool_input: dict, emit=None, category=None, tab_id=N
                 msg += " Fehler bei: " + "; ".join(r["errors"])
             return msg
 
-        if tool_name == "commit_and_push":
-            return coding_engine.commit_and_push(tool_input.get("project"), tool_input.get("message"))
 
-        if tool_name == "run_command":
-            return coding_engine.run_command(tool_input["command"], tool_input.get("cwd"))
 
-        if tool_name == "create_project":
-            return coding_engine.create_project(
-                tool_input["name"],
-                tool_input.get("description", ""),
-                bool(tool_input.get("private", True)),
-            )
 
         if tool_name == "data_query":
             results = local_data.query(

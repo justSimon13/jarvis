@@ -33,7 +33,7 @@ from client_manager import ClientManager
 from pipeline import JarvisPipeline
 from services import alarm as alarm_service
 from services import client_music as client_music_service
-from services import coding_engine
+from services import coding_usage
 from services import coding_jobs
 from services import document_export
 from services import import_adapters
@@ -467,6 +467,18 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return job if "id" in job else {"error": "Job nicht gefunden"}
         except Exception as e:
             return {"error": str(e)}
+    if resource == "coding_job_runs":
+        # Die Läufe eines Jobs — BEWUSST eine eigene Ressource und nicht Teil
+        # von 'coding_job': die Chat-Karte holt den Job bei jeder Änderung neu
+        # und soll dabei nicht die komplette Lauf-Historie mitschleppen. Detail
+        # gehört in die Job-Ansicht, der Chat bleibt schmal.
+        job_id = (req_data or {}).get("id")
+        if job_id is None:
+            return {"error": "id erforderlich"}
+        try:
+            return coding_jobs.list_runs(int(job_id))
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "imports":
         # Wissens-Importe (services/import_store.py). Reine Leseansicht — das
         # Anlegen und Starten läuft über eigene Nachrichtentypen, nicht hier.
@@ -588,12 +600,7 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return {}
     if resource == "coding_engine_usage":
         try:
-            return coding_engine.get_usage_summary(days=int(req_data.get("days", 14)))
-        except Exception as e:
-            return {"error": str(e)}
-    if resource == "coding_task_status":
-        try:
-            return coding_engine.get_task_status()
+            return coding_usage.get_usage_summary(days=int(req_data.get("days", 14)))
         except Exception as e:
             return {"error": str(e)}
     if resource == "tracking_topics":
@@ -851,7 +858,7 @@ def _build_dashboard_sync() -> dict:
 def _coding_spend_today() -> float:
     """Gleiche Zahl wie die Coding-Engine-Kosten-Grafik, nur fürs Dashboard/Sidebar-Widget."""
     try:
-        return coding_engine.get_usage_summary(days=1).get("today_usd", 0.0)
+        return coding_usage.get_usage_summary(days=1).get("today_usd", 0.0)
     except Exception:
         return 0.0
 
@@ -942,7 +949,6 @@ async def handle_connection(websocket):
 
     manager.register(client_id, send_audio)
     manager.register_event(client_id, send_json)
-    coding_engine.refresh_idle_status()
     send_json({"type": P.STATE, "state": "idle"})
 
     # Warte kurz auf CLIENT_HELLO um Role und Raumname zu erkennen
@@ -1369,10 +1375,6 @@ async def handle_connection(websocket):
                     )
                 elif data.get("type") == P.NOTIFICATION_ACK:
                     dispatcher.mark_delivered(data["id"])
-                elif data.get("type") == P.CODING_APPROVAL_RESPONSE:
-                    coding_engine.resolve_approval(data["id"], bool(data.get("approved")))
-                elif data.get("type") == P.CODING_SUDO_PASSWORD_RESPONSE:
-                    coding_engine.resolve_sudo_password(data["id"], data.get("password", ""))
                 elif data.get("type") == P.LOCAL_EXEC_RESPONSE:
                     local_exec.resolve_local_exec(data["id"], data)
                 elif data.get("type") == P.CODING_JOB_RESULT:
@@ -1399,6 +1401,13 @@ async def handle_connection(websocket):
                         # aber bereits committet) — kein comment-Konzept wie bei
                         # approve/revise, siehe coding_jobs.py::continue_job().
                         action_result = await loop.run_in_executor(None, coding_jobs.continue_job, job_id_arg)
+                    elif job_action == "answer":
+                        # Antwort auf eine Rückfrage — der Lauf hat sich
+                        # unterbrochen, weil eine Entscheidung fehlte. Nutzt
+                        # dasselbe comment-Feld wie approve/revise, damit das
+                        # Frontend keinen eigenen Nachrichtentyp braucht.
+                        action_result = await loop.run_in_executor(
+                            None, coding_jobs.answer_job, job_id_arg, data.get("comment") or "")
                     else:
                         action_result = f"Unbekannte Aktion: {job_action}"
                     send_json({"type": P.CODING_JOB_ACTION_ACK, "id": job_id_arg, "action": job_action, "result": action_result})
@@ -1522,7 +1531,6 @@ async def handle_connection(websocket):
             print(f"[server] Warte auf {len(_pending_turn_tasks)} laufende(n) Turn(s) vor Disconnect-Cleanup ({addr})...", flush=True)
             await asyncio.gather(*_pending_turn_tasks, return_exceptions=True)
         manager.unregister(client_id)
-        coding_engine.refresh_idle_status()
         if role != "dashboard":
             pipeline.save_session()
         print(f"[server] Client getrennt: {addr}")
@@ -1580,7 +1588,6 @@ async def main():
     client_music_service.init(manager)
     sleep_coach.init(manager, alarm_service, dispatcher)
     proactive_service.init(manager, alarm_service, dispatcher)
-    coding_engine.init(manager, dispatcher)
     coding_jobs.init(manager, dispatcher)
     local_exec.init(manager)
     learning.init(manager)
