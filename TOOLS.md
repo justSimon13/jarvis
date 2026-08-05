@@ -37,11 +37,43 @@ einziges neues Tool ohne jede Nachbarschaft dokumentiert gewesen wäre.
 | Tool | Parameter | Verhalten |
 |---|---|---|
 | `start_coding_job` | `instruction?, title?, project?, issue_number?` | Legt sofort eine Job-Zeile an (auch ohne verbundenen Worker — startet automatisch später) und schickt sie fire-and-forget an den Mac-Worker. `autonomy='careful'` (Projekt-Feld): erste Stufe read-only, Job landet auf `awaiting_review` statt fertig zu sein. Modell (`coding_model`, Default `claude-sonnet-5`) und Budget (`coding_max_budget_usd`, Default `5.00`) kommen aus dem Projekt, werden bei Start in die Job-Zeile gesnapshottet. |
-| `check_coding_job_status` | `id?` | Ohne `id` der zuletzt gestartete Job. Status: `pending`/`running`/`awaiting_review`/`incomplete`/`done`/`failed`/`discarded`. |
+| `check_coding_job_status` | `id?` | Ohne `id` der zuletzt gestartete Job. Status: `pending`/`running`/`awaiting_review`/`awaiting_answer`/`incomplete`/`done`/`failed`/`discarded`. Liefert zusätzlich `run_summary` (Läufe mit Art/Status/Kosten) und bei `awaiting_answer` die Frage als `open_question`. |
 | `approve_coding_job` | `id, comment?` | Setzt den zuvor erstellten Plan eines `awaiting_review`-Jobs um (`--resume`, zweite schreibende Stufe). |
 | `revise_coding_job` | `id, comment` | Lässt den Plan überarbeiten, bleibt read-only, Job wieder `awaiting_review`. |
 | `discard_coding_job` | `id` | Verwirft einen `awaiting_review`-Job vollständig, gibt den Slot frei. |
 | `continue_coding_job` | `id` | Seit 2026-08-01 (Vorfall Job #39): setzt einen `incomplete`-Job (Turn-Limit erreicht, bereits committet) per `--resume` mit einer knappen "Setze die Arbeit fort" fort — kein Plan-Konzept wie bei `approve`. |
+| `answer_coding_job` | `id, answer` | Seit 2026-08-04: beantwortet die Rückfrage eines `awaiting_answer`-Jobs und setzt in derselben Session fort. Ein Lauf, der mit `RÜCKFRAGE: …` endet, ist kein Fehlschlag, sondern ein Zwischenstand — vorher wurde daraus ein Abbruch oder ein zweiter Job mit eigenem Branch. Geht die Antwort eindeutig aus Auftrag/Ticket hervor, selbst antworten; sonst Simon vorlegen. |
+
+**Lesende Repo-Abfragen (seit 2026-08-04).** Kein Job, kein Branch, kein Plan, keine Kosten.
+
+| Tool | Parameter | Verhalten |
+|---|---|---|
+| `read_repo_file` | `path, project?, branch?` | Inhalt einer Datei aus dem Repo auf dem Worker (`git show <ref>:<pfad>` — kein Checkout-Wechsel). Bei über 60.000 Zeichen gekürzt, `truncated` sagt es. |
+| `list_repo_files` | `project?, branch?, subdir?` | Dateiliste (`git ls-tree`), Vorstufe wenn der Pfad unbekannt ist. |
+| `get_repo_state` | `project?, branch?` | Aktueller Branch, Arbeitsbaum sauber?, geänderte Dateien, letzte Commits, Branches. |
+
+**Warum das kein Shell-Werkzeug ist:** der Aufrufer sagt WAS er wissen will, nicht WELCHER Befehl
+läuft — die Befehle stehen fest im Worker (`localExec.js`). Ein Werkzeug mit freiem
+Befehlsparameter wäre der verworfene Ansatz „JARVIS bekommt eine Shell auf dem Client" mit einer
+Allowlist davor; Claude Code ist der Arm zu den Clients. Anlass: für „schau dir die Doku mal an"
+entstanden drei Coding-Jobs, drei Branches und über ein Dollar — und der Text musste am Ende von
+Hand eingefügt werden, weil ein Job-Ergebnis gar nicht als Volltext zurückkommt
+(`docs-draft/FAZIT-JOBS-UND-CHAT-2026-08-04.md`). Projektauflösung über
+`coding_jobs.resolve_project_for_read()` — verlangt nur `path` und `client_id`, nicht die volle
+Job-Konfiguration.
+
+**Läufe (`runs`, seit 2026-08-04).** Ein Job ist die Aufgabe (ein Ticket, ein Branch, ein Ergebnis),
+ein Lauf ein einzelner `claude -p`-Aufruf. Jeder Dispatch/Resume erzeugt eine `runs`-Zeile mit Art
+(`plan`/`execute`/`answer`/`continue`), Kosten und ggf. der gestellten Rückfrage; der Job summiert.
+Vorher war beides dasselbe, obwohl `careful` schon zwei Läufe hat — Kosten steckten in einer Zahl,
+und jedes Hin und Her brauchte einen neuen Job mit neuem Branch. Anzeige: `data_request`-Ressource
+`coding_job_runs` (Job-Ansicht, bewusst getrennt von `coding_job`, damit die Chat-Karte die Historie
+nicht mitschleppt). Hintergrund: `docs-draft/PLAN-JOBS-UND-CHAT.md`.
+
+**Belegung eines Arbeitsverzeichnisses.** `awaiting_answer` und `incomplete` zählen wie
+`awaiting_review` als belegt (`_OCCUPYING_STATUSES`): alle drei halten einen Branch mit begonnener
+Arbeit. Ein wartender Job darf sie nicht überholen, sonst wechselt der Checkout unter ihnen weg.
+Auflösen über `discard_coding_job`.
 
 ### Todos / Projekte / Kontakte / Unterseiten / Rechnungen / Ausgaben (`local_data.py`)
 
