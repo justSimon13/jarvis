@@ -47,6 +47,7 @@ Textbausteine (_build_issue_prompt_parts) für die Datenabgrenzung im Prompt —
 "kein Client baut Prompts" gilt auch hier, der Worker konkateniert nur."""
 from __future__ import annotations
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -141,8 +142,102 @@ def _get_db() -> sqlite3.Connection:
     # bei beiden auf den in start_job() aufgelösten Default zurück.
     _ensure_column(conn, "jobs", "coding_model", "TEXT")
     _ensure_column(conn, "jobs", "coding_max_budget_usd", "REAL")
+    # Von JARVIS beim Anlegen mitgegebene Commit-Nachricht. NULL = wie bisher,
+    # der Worker leitet sie aus dem Abschlussbericht ab (erste Zeile, 72 Zeichen)
+    # — genau der Weg, über den bei Job #39 ein JSON-Fragment aus einem Tool-Log
+    # als Commit-Nachricht landete.
+    _ensure_column(conn, "jobs", "commit_message", "TEXT")
+    # ── runs ──────────────────────────────────────────────────────────────────
+    # Ein Job ist die AUFGABE (ein Ticket, ein Branch, ein Ergebnis), ein Lauf
+    # ist ein einzelner `claude -p`-Aufruf. Bisher war beides dasselbe, obwohl
+    # `careful` schon zwei Läufe hat — Kosten summierten sich unsichtbar in einer
+    # Zahl, und jedes Hin und Her brauchte einen neuen Job mit neuem Branch
+    # (real beobachtet: drei Jobs für eine Aufgabe, siehe
+    # docs-draft/FAZIT-JOBS-UND-CHAT-2026-08-04.md).
+    #
+    # Diese Tabelle ist zunächst rein protokollierend: sie ändert kein Verhalten,
+    # sondern macht sichtbar, was ohnehin passiert. Darauf baut der Umbau zum
+    # Gespräch auf (docs-draft/PLAN-JOBS-UND-CHAT.md).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS runs (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id     INTEGER NOT NULL,
+            seq        INTEGER NOT NULL,   -- 1, 2, 3 … innerhalb des Jobs
+            kind       TEXT NOT NULL,      -- plan | execute | answer | continue
+            status     TEXT NOT NULL,      -- running | done | failed
+            session_id TEXT,
+            cost_usd   REAL DEFAULT 0,
+            result     TEXT,
+            question   TEXT,               -- gesetzt, wenn der Lauf mit einer Rückfrage endete
+            started_at TEXT NOT NULL,
+            ended_at   TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_job ON runs (job_id, seq)")
     conn.commit()
     return conn
+
+
+# ── Läufe ────────────────────────────────────────────────────────────────────
+
+def _open_run(job_id: int, kind: str) -> int:
+    """Legt einen laufenden Eintrag an. Wird an jeder Stelle aufgerufen, an der
+    tatsächlich ein `claude -p`-Prozess angestoßen wird — nicht beim Anlegen des
+    Jobs, denn ein Job in der Warteschlange hat noch keinen Lauf."""
+    conn = _get_db()
+    seq = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM runs WHERE job_id = ?",
+                       (job_id,)).fetchone()[0]
+    cur = conn.execute(
+        "INSERT INTO runs (job_id, seq, kind, status, started_at) VALUES (?,?,?,'running',?)",
+        (job_id, seq, kind, _now()),
+    )
+    conn.commit()
+    run_id = cur.lastrowid
+    conn.close()
+    print(f"[coding_jobs] Job #{job_id} Lauf {seq} ({kind}) gestartet", flush=True)
+    return run_id
+
+
+def _close_run(job_id: int, status: str, cost_usd: float = 0.0,
+               result: str | None = None, session_id: str | None = None,
+               question: str | None = None) -> None:
+    """Schließt den zuletzt geöffneten, noch laufenden Eintrag dieses Jobs.
+
+    Über job_id statt run_id, weil die Antwort des Workers (coding_job_result)
+    nur die job_id kennt — dieselbe Zuordnung, die resolve_job_result ohnehin
+    macht. Gibt es keinen offenen Lauf, passiert nichts: ein Ergebnis ohne
+    vorherigen Start ist möglich (z.B. Fehler vor dem Dispatch) und darf nicht
+    zu einem Fehlschlag führen.
+    """
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT id FROM runs WHERE job_id = ? AND status = 'running' ORDER BY seq DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+    conn.execute(
+        "UPDATE runs SET status = ?, cost_usd = ?, result = ?, session_id = ?, question = ?, "
+        "ended_at = ? WHERE id = ?",
+        (status, cost_usd or 0.0, result, session_id, question, _now(), row[0]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_runs(job_id: int) -> list[dict]:
+    """Alle Läufe eines Jobs, in Reihenfolge. Für die Job-Ansicht und für die
+    Kostenaufschlüsselung — der Job zeigt die Summe, die Läufe zeigen woher."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT id, seq, kind, status, session_id, cost_usd, result, question, started_at, ended_at "
+        "FROM runs WHERE job_id = ? ORDER BY seq", (job_id,)
+    ).fetchall()
+    conn.close()
+    keys = ("id", "seq", "kind", "status", "session_id", "cost_usd", "result",
+            "question", "started_at", "ended_at")
+    return [dict(zip(keys, r)) for r in rows]
 
 
 def _now() -> str:
@@ -254,6 +349,76 @@ def _fail_stale_jobs() -> None:
     conn.close()
 
 
+# Marker, mit dem ein Lauf eine Rückfrage signalisiert. Bewusst eine eigene,
+# unverwechselbare Zeile statt einer Erkennung "klingt nach Frage": ein Ergebnis-
+# text enthält oft Fragezeichen, ohne dass eine Entscheidung gebraucht wird.
+# Muss zum Wortlaut in _WRITE_TAIL passen — deshalb hier als Konstante.
+_QUESTION_MARKER = "RÜCKFRAGE:"
+
+# Zustände, in denen ein Job das Arbeitsverzeichnis eines (client_id, cwd)-Paars
+# belegt — der Checkout steht auf dem Job-Branch, ein zweiter Job würde ihn
+# darunter wegziehen.
+#
+# 'awaiting_answer' und 'incomplete' gehören hier ausdrücklich dazu: beide halten
+# einen Branch mit begonnener Arbeit und sind fortsetzbar. Ohne sie in dieser
+# Liste würde ein wartender Job sie überholen und der Checkout wechseln, während
+# noch eine Antwort bzw. eine Fortsetzung aussteht. Bei 'awaiting_review' war das
+# von Anfang an so gelöst — die beiden neueren Zustände kamen später dazu.
+#
+# Auflösen lässt sich eine solche Belegung immer über discard_coding_job.
+# Erlaubte Form eines vorgeschlagenen Branch-Namens. Bewusst enger als das, was
+# git zulässt: keine Leerzeichen, kein führender Bindestrich (sähe sonst wie ein
+# Kommandozeilen-Schalter aus), keine '..'-Folgen, keine Sonderzeichen. Muss zum
+# Muster im Worker (localExec.js) passen — dort ist es die zweite Verteidigung.
+_BRANCH_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,98}$")
+
+
+def _sanitize_branch(vorschlag: str | None, job_id: int) -> str:
+    """Prüft einen vorgeschlagenen Branch-Namen, sonst der bisherige Standard.
+
+    Kein Ablehnen mit Fehler: ein unbrauchbarer Vorschlag soll den Job nicht
+    verhindern, sondern still auf das bekannte Format zurückfallen. Der Name ist
+    Kosmetik, die Aufgabe ist es nicht.
+    """
+    standard = f"jarvis/job-{job_id}"
+    if not vorschlag:
+        return standard
+    kandidat = vorschlag.strip()
+    if ".." in kandidat or kandidat.endswith("/") or kandidat.endswith(".lock"):
+        print(f"[coding_jobs] Branch-Vorschlag {kandidat!r} abgelehnt, nutze {standard}", flush=True)
+        return standard
+    if not _BRANCH_RE.match(kandidat):
+        print(f"[coding_jobs] Branch-Vorschlag {kandidat!r} abgelehnt, nutze {standard}", flush=True)
+        return standard
+    return kandidat
+
+
+_OCCUPYING_STATUSES = ("running", "pending", "awaiting_review", "awaiting_answer", "incomplete")
+_OCCUPYING_PLACEHOLDERS = ", ".join("?" for _ in _OCCUPYING_STATUSES)
+
+# Dieselben Zustände ohne 'pending' — für die Frage "läuft/wartet auf diesem
+# Paar gerade etwas?" beim Nachrücken. 'pending' wird dort separat geprüft.
+_RUNNING_STATUSES = tuple(s for s in _OCCUPYING_STATUSES if s != "pending")
+_RUNNING_PLACEHOLDERS = ", ".join("?" for _ in _RUNNING_STATUSES)
+
+
+def _extract_question(result: str | None) -> str | None:
+    """Findet die Rückfrage-Zeile am Ende eines Laufergebnisses.
+
+    Bewusst nur in den letzten Zeilen gesucht: der Marker soll den Lauf
+    ABSCHLIESSEN. Taucht er mitten im Text auf (etwa weil das Modell das Format
+    erklärt), ist das keine Rückfrage.
+    """
+    if not result:
+        return None
+    zeilen = [z.strip() for z in result.strip().split("\n") if z.strip()]
+    for zeile in reversed(zeilen[-3:]):
+        if zeile.startswith(_QUESTION_MARKER):
+            frage = zeile[len(_QUESTION_MARKER):].strip()
+            return frage or None
+    return None
+
+
 _PLAN_ONLY_TAIL = (
     "Erstelle NUR einen konkreten Umsetzungsplan für diese Aufgabe — du hast in diesem Lauf "
     "ausschließlich Lesezugriff (Read/Grep/Glob, kein Edit/Bash), nimmst also ohnehin keine "
@@ -263,10 +428,16 @@ _PLAN_ONLY_TAIL = (
     "kommentieren kann."
 )
 _WRITE_TAIL = (
-    "Dieser Lauf ist unbeaufsichtigt — niemand liest oder beantwortet Rückfragen während des "
-    "Laufs. Frage deshalb nicht nach Bestätigung (z.B. 'Soll ich das committen?') und warte nicht "
-    "auf eine Antwort, die nie kommt — triff die naheliegende Entscheidung selbst und führe die "
-    "Änderungen durch. Beende deine Antwort mit einer kurzen Zusammenfassung: was geändert wurde, "
+    "Während des Laufs liest niemand mit — warte also nie mitten in der Arbeit auf eine Antwort. "
+    "Für Kleinigkeiten triff die naheliegende Entscheidung selbst und arbeite weiter. "
+    "Brauchst du dagegen wirklich eine Entscheidung, um sinnvoll weiterzumachen (etwa weil zwei "
+    "Wege gleich vertretbar sind oder eine Angabe im Auftrag fehlt), dann rate NICHT: beende den "
+    "Lauf und schreibe als ALLERLETZTE Zeile deiner Antwort genau eine Zeile in der Form\n"
+    f"{_QUESTION_MARKER} <deine Frage in einem Satz>\n"
+    "Die Frage wird beantwortet und du wirst mit der Antwort fortgesetzt — der bisherige Verlauf "
+    "bleibt dabei erhalten. Ein so beendeter Lauf ist kein Fehlschlag, sondern ein normaler "
+    "Zwischenstand. Alles, was du bis dahin geändert hast, bleibt bestehen. "
+    "Beende deine Antwort ansonsten mit einer kurzen Zusammenfassung: was geändert wurde, "
     "was bewusst nicht, und wo du vom naheliegenden Vorgehen abgewichen bist (falls zutreffend). "
     "Committe/pushe/erstelle keinen PR selbst — das übernimmt die aufrufende Umgebung, lass deine "
     "Änderungen einfach unverändert im Arbeitsverzeichnis stehen."
@@ -378,6 +549,35 @@ def _build_resume_fallback_prompt(mode: str, comment: str | None, plan_text: str
     return f"{base}Passe den Plan an{extra}"
 
 
+def _build_answer_prompt(question: str, answer: str, coding_doc: str | None = None) -> str:
+    """Server-authored Prompt für die Fortsetzung nach einer Rückfrage.
+
+    Die Frage wird mitzitiert, obwohl der Session-Kontext sie enthält — bei
+    einem Fallback ohne Session ist sie sonst weg, und der Text ist derselbe.
+    Immer schreibend: eine Rückfrage entsteht nur in einem schreibenden Lauf.
+    """
+    return (
+        "Du hattest die Arbeit unterbrochen und diese Rückfrage gestellt:\n\n"
+        f"  {question}\n\n"
+        f"Antwort: {answer}\n\n"
+        "Setze die Arbeit auf dieser Grundlage fort. Bereits vorgenommene Änderungen bleiben "
+        f"bestehen.\n\n{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
+    )
+
+
+def _build_answer_fallback_prompt(question: str, answer: str, instruction: str,
+                                  coding_doc: str | None = None) -> str:
+    """Fallback, wenn --resume scheitert: der Verlauf ist weg, deshalb muss der
+    ursprüngliche Auftrag noch einmal vollständig mit."""
+    return (
+        "Der bisherige Bearbeitungsverlauf ist nicht mehr verfügbar. Ursprünglicher Auftrag:\n\n"
+        f"{instruction}\n\n"
+        f"Dabei kam die Rückfrage auf:\n\n  {question}\n\nAntwort: {answer}\n\n"
+        "Prüfe zuerst, was im Arbeitsverzeichnis bereits erledigt ist, und setze dann fort.\n\n"
+        f"{_WRITE_TAIL}{_build_commit_convention_note(coding_doc)}"
+    )
+
+
 def _build_continue_prompt(instruction: str, coding_doc: str | None = None) -> str:
     """Server-authored Prompt fürs Fortsetzen eines 'incomplete'-Jobs (Turn-
     Limit erreicht, bevor die Aufgabe abgeschlossen war) — anders als
@@ -455,9 +655,44 @@ def _resolve_project(project_name: str | None) -> dict | str:
     return f"Mehrere Projekte verfügbar: {names} — welches meinst du?"
 
 
+def resolve_project_for_read(project_name: str | None) -> dict | str:
+    """Projektauflösung für die LESENDEN Abfragen (read_repo_file & Co.).
+
+    Eigene Funktion statt _resolve_project(), weil die Anforderungen andere
+    sind: zum Lesen genügen `path` und `client_id`. `base_branch` oder
+    `autonomy` braucht es nicht — ein Repo lesen zu wollen, das noch nie einen
+    Coding-Job hatte, ist ein völlig normaler Fall und soll nicht an fehlender
+    Job-Konfiguration scheitern.
+
+    Gibt das Projekt-Dict zurück oder einen Fehlertext für das Modell.
+    """
+    kandidaten = [p for p in local_data.query("projekte", limit=500) if p.get("path")]
+    if not kandidaten:
+        return ("Kein Projekt mit hinterlegtem Pfad — erst per data_update auf 'projekte' "
+                "path und client_id setzen.")
+
+    if project_name:
+        treffer = [p for p in kandidaten if (p["name"] or "").lower() == project_name.lower()]
+        if not treffer:
+            namen = ", ".join(p["name"] for p in kandidaten)
+            return f"Projekt '{project_name}' hat keinen hinterlegten Pfad (verfügbar: {namen})."
+        gewaehlt = treffer[0]
+    elif len(kandidaten) == 1:
+        gewaehlt = kandidaten[0]
+    else:
+        namen = ", ".join(p["name"] for p in kandidaten)
+        return f"Mehrere Projekte möglich: {namen} — welches meinst du?"
+
+    if not gewaehlt.get("client_id"):
+        return (f"Projekt '{gewaehlt['name']}' hat keinen client_id (Worker-Rolle) — "
+                "ohne den ist nicht bekannt, auf welchem Rechner das Repo liegt.")
+    return gewaehlt
+
+
 def start_job(instruction: str | None = None, title: str | None = None,
               project: str | None = None, issue_number: int | None = None,
-              category: str | None = None, tab_id: str | None = None) -> str:
+              category: str | None = None, tab_id: str | None = None,
+              branch: str | None = None, commit_message: str | None = None) -> str:
     """Von tools.execute() aufgerufen ('start_coding_job'). Vollständig
     asynchron: legt die Zeile SOFORT an (auch bei issue_number — der
     Issue-Inhalt selbst wird erst vom Worker abgerufen, siehe Moduldoc), schickt
@@ -524,8 +759,12 @@ def start_job(instruction: str | None = None, title: str | None = None,
     )
     conn.commit()
     job_id = cur.lastrowid
-    branch = f"jarvis/job-{job_id}"
-    conn.execute("UPDATE jobs SET branch = ? WHERE id = ?", (branch, job_id))
+    # Branch-Name: Vorschlag von JARVIS (aus den Konventionen des Projekts,
+    # siehe start_coding_job in tools.py), sonst der bisherige Standard
+    # jarvis/job-<id>. Erst hier möglich, weil der Standard die ID braucht.
+    branch = _sanitize_branch(branch, job_id)
+    conn.execute("UPDATE jobs SET branch = ?, commit_message = ? WHERE id = ?",
+                 (branch, (commit_message or "").strip() or None, job_id))
     conn.commit()
     print(f"[coding_jobs] Job #{job_id} angelegt mit category={category!r}, tab_id={tab_id!r} "
           f"(bestimmt ob Ergebnis/Fortschritt als Chat-Nachricht zugestellt werden kann).", flush=True)
@@ -543,9 +782,9 @@ def start_job(instruction: str | None = None, title: str | None = None,
     # Nebenläufigkeit pro (client_id, cwd) in _start_next_pending). Kein
     # LIMIT 1 — bei mehreren offenen Jobs sollen ALLE genannt werden.
     open_ahead = conn.execute(
-        "SELECT id FROM jobs WHERE status IN ('running', 'pending', 'awaiting_review') AND id != ? "
+        f"SELECT id FROM jobs WHERE status IN ({_OCCUPYING_PLACEHOLDERS}) AND id != ? "
         "AND client_id = ? AND cwd = ? ORDER BY id",
-        (job_id, resolved["client_id"], resolved["path"]),
+        (*_OCCUPYING_STATUSES, job_id, resolved["client_id"], resolved["path"]),
     ).fetchall()
     conn.close()
 
@@ -581,14 +820,15 @@ def _try_dispatch(job_id: int) -> bool:
     conn = _get_db()
     row = conn.execute(
         "SELECT instruction, issue_number, repo, cwd, base_branch, branch, client_id, autonomy, "
-        "delivery, issue_repo, coding_doc, coding_model, coding_max_budget_usd FROM jobs WHERE id = ?",
+        "delivery, issue_repo, coding_doc, coding_model, coding_max_budget_usd, commit_message "
+        "FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return False
     (instruction, issue_number, repo, cwd, base_branch, branch, client_id, autonomy, delivery, issue_repo,
-     coding_doc, coding_model, coding_max_budget_usd) = row
+     coding_doc, coding_model, coding_max_budget_usd, commit_message) = row
 
     target_conn_id = _manager.get_connection_for_role(client_id)
     if not target_conn_id:
@@ -609,6 +849,9 @@ def _try_dispatch(job_id: int) -> bool:
         "cwd": cwd, "base_branch": base_branch, "branch": branch, "job_id": job_id,
         "plan_only": plan_only, "delivery": delivery or "pr",
         "model": coding_model or "claude-sonnet-5", "max_budget_usd": coding_max_budget_usd or 5.00,
+        # None = der Worker leitet die Nachricht wie bisher aus dem
+        # Abschlussbericht ab (siehe _ensure_column oben).
+        "commit_message": commit_message,
     }
     if issue_number:
         prefix, suffix = _build_issue_prompt_parts(instruction, plan_only=plan_only, coding_doc=coding_doc)
@@ -628,6 +871,9 @@ def _try_dispatch(job_id: int) -> bool:
     conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
     conn.commit()
     conn.close()
+    # Erst NACH dem erfolgreichen Dispatch protokollieren: ein Job, der mangels
+    # Worker vorgemerkt bleibt, hat keinen Lauf verursacht.
+    _open_run(job_id, "plan" if plan_only else "execute")
     print(f"[coding_jobs] Job #{job_id} an Worker '{client_id}' geschickt (Branch {branch}).", flush=True)
     return True
 
@@ -647,12 +893,15 @@ def _start_next_pending() -> None:
     ).fetchall()
     to_dispatch = []
     for client_id, cwd in pending_pairs:
-        # awaiting_review zählt hier mit als belegt (siehe start_job()s
-        # open_ahead-Kommentar) — sonst würde ein wartender Plan-Review
-        # durch einen als "frei" fehlinterpretierten Slot überholt.
+        # Dieselbe Liste wie in start_job(), aber OHNE 'pending' — hier wird
+        # gerade entschieden, ob ein vorgemerkter Job nachrücken darf. Zählte
+        # 'pending' als belegt, würde nie einer starten. Neu gegenüber vorher:
+        # 'awaiting_answer' und 'incomplete' blockieren jetzt ebenfalls, siehe
+        # _OCCUPYING_STATUSES.
         occupied = conn.execute(
-            "SELECT 1 FROM jobs WHERE status IN ('running', 'awaiting_review') AND client_id = ? AND cwd = ? LIMIT 1",
-            (client_id, cwd),
+            f"SELECT 1 FROM jobs WHERE status IN ({_RUNNING_PLACEHOLDERS}) "
+            "AND client_id = ? AND cwd = ? LIMIT 1",
+            (*_RUNNING_STATUSES, client_id, cwd),
         ).fetchone()
         if occupied:
             continue
@@ -681,14 +930,14 @@ def _resume_job(job_id: int, mode: str, comment: str | None) -> str:
     dispatchen, Status auf 'running' zurück (spiegelt _try_dispatch())."""
     conn = _get_db()
     row = conn.execute(
-        "SELECT status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc, "
+        "SELECT status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc, commit_message, "
         "coding_model, coding_max_budget_usd FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return f"Job #{job_id} nicht gefunden."
-    (status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc,
+    (status, session_id, plan_text, cwd, base_branch, branch, client_id, delivery, coding_doc, commit_message,
      coding_model, coding_max_budget_usd) = row
 
     if status != "awaiting_review":
@@ -703,7 +952,7 @@ def _resume_job(job_id: int, mode: str, comment: str | None) -> str:
     result = local_exec.dispatch_nowait(
         "claude_code_resume", target_conn_id=target_conn_id,
         job_id=job_id, session_id=session_id, cwd=cwd, base_branch=base_branch, branch=branch,
-        delivery=delivery or "pr",
+        delivery=delivery or "pr", commit_message=commit_message,
         model=coding_model or "claude-sonnet-5", max_budget_usd=coding_max_budget_usd or 5.00,
         # Beide Prompts server-authored (kein Client baut Prompts) — der Worker
         # wählt nur technisch zwischen ihnen, je nachdem ob --resume gelingt
@@ -719,8 +968,68 @@ def _resume_job(job_id: int, mode: str, comment: str | None) -> str:
     conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
     conn.commit()
     conn.close()
+    # 'approve' setzt den Plan um (schreibend), 'revise' erzeugt einen neuen Plan
+    # (weiterhin read-only) — deshalb zwei verschiedene Arten von Lauf.
+    _open_run(job_id, "execute" if mode == "approve" else "plan")
     verb = "Freigegeben" if mode == "approve" else "Nachbesserung angestoßen"
     return f"{verb} — Job #{job_id} läuft weiter, Ergebnis kommt per Benachrichtigung."
+
+
+def answer_job(job_id: int, answer: str) -> str:
+    """Beantwortet die Rückfrage eines wartenden Jobs und setzt ihn fort.
+
+    Von tools.execute() aufgerufen ('answer_coding_job'). Bewusst NICHT als
+    weiterer Modus von _resume_job(): dessen Prompt-Bau setzt einen zuvor
+    gebilligten Plan voraus ('approve'/'revise'). Hier gibt es keinen Plan,
+    sondern eine offene Frage — gleiche Begründung wie bei continue_job().
+    """
+    if not (answer or "").strip():
+        return "Antwort ist leer — bitte eine Antwort auf die Rückfrage mitgeben."
+
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, "
+        "coding_doc, coding_model, coding_max_budget_usd, commit_message FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return f"Job #{job_id} nicht gefunden."
+    (status, session_id, instruction, cwd, base_branch, branch, client_id, delivery,
+     coding_doc, coding_model, coding_max_budget_usd, commit_message) = row
+
+    if status != "awaiting_answer":
+        return f"Job #{job_id} wartet nicht auf eine Antwort (Status: {status})."
+
+    # Die Frage steht am zuletzt abgeschlossenen Lauf — von dort, nicht aus dem
+    # Ergebnistext des Jobs: der wird von jedem Lauf überschrieben.
+    laeufe = list_runs(job_id)
+    frage = next((r["question"] for r in reversed(laeufe) if r["question"]), None)
+    if not frage:
+        return f"Job #{job_id} hat keine gespeicherte Rückfrage — bitte stattdessen fortsetzen."
+
+    target_conn_id = _manager.get_connection_for_role(client_id)
+    if not target_conn_id:
+        return f"Kein Worker für Rolle '{client_id}' verbunden — Job #{job_id} bleibt wartend, später erneut versuchen."
+
+    result = local_exec.dispatch_nowait(
+        "claude_code_resume", target_conn_id=target_conn_id,
+        job_id=job_id, session_id=session_id, cwd=cwd, base_branch=base_branch, branch=branch,
+        delivery=delivery or "pr", commit_message=commit_message,
+        model=coding_model or "claude-sonnet-5", max_budget_usd=coding_max_budget_usd or 5.00,
+        resume_prompt=_build_answer_prompt(frage, answer, coding_doc=coding_doc),
+        fallback_prompt=_build_answer_fallback_prompt(frage, answer, instruction or "", coding_doc=coding_doc),
+        read_only=False,
+    )
+    if not result.get("ok"):
+        return f"Senden an Worker fehlgeschlagen: {result.get('error')} — Job #{job_id} bleibt wartend."
+
+    conn = _get_db()
+    conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
+    conn.commit()
+    conn.close()
+    _open_run(job_id, "answer")
+    return f"Antwort übermittelt — Job #{job_id} läuft weiter, Ergebnis kommt per Benachrichtigung."
 
 
 def approve_job(job_id: int, comment: str | None = None) -> str:
@@ -746,14 +1055,15 @@ def continue_job(job_id: int) -> str:
     lesen, prüfen, fire-and-forget dispatchen, Status auf 'running' zurück."""
     conn = _get_db()
     row = conn.execute(
-        "SELECT status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc "
+        "SELECT status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc, commit_message "
         "FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     conn.close()
     if row is None:
         return f"Job #{job_id} nicht gefunden."
-    status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc = row
+    (status, session_id, instruction, cwd, base_branch, branch, client_id, delivery, coding_doc,
+     commit_message) = row
 
     if status != "incomplete":
         return f"Job #{job_id} ist nicht unvollständig (Status: {status})."
@@ -767,7 +1077,7 @@ def continue_job(job_id: int) -> str:
     result = local_exec.dispatch_nowait(
         "claude_code_resume", target_conn_id=target_conn_id,
         job_id=job_id, session_id=session_id, cwd=cwd, base_branch=base_branch, branch=branch,
-        delivery=delivery or "pr",
+        delivery=delivery or "pr", commit_message=commit_message,
         resume_prompt=_build_continue_prompt(instruction, coding_doc=coding_doc),
         fallback_prompt=_build_continue_fallback_prompt(instruction, coding_doc=coding_doc),
         read_only=False,
@@ -779,6 +1089,7 @@ def continue_job(job_id: int) -> str:
     conn.execute("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?", (_now(), job_id))
     conn.commit()
     conn.close()
+    _open_run(job_id, "continue")
     return f"Fortgesetzt — Job #{job_id} läuft weiter, Ergebnis kommt per Benachrichtigung."
 
 
@@ -849,6 +1160,30 @@ def resolve_job_result(payload: dict) -> dict | None:
 
     status = payload.get("status") or ("done" if payload.get("ok") else "failed")
     cost_delta = payload.get("cost_usd") or 0
+
+    # Endete der Lauf mit einer Rückfrage, ist das KEIN Abschluss der Aufgabe,
+    # sondern ein Zwischenstand: der Job wartet auf eine Antwort und wird danach
+    # in derselben Session fortgesetzt. Vorher war so ein Lauf entweder ein
+    # Abbruch oder führte zu einem zweiten Job mit eigenem Branch.
+    #
+    # Nur bei erfolgreichen, schreibenden Läufen ausgewertet: ein Planungslauf
+    # endet ohnehin mit einer Freigabe, und ein fehlgeschlagener Lauf hat keine
+    # beantwortbare Frage, sondern ein Problem.
+    frage = _extract_question(payload.get("result")) if status not in ("failed", "awaiting_review") else None
+    if frage:
+        status = "awaiting_answer"
+
+    # Lauf schließen, bevor die Job-Zeile geschrieben wird. 'awaiting_review'
+    # heißt für den LAUF, dass er sauber zu Ende ging — nur der JOB wartet dann
+    # auf eine Entscheidung. Deshalb hier zwei getrennte Statusbegriffe.
+    _close_run(
+        job_id,
+        status="failed" if status == "failed" else "done",
+        cost_usd=cost_delta,
+        result=payload.get("result"),
+        session_id=payload.get("session_id"),
+        question=frage,
+    )
     conn = _get_db()
     if status == "awaiting_review":
         # plan_text wird NUR hier gesetzt (nicht bei jedem Status) und bleibt
@@ -895,6 +1230,10 @@ def resolve_job_result(payload: dict) -> dict | None:
         status_label = " verworfen"
     elif status == "incomplete":
         status_label = " ⚠️ unvollständig — Änderungen committet, Fortsetzung möglich"
+    elif status == "awaiting_answer":
+        # Bewusst ohne Warnzeichen: eine Rückfrage ist ein normaler Zwischenstand
+        # im Gespräch, kein Fehlschlag.
+        status_label = " — wartet auf eine Antwort"
     else:
         status_label = " ⚠️ mit Fehler/Abbruch beendet"
     cost = payload.get("cost_usd") or 0.0
@@ -980,7 +1319,21 @@ def get_job_status(job_id: int | None = None) -> dict:
         return {"active": False}
     cols = [d[0] for d in cur.description]
     conn.close()
-    return _enrich_job(dict(zip(cols, row)))
+    data = _enrich_job(dict(zip(cols, row)))
+    # Bei einer offenen Rückfrage die Frage separat mitgeben, statt sie im
+    # Ergebnistext suchen zu lassen — sonst müsste das Modell den Marker selbst
+    # finden, und genau das soll es nicht tun müssen, um antworten zu können.
+    # Dazu eine knappe Lauf-Übersicht: wie oft und wofür schon gelaufen wurde,
+    # OHNE die vollständigen Ergebnistexte (die blähen den Prompt auf).
+    if data.get("status") == "awaiting_answer":
+        laeufe = list_runs(data["id"])
+        data["open_question"] = next(
+            (r["question"] for r in reversed(laeufe) if r["question"]), None)
+    data["run_summary"] = [
+        {"seq": r["seq"], "kind": r["kind"], "status": r["status"], "cost_usd": r["cost_usd"]}
+        for r in list_runs(data["id"])
+    ]
+    return data
 
 
 def list_jobs(status_filter: str | None = None) -> list[dict]:
