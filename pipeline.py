@@ -475,6 +475,19 @@ class JarvisPipeline:
         full_response = ""
         total_cost = 0.0
 
+        # Werkzeug-Vorauswahl der aktiven Persona (services/personas.py). Leere
+        # oder fehlende Vorauswahl liefert ALLE Werkzeuge — bisheriges Verhalten.
+        # Einmal je Turn aufgelöst, nicht je Runde im Tool-Loop: die Auswahl
+        # ändert sich innerhalb eines Turns nicht, und ein Wechsel mittendrin
+        # würde den Prompt-Cache unnötig verwerfen.
+        try:
+            from services import personas as personas_service
+            active_tools = personas_service.resolve_tools(self._mode, tools.DEFINITIONS)
+        except Exception as e:
+            # Eine kaputte Vorauswahl darf nie einen Turn verhindern.
+            print(f"[pipeline] Werkzeug-Vorauswahl übersprungen: {e}", flush=True)
+            active_tools = tools.DEFINITIONS
+
         while True:
             tts_queue: queue.Queue = queue.Queue()
             turn_text = ""
@@ -496,7 +509,7 @@ class JarvisPipeline:
             t_first_token = None
 
             try:
-                with llm.stream(system_static, system_dynamic, client_messages, tools.DEFINITIONS,
+                with llm.stream(system_static, system_dynamic, client_messages, active_tools,
                                  thinking=self._thinking_enabled, model=self._model) as s:
                     for chunk in s.text_stream:
                         if not response_started:

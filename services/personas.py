@@ -154,6 +154,66 @@ def delete(persona_id: str) -> None:
 _MAX_INDEX_ENTRIES = 60
 
 
+# ── Werkzeug-Vorauswahl ──────────────────────────────────────────────────────
+
+# Werkzeuge, die JEDE Persona bekommt — unabhängig von ihrer Liste.
+#
+# Ohne diesen Kern wäre eine Vorauswahl gefährlich statt hilfreich: eine Persona,
+# der jemand versehentlich das Gedächtnis oder den Kalender wegkonfiguriert,
+# wirkt kaputt, ohne dass die Ursache sichtbar wäre. Hier steht deshalb alles,
+# was JARVIS in JEDEM Gespräch können muss.
+#
+# Die Vorauswahl ist Zuverlässigkeit, keine Berechtigung ("Vorauswahl ja, Mauer
+# nein", Konzept): sie soll die Entscheidung des Modells erleichtern, nicht
+# absichern. Wer ein fehlendes Werkzeug braucht, wechselt den Modus.
+CORE_TOOLS = {
+    # Gedächtnis und Wissen — das Herzstück, nie einschränken
+    "read_knowledge", "write_knowledge", "append_knowledge_section", "search_knowledge",
+    "brain_read", "brain_write",
+    # Organisation: Todos, Projekte, Kontakte, Seiten
+    "data_query", "data_write", "data_update", "data_delete",
+    "read_seite", "create_seite", "write_seite",
+    # Zeit und Termine
+    "calendar_query", "calendar_write", "calendar_delete",
+    # Nachschlagen
+    "web_search",
+}
+
+
+def resolve_tools(persona_id: str, definitions: list[dict]) -> list[dict]:
+    """Filtert die Werkzeugliste für eine Persona.
+
+    Regeln, bewusst defensiv:
+    - Persona unbekannt oder `tools` leer → ALLE Werkzeuge (bisheriges Verhalten).
+      Damit ändert sich nichts, solange niemand eine Liste gesetzt hat.
+    - Liste gesetzt → CORE_TOOLS plus die genannten.
+    - Namen, die es nicht (mehr) gibt, werden still übergangen. Ein Tippfehler
+      oder ein umbenanntes Werkzeug darf nicht dazu führen, dass eine Persona
+      plötzlich ohne dasteht.
+    - Bliebe nach dem Filtern nichts übrig, gibt es alle zurück — eine kaputte
+      Konfiguration soll JARVIS nicht handlungsunfähig machen.
+    """
+    persona = get(persona_id)
+    if not persona:
+        return definitions
+    gewuenscht = {t.strip() for t in (persona.get("tools") or []) if isinstance(t, str) and t.strip()}
+    if not gewuenscht:
+        return definitions
+
+    erlaubt = CORE_TOOLS | gewuenscht
+    gefiltert = [d for d in definitions if d.get("name") in erlaubt]
+    if not gefiltert:
+        print(f"[personas] Werkzeug-Vorauswahl für '{persona_id}' ergab nichts — "
+              f"nutze alle {len(definitions)}", flush=True)
+        return definitions
+
+    unbekannt = gewuenscht - {d.get("name") for d in definitions}
+    if unbekannt:
+        print(f"[personas] '{persona_id}': unbekannte Werkzeuge in der Vorauswahl "
+              f"übergangen: {', '.join(sorted(unbekannt))}", flush=True)
+    return gefiltert
+
+
 def build_index_section(persona_id: str, entries: list[dict]) -> str:
     """Baut das Inhaltsverzeichnis für eine Persona aus dem Wissens-Index.
 
