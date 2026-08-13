@@ -24,6 +24,7 @@ import context
 import finanzen
 import finanzen_import
 import knowledge
+import tools
 import learning
 import protocol as P
 import session_memory
@@ -40,6 +41,7 @@ from services import import_adapters
 from services import import_runner
 from services import import_store
 from services import import_upload
+from services import personas as personas_service
 from services import local_exec
 from services import sleep_coach
 from services import proactive as proactive_service
@@ -467,6 +469,44 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return job if "id" in job else {"error": "Job nicht gefunden"}
         except Exception as e:
             return {"error": str(e)}
+    if resource == "personas":
+        # Personas samt Zusatzinfo, die die Ansicht sonst einzeln nachfragen
+        # müsste: wie viele Dokumente im Geltungsbereich liegen, und welche
+        # Importe zu diesen Etiketten gehören (der Lernstand wird angezeigt,
+        # aber nicht dort gespeichert — er ist Eigenschaft des Imports).
+        try:
+            eintraege = knowledge.list_available()
+            importe = import_store.list_imports(limit=100)
+            ergebnis = []
+            for p in personas_service.list_personas():
+                tags = {t.strip().lower() for t in (p.get("scope_tags") or []) if t}
+                p["document_count"] = sum(
+                    1 for e in eintraege
+                    if tags & ({(e.get("topic") or "").strip().lower()} |
+                               {t.strip().lower() for t in (e.get("tags") or "").split(",") if t.strip()})
+                )
+                p["imports"] = [
+                    {"id": i["id"], "title": i["title"], "topic": i["topic"],
+                     "status": i["status"], "cost_usd": i["cost_usd"]}
+                    for i in importe if (i.get("topic") or "").strip().lower() in tags
+                ]
+                ergebnis.append(p)
+            return ergebnis
+        except Exception as e:
+            return {"error": str(e)}
+    if resource == "tool_names":
+        # Für die Werkzeug-Auswahl auf der Persona-Seite. Nur Namen und der
+        # erste Satz der Beschreibung — die vollständigen Beschreibungen sind
+        # zusammen über 80.000 Zeichen und gehören nicht in eine Oberfläche.
+        try:
+            return [
+                {"name": d["name"],
+                 "hint": (d.get("description") or "").split(".")[0][:120],
+                 "core": d["name"] in personas_service.CORE_TOOLS}
+                for d in tools.DEFINITIONS
+            ]
+        except Exception as e:
+            return {"error": str(e)}
     if resource == "coding_job_runs":
         # Die Läufe eines Jobs — BEWUSST eine eigene Ressource und nicht Teil
         # von 'coding_job': die Chat-Karte holt den Job bei jeder Änderung neu
@@ -658,7 +698,14 @@ def _handle_data_request(resource: str, req_data: dict | None = None, category: 
             return dispatcher.list_recent(int(req_data.get("limit", 30)))
         except Exception as e:
             return {"error": str(e)}
-    return None
+
+    # Unbekannte Ressource: FEHLER statt None. Vorher kam stillschweigend nichts
+    # zurück — eine Ansicht zeigte dann eine leere Seite, ohne dass irgendwo
+    # etwas stand. Real passiert bei einer neuen Ressource, deren Server-Teil
+    # noch nicht neu gestartet war, und bei einem Tippfehler im Namen: beide
+    # Fälle sahen identisch aus wie "es gibt halt keine Daten".
+    print(f"[server] data_request: unbekannte Ressource {resource!r}", flush=True)
+    return {"error": f"Unbekannte Ressource: {resource}"}
 
 
 def _build_overlay_events() -> list[dict]:
@@ -728,6 +775,10 @@ _ENTITY_FIELDS = {
                      "estimated_hours", "path", "repo", "issue_repo", "base_branch", "client_id", "autonomy",
                      "delivery", "coding_doc", "data_scope", "coding_model", "coding_max_budget_usd"},
     "kontakte":     {"name", "email", "telefon", "tags", "notizen"},
+    # Personas liegen NICHT in local_data, sondern in services/personas.py
+    # (knowledge_index.db) — der generische Weg passt trotzdem, weil er nur drei
+    # Funktionen braucht. id ist hier TEXT, kein Auto-Increment.
+    "personas":     {"id", "name", "description", "tools", "scope_tags", "document_id"},
     "seite":        {"titel", "inhalt"},
     "rechnungen":   {"rechnungsnummer", "rechnungsdatum", "faellig_am", "bezahlt_am", "betreff",
                      "betrag_netto", "betrag_brutto", "offener_betrag", "kunde", "projekt_id", "notizen",
@@ -745,21 +796,25 @@ _ENTITY_FIELDS = {
 _ENTITY_REQUIRED_FIELD = {
     "todos": "name", "projekte": "name", "kontakte": "name",
     "rechnungen": "rechnungsnummer", "ausgaben": "belegnummer",
+    "personas": "id",
 }
 _ENTITY_ADD_FN = {
     "todos": local_data.add_todo, "projekte": local_data.add_projekt, "kontakte": local_data.add_kontakt,
     "rechnungen": local_data.add_rechnung, "ausgaben": local_data.add_ausgabe,
     "threads": session_memory.create_thread,
+    "personas": personas_service.create_from_fields,
 }
 _ENTITY_UPDATE_FN = {
     "todos": local_data.update_todo, "projekte": local_data.update_projekt, "kontakte": local_data.update_kontakt,
     "seite": local_data.update_seite, "rechnungen": local_data.update_rechnung, "ausgaben": local_data.update_ausgabe,
     "threads": session_memory.update_thread,
+    "personas": personas_service.update_from_fields,
 }
 _ENTITY_DELETE_FN = {
     "todos": local_data.delete_todo, "projekte": local_data.delete_projekt, "kontakte": local_data.delete_kontakt,
     "rechnungen": local_data.delete_rechnung, "ausgaben": local_data.delete_ausgabe,
     "threads": session_memory.delete_thread,
+    "personas": personas_service.delete,
 }
 
 
@@ -1161,10 +1216,15 @@ async def handle_connection(websocket):
                         send_json(sync)
                         await loop.run_in_executor(None, learning.deliver_pending, client_id)
                 elif data.get("type") == P.SET_MODE:
-                    new_mode = data.get("mode", "assistent")
-                    manager.set_mode(client_id, new_mode)
+                    # set_mode() gibt den TATSÄCHLICH gesetzten Modus zurück —
+                    # bei einem unbekannten Wert ist das der Rückfall, nicht der
+                    # gewünschte. Pipeline und Layout müssen demselben Wert
+                    # folgen, sonst zeigt die Oberfläche etwas anderes an, als
+                    # der Prompt benutzt.
+                    new_mode = await loop.run_in_executor(
+                        None, manager.set_mode, client_id, data.get("mode", "assistent"))
                     pipeline.set_mode(new_mode)
-                    send_json({"type": P.LAYOUT_CONFIG, **_build_layout_config(new_mode)})
+                    send_json({"type": P.LAYOUT_CONFIG, "mode": new_mode, **_build_layout_config(new_mode)})
                 elif data.get("type") == P.SET_THINKING:
                     pipeline.set_thinking(bool(data.get("enabled")))
                 elif data.get("type") == P.SET_LLM_MODEL:
