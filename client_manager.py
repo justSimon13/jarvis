@@ -83,13 +83,37 @@ class ClientManager:
         with self._lock:
             return self._pipelines.get(self._active) if self._active else None
 
+    # Fällt ein unbekannter Modus herein, gilt dieser. Anlass: mit dem Entfernen
+    # von 'fokus' (2026-08-04) stand jeder Client, der noch darauf eingestellt
+    # war, auf einem Modus ohne Karten, ohne Modul-Defaults, ohne Persona — und
+    # ohne erkennbaren Grund. Ein Modus, den es nicht gibt, soll auf den
+    # Allrounder zurückfallen statt auf einen halben Zustand.
+    DEFAULT_MODE = "assistent"
+
+    def _known_modes(self) -> set[str]:
+        """Gültige Modi = angelegte Personas. Fällt der Lookup aus (Datenbank
+        nicht erreichbar), wird NICHT gefiltert — lieber ein unbekannter Modus
+        als gar keiner."""
+        try:
+            from services import personas
+            return {p["id"] for p in personas.list_personas()}
+        except Exception as e:
+            print(f"[client_manager] Modus-Prüfung übersprungen: {e}", flush=True)
+            return set()
+
     def set_mode(self, client_id: str, mode: str):
+        bekannt = self._known_modes()
+        if bekannt and mode not in bekannt:
+            print(f"[client_manager] Unbekannter Modus {mode!r} → {self.DEFAULT_MODE} "
+                  f"(bekannt: {', '.join(sorted(bekannt))})", flush=True)
+            mode = self.DEFAULT_MODE
         with self._lock:
             self._modes[client_id] = mode
+        return mode
 
     def get_mode(self, client_id: str) -> str:
         with self._lock:
-            return self._modes.get(client_id, "assistent")
+            return self._modes.get(client_id, self.DEFAULT_MODE)
 
     def set_capabilities(self, client_id: str, capabilities: list[str]):
         with self._lock:

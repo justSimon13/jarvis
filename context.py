@@ -105,13 +105,30 @@ def build_static_prompt(mode: str = "assistent", active_modules: set[str] | None
     # Datenmodell: Dokumente werden gesucht, nicht mitgeschickt).
     try:
         from services import personas as personas_service
+
+        # Arbeitsweise der Rolle — als VOLLTEXT, nicht als Index-Eintrag.
+        #
+        # Bewusst der einzige Teil, der komplett mitfährt: der Index nennt nur
+        # Titel, damit die Wissensdatenbank wachsen kann ohne die Gespräche zu
+        # verteuern (Leitregel 2). Die Arbeitsweise ist die Ausnahme, weil sie
+        # WIRKEN soll, nicht gefunden werden — ein Vorgehen, das das Modell erst
+        # suchen müsste, wird im Zweifel nicht angewendet. Sie ist kurz und
+        # ändert sich selten, taugt also für den gecachten Prompt-Teil.
+        #
+        # Steht als Dokument in der Wissensdatenbank statt als Feld an der
+        # Persona: dann ist sie lesbar, im Gespräch änderbar und hat eine
+        # Historie (Konzept, "Wissen steuert Ausführung").
+        arbeitsweise = personas_service.read_working_method(mode)
+        if arbeitsweise:
+            parts.append(arbeitsweise)
+
         index_section = personas_service.build_index_section(mode, knowledge.list_available())
         if index_section:
             parts.append(index_section)
     except Exception as e:
-        # Ein Fehler beim Index darf nie den ganzen Prompt verhindern — dann
-        # antwortet JARVIS lieber ohne Wissensverzeichnis als gar nicht.
-        print(f"[context] Persona-Index übersprungen: {e}", flush=True)
+        # Ein Fehler hier darf nie den ganzen Prompt verhindern — dann
+        # antwortet JARVIS lieber ohne Arbeitsweise/Verzeichnis als gar nicht.
+        print(f"[context] Persona-Teil übersprungen: {e}", flush=True)
 
     brain_section = brain.build_prompt_section(mode)
     if brain_section:

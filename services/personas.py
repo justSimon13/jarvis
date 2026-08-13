@@ -129,6 +129,31 @@ def upsert(persona_id: str, name: str | None = None, description: str | None = N
     return get(persona_id)
 
 
+# ── Anschluss an den generischen entity_action-Weg (server.py) ───────────────
+#
+# Zwei Adapter statt einer Sonderbehandlung: der generische Weg ruft beim
+# Anlegen fn(**fields) und beim Ändern fn(id, **fields). upsert() erwartet die
+# id dagegen als erstes Argument und darf sie nicht zusätzlich in fields sehen.
+
+def create_from_fields(**fields) -> str:
+    persona_id = str(fields.pop("id", "") or "").strip().lower()
+    if not persona_id:
+        raise ValueError("id erforderlich (z.B. 'trainer')")
+    if not persona_id.replace("_", "").isalnum():
+        raise ValueError(f"Ungültige id: {persona_id!r} — nur Buchstaben, Ziffern, Unterstrich")
+    if get(persona_id):
+        raise ValueError(f"Persona '{persona_id}' existiert bereits")
+    upsert(persona_id, **fields)
+    return persona_id
+
+
+def update_from_fields(persona_id: str, **fields) -> None:
+    fields.pop("id", None)
+    if not get(persona_id):
+        raise ValueError(f"Persona '{persona_id}' nicht gefunden")
+    upsert(persona_id, **fields)
+
+
 def get(persona_id: str) -> dict | None:
     with _get_db() as conn:
         r = conn.execute(f"SELECT {_COLS} FROM personas WHERE id = ?", (persona_id,)).fetchone()
@@ -152,6 +177,54 @@ def delete(persona_id: str) -> None:
 # zu weit gefasst — dann lieber sichtbar abschneiden als den Prompt unbemerkt
 # aufblähen.
 _MAX_INDEX_ENTRIES = 60
+
+
+# ── Arbeitsweise ─────────────────────────────────────────────────────────────
+
+def read_working_method(persona_id: str) -> str:
+    """Das Arbeitsweise-Dokument einer Persona als Prompt-Abschnitt.
+
+    `document_id` hat die Form "topic/file" und zeigt in die Wissensdatenbank.
+    Nicht gesetzt oder nicht auffindbar → leerer String, der Prompt kommt dann
+    ohne aus.
+
+    Anders als der Index-Ausschnitt wird hier der VOLLTEXT eingebettet: eine
+    Arbeitsweise soll wirken, nicht gefunden werden. Ein Vorgehen, das das
+    Modell erst über search_knowledge holen müsste, wird im Zweifel nicht
+    angewendet — und genau darauf zielt das erste der vier Beine aus dem
+    Konzept ("Arbeitsweise, das Wertvollste").
+    """
+    persona = get(persona_id)
+    if not persona or not persona.get("document_id"):
+        return ""
+    zeiger = str(persona["document_id"]).strip()
+    if "/" not in zeiger:
+        print(f"[personas] '{persona_id}': document_id '{zeiger}' ist kein topic/file", flush=True)
+        return ""
+    topic, _, datei = zeiger.partition("/")
+    try:
+        import knowledge
+        inhalt = knowledge.read(topic.strip(), datei.strip())
+    except Exception as e:
+        print(f"[personas] Arbeitsweise '{zeiger}' nicht lesbar: {e}", flush=True)
+        return ""
+    if not inhalt or not inhalt.strip():
+        print(f"[personas] Arbeitsweise '{zeiger}' ist leer", flush=True)
+        return ""
+
+    # Frontmatter abschneiden: topic/updated/tags sind Verwaltungsdaten für den
+    # Index, im Prompt wären es nur Zeilen, die das Modell nichts angehen — und
+    # sie fahren bei JEDEM Gespräch mit.
+    text = inhalt.strip()
+    if text.startswith("---"):
+        ende = text.find("---", 3)
+        if ende != -1:
+            text = text[ende + 3:].strip()
+
+    if not text:
+        print(f"[personas] Arbeitsweise '{zeiger}' enthält nur Frontmatter", flush=True)
+        return ""
+    return f"## So arbeitest du in dieser Rolle ({persona['name']})\n\n{text}"
 
 
 # ── Werkzeug-Vorauswahl ──────────────────────────────────────────────────────
