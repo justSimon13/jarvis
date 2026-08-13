@@ -661,6 +661,19 @@ def build_history_window(category: str, tab_id: str, thread_id: int | None = Non
                 "SELECT role, content FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
                 (thread_id, limit),
             ).fetchall()
+            # Der Schnitt bei `limit` ist hart und war bisher unsichtbar: der
+            # Anfang eines langen Threads fällt weg, ohne Verdichtung und ohne
+            # Meldung — man merkt es nur daran, dass JARVIS sich an etwas vom
+            # Anfang nicht mehr erinnert. Bis daily_summaries befüllt wird
+            # (Zielbild), wenigstens eine Zeile im Log.
+            if len(rows) == limit:
+                gesamt = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE thread_id = ?", (thread_id,)
+                ).fetchone()[0]
+                if gesamt > limit:
+                    print(f"[session_memory] Thread {thread_id}: Fenster gekappt — "
+                          f"{limit} von {gesamt} Nachrichten im Prompt, "
+                          f"die ältesten {gesamt - limit} fehlen", flush=True)
         return [{"role": r[0], "content": json.loads(r[1])} for r in reversed(rows)]
     cursor = get_cursor(category, tab_id)
     with _get_db() as conn:
