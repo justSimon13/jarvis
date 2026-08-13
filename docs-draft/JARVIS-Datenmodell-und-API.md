@@ -126,12 +126,20 @@ Große Wissensquellen einlesen: Kurstranskript, PDF, Buch. **Eigenständiges Obj
 |---|---|---|
 | `id` | INTEGER PK | Adresse für "Import fortsetzen" |
 | `source_path` | TEXT | Rohdatei im Archiv, **nicht** unter `knowledge/` |
-| `source_type` | TEXT | Adapter, z. B. `udemy_transcript` — der austauschbare Kopf |
+| `source_type` | TEXT | Adapter, z. B. `udemy_export` — der austauschbare Kopf |
 | `title` | TEXT | "SEO-Kurs" |
+| `topic` | TEXT | Ziel-Topic in der Wissensdatenbank |
 | `status` | TEXT | `planned` / `running` / `paused` / `done` / `failed` |
 | `data_scope` | TEXT | Pflicht vor dem Start, siehe unten |
+| `model` | TEXT | Modell für die Destillation |
 | `cost_usd`, `max_budget_usd` | REAL | wie bei `jobs` |
+| `section_count`, `lecture_count` | INTEGER | aus dem Plan, für Fortschrittsanzeige |
+| `skipped_refs` | TEXT | JSON: Einheiten ohne behaltenswerten Inhalt — **Zwischenlösung** |
 | `created_at`, `updated_at` | TEXT | |
+
+**Zu `skipped_refs`:** Manche Einheiten enthalten nichts, was in die Wissensdatenbank gehört (Begrüßung, Vorstellung der Dozenten, Kursorganisation). Sie erzeugen kein Dokument — also gibt es nichts, woran ein Folgelauf sie wiedererkennen könnte, und sie würden jedes Mal erneut abgerechnet. Im Zielbild ist der Vermerk je Einheit eine Zeile in `document_suggestions` mit `import_id`; solange die Tabelle nicht existiert, steht die Liste hier als JSON. **Beim Umbau ersatzlos entfernen, nicht migrieren.**
+
+**Ein Import hängt an (Quelle, Topic), nicht an einem Lauf.** Ein erneuter Aufruf für dieselbe Quelle setzt den bestehenden fort — auch wenn er auf `done` steht. Der Abgleich ist deterministisch, ein Lauf ohne offene Einheiten kostet nichts und dient nur dazu, Nachträge einzusammeln. Eine frühere Fassung suchte nur nach nicht abgeschlossenen Importen und legte dadurch bei jedem weiteren Aufruf eine zweite Zeile an.
 
 **Drei Schritte, das Modell erst im dritten: normalisieren → schneiden → destillieren.** Die ersten beiden sind deterministisch und kostenlos. Quellenspezifisch ist nur dieser vordere Teil — Destillieren, Schreiben, Verlinken, Fortschritt, Budget sind für alle Quellen gleich. Also eine Pipeline mit austauschbarem Kopf, kein Universal-Importer. Findet sich für eine Quelle kein Kopf, fragt der Import nach, statt zu raten.
 
@@ -151,17 +159,26 @@ Rollendefinition als Objekt. **Abweichung von der Fassung vom 28.07.**, die Pers
 
 | Spalte | Typ | Bedeutung |
 |---|---|---|
-| `id` | TEXT PK | `assistant`, `coach`, `focus` |
+| `id` | TEXT PK | entspricht dem Modus: `assistent`, `coach`, `entwickler` |
 | `name`, `description` | TEXT | |
-| `tools` | TEXT | JSON-Array: Vorauswahl, keine Berechtigung |
-| `index_scope` | TEXT | JSON: welcher Ausschnitt des Dokument-Index mitfährt |
-| `document_id` | INTEGER FK NULL | Zeiger auf das Arbeitsweise-Dokument |
+| `tools` | TEXT | JSON-Array: Vorauswahl, keine Berechtigung. **Leer = alle** |
+| `scope_tags` | TEXT | JSON-Array von Etiketten: welcher Ausschnitt des Dokument-Index mitfährt. **Leer = kein Index** |
+| `document_id` | TEXT NULL | Zeiger auf das Arbeitsweise-Dokument, Form `topic/file` |
+| `created_at`, `updated_at` | TEXT | |
+
+**`scope_tags` statt `index_scope`** (Umsetzung 2026-08-04): Etiketten statt einer Liste von Dokumenten. Der Unterschied ist das Verhalten bei Wachstum — ein neues Dokument taucht bei einer Rolle auf, weil es passend beschriftet ist, nicht weil jemand die Persona bearbeitet hat. Ein Dokument kann außerdem zu mehreren Rollen gehören (Preisgestaltung betrifft Coach und Buchhaltung), ohne Kopie. Das Topic zählt beim Filtern als Etikett mit, damit Bestand von vor der Einführung auffindbar bleibt.
+
+**`document_id` ist TEXT, kein FK** — es zeigt in die Wissensdatenbank (`topic/file`), nicht auf eine `documents`-Zeile. Beim Umbau auf `documents` wird daraus ein echter Fremdschlüssel.
+
+**Werkzeug-Vorauswahl mit geschütztem Kern.** Eine gesetzte Liste bedeutet: Kernbestand **plus** die genannten. Zum Kern gehört alles, was JARVIS in jedem Gespräch können muss — Wissen und Gedächtnis, Todos/Projekte/Seiten, Kalender, Websuche. Ohne ihn wäre eine Persona, der jemand versehentlich das Gedächtnis wegkonfiguriert, scheinbar kaputt ohne erkennbare Ursache. Unbekannte Namen werden still übergangen; bliebe nach dem Filtern nichts übrig, gibt es alle zurück.
+
+**Die Arbeitsweise fährt als Volltext mit**, anders als der Index (dort nur Titel). Begründung: sie soll wirken, nicht gefunden werden — ein Vorgehen, das das Modell erst über `search_knowledge` holen müsste, wird im Zweifel nicht angewendet. Sie ist kurz und ändert sich selten, taugt also für den gecachten Prompt-Teil.
 
 **Eine Persona lädt kein Wissen, sie filtert den Index.** Das folgt aus Leitregel 2 (Dokumente werden gesucht, nicht mitgeschickt) — eine Rolle, die Dokumente vorlädt, arbeitet gegen die zentrale Kostenregel. Der SEO-Coach sieht die SEO-Dokumente im Inhaltsverzeichnis und sucht sich, was er braucht. Die feste Leseliste bleibt dem **unbeaufsichtigten Lauf** vorbehalten, wo Suchen zu unzuverlässig ist.
 
 **Die Arbeitsweise ist ein Dokument, keine Spalte.** Damit ist sie lesbar, im Gespräch änderbar, hat eine Historie und kann verlinkt werden — siehe "Wissen steuert Ausführung" im Konzept.
 
-**Der Lernstand gehört nicht hierher.** Er ist eine Eigenschaft des Imports und wird auf der Persona-Seite nur angezeigt (Verknüpfung über `index_scope`). Sonst stünde derselbe Fortschritt an zwei Orten, sobald zwei Rollen dasselbe Thema führen.
+**Der Lernstand gehört nicht hierher.** Er ist eine Eigenschaft des Imports und wird auf der Persona-Seite nur angezeigt (Verknüpfung über `scope_tags` ↔ `imports.topic`). Sonst stünde derselbe Fortschritt an zwei Orten, sobald zwei Rollen dasselbe Thema führen.
 
 ### `messages`
 
@@ -234,9 +251,51 @@ Coding-Aufträge. Eigenständige Objekte mit Lebensdauer — **nicht** im Chat.
 | `denials` | TEXT NULL | `permission_denials` — Abbruchgrund |
 | `created_at`, `updated_at` | TEXT | |
 
+| `commit_message` | TEXT NULL | von JARVIS mitgegeben, nach den Konventionen des Projekts |
+
+**Zu `commit_message`:** NULL bedeutet, der Worker schneidet die Nachricht wie früher aus der ersten Zeile des Abschlussberichts. Genau darüber landete bei Job #39 ein JSON-Fragment aus einem Tool-Log als Commit-Nachricht — der Bericht fehlte wegen des Turn-Limits. JARVIS liest das Ticket ohnehin und kennt die Konventionen, also liefert er sie mit; der Worker soll nichts erraten.
+
+**Der Branch-Name kommt ebenfalls von JARVIS.** Vorher fest `jarvis/job-<id>`, und der Worker prüfte gegen genau dieses Muster — damit bestimmte die Sicherheitsprüfung zugleich die Namensgebung. Jetzt prüft sie nur noch Unbedenklichkeit; ein unbrauchbarer Vorschlag fällt still auf das alte Format zurück. Ein **bestehender** Branch ist erlaubt, damit ein Folgeauftrag auf vorhandener Arbeit aufsetzen kann statt einen leeren Branch aufzumachen.
+
 **`base_branch` ist Pflicht bei abhängigen Aufträgen.** Zeigt er auf einen Vorgänger und der scheitert, stoppt die Kette; bei unabhängigen läuft sie weiter.
 
 **Keine Migration, sondern die erste Persistenz überhaupt.** `coding_engine.py` hält Task-Status heute in einem In-Memory-Dict — kein Coding-Task überlebt einen Neustart. `jobs` ersetzt also nichts, es füllt eine Lücke.
+
+### `runs`
+
+Ein Job ist die **Aufgabe** (ein Ticket, ein Branch, ein Ergebnis), ein Lauf ein
+einzelner `claude -p`-Aufruf. Vorher war beides dasselbe, obwohl `careful` schon
+zwei Läufe hat: Kosten steckten in einer Zahl, und jedes Hin und Her brauchte
+einen neuen Job mit neuem Branch — real beobachtet drei Jobs für eine Aufgabe.
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `job_id` | INTEGER FK | |
+| `seq` | INTEGER | 1, 2, 3 … innerhalb des Jobs |
+| `kind` | TEXT | `plan` / `execute` / `answer` / `continue` |
+| `status` | TEXT | `running` / `done` / `failed` |
+| `session_id` | TEXT NULL | für `--resume` |
+| `cost_usd` | REAL | der Job summiert |
+| `result` | TEXT NULL | |
+| `question` | TEXT NULL | gesetzt, wenn der Lauf mit einer Rückfrage endete |
+| `started_at`, `ended_at` | TEXT | |
+
+**Lauf-Status und Job-Status sind verschieden.** Endet ein Lauf mit einer
+Rückfrage, ist der *Lauf* `done` — er ging ordentlich zu Ende. Der *Job* steht
+auf `awaiting_answer` und wartet. Diese Trennung trägt das ganze Modell.
+
+**Zwei Arten von Pause, nicht eine.** Die Plan-Freigabe (`awaiting_review`, nur
+bei `careful`) bleibt unverändert — sie ist der Lauf, in dem der Plan entsteht.
+Eine Rückfrage (`awaiting_answer`) braucht **keine** erneute Plan-Freigabe:
+"welche der beiden Varianten?" ist keine Planänderung, sondern eine
+Wissenslücke. Genau daran scheiterte Thread 35 — es gab nur eine Sorte Pause,
+also wurde aus jeder Rückfrage ein Abbruch oder ein neuer Job.
+
+**Belegung:** `awaiting_answer` und `incomplete` zählen wie `awaiting_review`
+als "Arbeitsverzeichnis belegt". Alle drei halten einen Branch mit begonnener
+Arbeit; ein wartender Job darf sie nicht überholen, sonst wechselt der Checkout
+unter ihnen weg.
 
 ### `clients`
 
