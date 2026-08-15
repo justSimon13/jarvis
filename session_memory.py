@@ -643,6 +643,9 @@ def rewind_cursor_to_session(category: str, tab_id: str, session_id: int) -> boo
     return True
 
 
+_WINDOW_CHUNK = 50
+
+
 def build_history_window(category: str, tab_id: str, thread_id: int | None = None,
                           limit: int = 150) -> list[dict]:
     """Baut das Prompt-Fenster frisch aus SQLite — Ersatz für list(self.history).
@@ -654,26 +657,36 @@ def build_history_window(category: str, tab_id: str, thread_id: int | None = Non
     Cursor/tab_id KOMPLETT — gelesen wird dann ausschließlich nach thread_id
     (zwei unabhängige, gleichrangige Fensterbildungs-Strategien, keine Hierarchie
     zwischen Tab-Cursor und Thread). Weiterhin auf `limit` gedeckelt — auch ein
-    langlebiger Thread bleibt kostenseitig begrenzt, kein unbegrenztes Fenster."""
+    langlebiger Thread bleibt kostenseitig begrenzt, kein unbegrenztes Fenster.
+
+    Der Schnitt fällt in _WINDOW_CHUNK-Blöcken, nicht Nachricht für Nachricht (2026-08-15,
+    live an Thread 58 beobachtet): ein reines 'letzte `limit` Nachrichten'-Fenster verschiebt
+    seinen Anfang bei JEDEM neuen Turn um die gerade neu hinzugekommenen Zeilen — für
+    Anthropics Prompt-Caching (Präfix-Match, siehe llm.py::_with_cache_breakpoint) heißt ein
+    verschobener Anfang: der komplette Verlaufs-Cache bricht bei JEDEM Turn erneut, sobald ein
+    Thread einmal über `limit` gewachsen ist. Mit Block-Schnitt bleibt der Anfang des Fensters
+    über _WINDOW_CHUNK Nachrichten hinweg stabil (Fenster wächst bis `limit + _WINDOW_CHUNK - 1`,
+    dann fällt der nächste Block auf einmal weg) — der Cache bricht dadurch nur noch alle
+    _WINDOW_CHUNK statt bei jeder Nachricht."""
     if thread_id is not None:
         with _get_db() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE thread_id = ?", (thread_id,)
+            ).fetchone()[0]
+            drop = ((total - limit) // _WINDOW_CHUNK) * _WINDOW_CHUNK if total > limit else 0
+            keep = total - drop
             rows = conn.execute(
                 "SELECT role, content FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
-                (thread_id, limit),
+                (thread_id, keep),
             ).fetchall()
-            # Der Schnitt bei `limit` ist hart und war bisher unsichtbar: der
-            # Anfang eines langen Threads fällt weg, ohne Verdichtung und ohne
-            # Meldung — man merkt es nur daran, dass JARVIS sich an etwas vom
-            # Anfang nicht mehr erinnert. Bis daily_summaries befüllt wird
-            # (Zielbild), wenigstens eine Zeile im Log.
-            if len(rows) == limit:
-                gesamt = conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE thread_id = ?", (thread_id,)
-                ).fetchone()[0]
-                if gesamt > limit:
-                    print(f"[session_memory] Thread {thread_id}: Fenster gekappt — "
-                          f"{limit} von {gesamt} Nachrichten im Prompt, "
-                          f"die ältesten {gesamt - limit} fehlen", flush=True)
+            # Der Schnitt ist hart und war bisher unsichtbar: der Anfang eines langen Threads
+            # fällt weg, ohne Verdichtung und ohne Meldung — man merkt es nur daran, dass
+            # JARVIS sich an etwas vom Anfang nicht mehr erinnert. Bis daily_summaries befüllt
+            # wird (Zielbild), wenigstens eine Zeile im Log.
+            if drop > 0:
+                print(f"[session_memory] Thread {thread_id}: Fenster gekappt — "
+                      f"{keep} von {total} Nachrichten im Prompt, die ältesten {drop} fehlen "
+                      f"(nächster Block-Schnitt bei {limit + drop + _WINDOW_CHUNK} Nachrichten)", flush=True)
         return [{"role": r[0], "content": json.loads(r[1])} for r in reversed(rows)]
     cursor = get_cursor(category, tab_id)
     with _get_db() as conn:
