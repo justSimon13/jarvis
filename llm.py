@@ -207,6 +207,31 @@ def _compress_attachment(item: dict) -> dict:
     return item
 
 
+def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """Setzt einen Cache-Breakpoint auf den letzten Content-Block der letzten Nachricht —
+    Anthropics Standardmuster fürs Verlaufs-Caching bei Konversationen: markiert 'alles bis
+    hier ist stabil'. Der nächste Aufruf (nächster Turn, oder nächste Runde einer laufenden
+    Tool-Schleife) hängt nur wenige neue Nachrichten dahinter an, trifft für den Rest den
+    Cache (0,1× Preis) und zahlt nur für den neuen Teil den Schreib-Aufpreis (2×) — statt wie
+    bisher für die GESAMTE Nachrichtenliste jedes Mal den vollen Preis, dem einzigen Teil des
+    Prompts ohne jedes Caching (system_static und die Tool-Schemas sind schon gecacht, siehe
+    unten). Setzt nichts in-place — dieselbe messages-Liste wird vom Aufrufer weiterverwendet
+    (Kompression, self.history, SQLite), da darf kein cache_control kleben bleiben."""
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    elif isinstance(content, list) and content:
+        last_block = content[-1]
+        base = last_block if isinstance(last_block, dict) else last_block.model_dump()
+        new_content = [*content[:-1], {**base, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    else:
+        return messages
+    return [*messages[:-1], {**last, "content": new_content}]
+
+
 @contextmanager
 def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None,
            thinking: bool = False, model: str | None = None):
@@ -256,7 +281,7 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
         max_tokens=max_tokens,
         thinking=thinking_config,
         system=system,
-        messages=messages,
+        messages=_with_cache_breakpoint(messages),
         **({"tools": cached_tools} if cached_tools else {}),
     ) as s:
         yield s
