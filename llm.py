@@ -242,12 +242,22 @@ def _append_dynamic_context(messages: list[dict], system_dynamic: str) -> list[d
     Definition von Prefix-Caching. Live beobachtet: jeder neue Turn hat die komplette
     Nachrichten-Historie neu zum 2×-Preis geschrieben, obwohl der Verlauf selbst unverändert
     war — einzig weil sich die Uhrzeit im Prompt davor geändert hatte. Jetzt landet er HINTER
-    dem gecachten Teil, in derselben (ohnehin nie gecachten) letzten Nachricht."""
+    dem gecachten Teil, in derselben (ohnehin nie gecachten) letzten Nachricht.
+
+    Nachtrag (2026-08-15, noch am selben Tag): oben im system-Prompt war dieser Block klar als
+    Rand-Info gerahmt (weit weg vom eigentlichen Gespräch). An dieser Position — direkt vor der
+    Antwort, wie ein Nachtrag zur gerade gestellten Frage — hat das Modell live beobachtet
+    angefangen, Zeit/Kalender/BTC von sich aus zu kommentieren, mitten in fachfremden Gesprächen
+    (z.B. BTC-Kurs-Kommentar während eines Etsy-Shop-Setups). Explizite Rahmung dagegen: klar als
+    Hintergrund-Info markiert, nicht von sich aus ansprechen."""
     if not messages or not system_dynamic:
         return messages
     last = messages[-1]
     content = last.get("content")
-    dynamic_block = {"type": "text", "text": system_dynamic}
+    dynamic_block = {
+        "type": "text",
+        "text": f"[Hintergrund-Info — nur verwenden falls für die Antwort relevant, nicht von dir aus ansprechen]\n{system_dynamic}",
+    }
     if isinstance(content, str):
         new_content = ([{"type": "text", "text": content}] if content else []) + [dynamic_block]
     elif isinstance(content, list):
