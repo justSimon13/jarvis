@@ -364,14 +364,15 @@ class JarvisPipeline:
                     # Alte Anhänge (Bilder/PDFs) komprimieren — sonst wird bei jedem
                     # weiteren Turn wieder das komplette Base64 mitgeschickt.
                     final_messages = llm.compress_attachment_history(final_messages)
-                    # Der jeweils LETZTE Tool-Result eines Turns bleibt in _run_llm()s
-                    # eigenem compress_tool_history()-Aufruf bewusst unkomprimiert (der
-                    # kommt erst beim NÄCHSTEN Tool-Aufruf dran) — ohne diesen zusätzlichen
-                    # Aufruf hier würde er dauerhaft unkomprimiert in self.history hängen
-                    # bleiben, bei tool-lastigen Gesprächen zieht das den Cap (unten)
-                    # deutlich früher als nötig (2026-07-22: nach einem Neustart fehlte ein
-                    # großer Mittelteil eines Tauri-Debugging-Gesprächs — Ursache war genau
-                    # diese Kombination aus hartem Entry-Cap + unkomprimierten Tool-Results).
+                    # EINZIGE Kompressions-Stelle für Tool-Traffic innerhalb eines Turns (seit
+                    # 2026-08-15) — _run_llm()s Tool-Schleife komprimiert selbst bewusst NICHT
+                    # mehr pro Runde (kollidierte mit dem Verlaufs-Caching, siehe Kommentar dort).
+                    # Ohne diesen Aufruf hier bliebe der komplette Tool-Traffic eines Turns
+                    # dauerhaft unkomprimiert in self.history hängen, bei tool-lastigen Gesprächen
+                    # zieht das den Cap (unten) deutlich früher als nötig (2026-07-22: nach einem
+                    # Neustart fehlte ein großer Mittelteil eines Tauri-Debugging-Gesprächs —
+                    # Ursache war genau diese Kombination aus hartem Entry-Cap und
+                    # unkomprimierten Tool-Results).
                     final_messages = llm.compress_tool_history(final_messages)
                     final_messages = llm.compress_tool_calls(final_messages)
                     del self.history[:]
@@ -679,8 +680,17 @@ class JarvisPipeline:
                 break
 
             if final.stop_reason == "tool_use":
-                client_messages = client_messages + [{"role": "assistant", "content": final.content}]
-                session_memory.append_message(category, tab_id, "assistant", _serialize_content(final.content),
+                # clean_content() zusätzlich HIER (nicht erst beim session_memory.append_message()-
+                # Aufruf darunter) — client_messages muss ab dem Moment des Anhängens exakt dieselbe
+                # Dict-Form haben, die beim nächsten Turn aus SQLite zurückkäme (build_history_window
+                # liest IMMER die dort gespeicherte, gefilterte Form). Vorher liefen hier noch die
+                # rohen SDK-Objekte (final.content) mit — deren Serialisierung unterscheidet sich von
+                # der gespeicherten Form, jedes Cache-Prefix-Match über eine Turn-Grenze hinweg schlug
+                # dadurch fehl (siehe compress_tool_calls-Commit-Nachtrag: 2026-08-15 live beobachtet,
+                # kompletter Cache-Write der gesamten Historie bei jedem neuen Turn).
+                assistant_content = session_memory.clean_content(_serialize_content(final.content))
+                client_messages = client_messages + [{"role": "assistant", "content": assistant_content}]
+                session_memory.append_message(category, tab_id, "assistant", assistant_content,
                                                thread_id=self._thread_id, project_id=self._project_id)
                 tool_results = []
                 for block in final.content:
@@ -703,8 +713,16 @@ class JarvisPipeline:
                 client_messages = client_messages + [{"role": "user", "content": tool_results}]
                 session_memory.append_message(category, tab_id, "user", tool_results,
                                                thread_id=self._thread_id, project_id=self._project_id)
-                client_messages = llm.compress_tool_history(client_messages)
-                client_messages = llm.compress_tool_calls(client_messages)
+                # KEINE Kompression hier mehr (war früher: compress_tool_history/compress_tool_calls
+                # bei jeder Runde). Genau das hat mit dem neuen Verlaufs-Caching (_with_cache_breakpoint)
+                # kollidiert: jede Kompression verändert alte Nachrichteninhalte und damit die Bytes des
+                # gecachten Prefix — jede Runde eines mehrrundigen Tool-Turns hat dadurch den Cache der
+                # Vorrunde ungültig gemacht und mit vollem 2×-Schreibpreis neu geschrieben, statt billig
+                # per Cache-Read weiterzulaufen (live beobachtet: gleiche ~40K Tokens 4× hintereinander
+                # als cache_write statt akkumulierend als cache_read, siehe Commit-Historie). Kompression
+                # läuft jetzt nur noch an den beiden Turn-Grenzen (History-Aufbau oben, Persistieren nach
+                # der Schleife) — während der laufenden Schleife bleibt client_messages absichtlich
+                # unkomprimiert, damit der Cache-Prefix von Runde zu Runde stabil bleibt.
                 self._emit(P.STATE, state="thinking")
 
         return full_response, client_messages, total_cost
