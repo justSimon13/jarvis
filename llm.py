@@ -119,6 +119,63 @@ def _compress_one(item: dict) -> dict:
     return {**item, "content": content[:300] + f"… [gekürzt]"}
 
 
+def _item_type(item):
+    """type-Feld eines Content-Blocks — funktioniert sowohl für rohe Anthropic-SDK-
+    Objekte (frisch aus final.content einer Antwort, Attribut-Zugriff) als auch für
+    reine Dicts (aus SQLite über session_memory geladen, dict-Zugriff). tool_use-Blöcke
+    kommen in client_messages in beiden Formen vor, je nachdem ob sie aus der laufenden
+    Session stammen oder aus der History nachgeladen wurden."""
+    return item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+
+
+def compress_tool_calls(messages: list[dict]) -> list[dict]:
+    """Komprimiert große Text-Argumente in tool_use-Blöcken alter Assistant-Nachrichten —
+    Pendant zu compress_tool_history, das nur die tool_result-Seite (User-Nachrichten)
+    behandelt. Tools wie write_knowledge/write_seite/create_seite/append_knowledge_section
+    bekommen ganze Dokumente als Argument mit; die blieben bisher für immer unkomprimiert
+    im Verlauf, selbst wenn das zugehörige Ergebnis längst zum Platzhalter geschrumpft war
+    (compress_tool_history griff dort einfach nie, weil sie in Assistant- statt
+    User-Nachrichten stecken). Wie dort: alles außer dem jeweils letzten Vorkommen."""
+    def has_tool_use(msg):
+        return (msg.get("role") == "assistant"
+                and isinstance(msg.get("content"), list)
+                and any(_item_type(c) == "tool_use" for c in msg["content"]))
+
+    last_idx = -1
+    for i, msg in enumerate(messages):
+        if has_tool_use(msg):
+            last_idx = i
+
+    result = []
+    for i, msg in enumerate(messages):
+        if i < last_idx and has_tool_use(msg):
+            new_content = [_compress_tool_use(c) for c in msg["content"]]
+            result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+    return result
+
+
+def _compress_tool_use(item):
+    if _item_type(item) != "tool_use":
+        return item
+    tool_input = item.get("input") if isinstance(item, dict) else getattr(item, "input", None)
+    if not isinstance(tool_input, dict):
+        return item
+    new_input = {}
+    changed = False
+    for key, value in tool_input.items():
+        if isinstance(value, str) and len(value) > 400:
+            new_input[key] = f"[{key}: {len(value)} Zeichen, bereits ausgeführt]"
+            changed = True
+        else:
+            new_input[key] = value
+    if not changed:
+        return item
+    base = item if isinstance(item, dict) else item.model_dump()
+    return {**base, "input": new_input}
+
+
 def compress_attachment_history(messages: list[dict]) -> list[dict]:
     """Ersetzt Bild-/Dokument-Anhänge in allen außer der letzten Anhang-Nachricht
     durch Platzhalter — sonst wird bei jedem weiteren Turn wieder das komplette

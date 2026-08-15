@@ -332,6 +332,7 @@ class JarvisPipeline:
             history_snapshot = session_memory.build_history_window(category, tab_id, thread_id=self._thread_id)
             history_snapshot = llm.compress_attachment_history(history_snapshot)
             history_snapshot = llm.compress_tool_history(history_snapshot)
+            history_snapshot = llm.compress_tool_calls(history_snapshot)
             self._verify_reconstruction(history_snapshot)
 
             # Beim ersten Turn der Session: Module erkennen
@@ -372,6 +373,7 @@ class JarvisPipeline:
                     # großer Mittelteil eines Tauri-Debugging-Gesprächs — Ursache war genau
                     # diese Kombination aus hartem Entry-Cap + unkomprimierten Tool-Results).
                     final_messages = llm.compress_tool_history(final_messages)
+                    final_messages = llm.compress_tool_calls(final_messages)
                     del self.history[:]
                     self.history.extend(final_messages)
                     # Cap deutlich höher als die alten 40 — dank der Kompression oben kostet
@@ -545,8 +547,17 @@ class JarvisPipeline:
                                     break
 
                     final = s.get_final_message()
-                    total_cost += llm.compute_cost(final.usage, model=self._model)
+                    call_cost = llm.compute_cost(final.usage, model=self._model)
+                    total_cost += call_cost
+                    u = final.usage
                     print(f"[pipeline] LLM fertig: {time.monotonic() - t_llm_start:.2f}s, stop={final.stop_reason}", flush=True)
+                    print(
+                        f"[pipeline] usage thread={self._thread_id} model={self._model} "
+                        f"input={getattr(u, 'input_tokens', 0)} output={getattr(u, 'output_tokens', 0)} "
+                        f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                        f"cache_read={getattr(u, 'cache_read_input_tokens', 0)} cost=${call_cost:.4f}",
+                        flush=True,
+                    )
 
             except anthropic.APIStatusError as e:
                 if use_tts and self._on_audio:
@@ -693,6 +704,7 @@ class JarvisPipeline:
                 session_memory.append_message(category, tab_id, "user", tool_results,
                                                thread_id=self._thread_id, project_id=self._project_id)
                 client_messages = llm.compress_tool_history(client_messages)
+                client_messages = llm.compress_tool_calls(client_messages)
                 self._emit(P.STATE, state="thinking")
 
         return full_response, client_messages, total_cost
