@@ -232,6 +232,31 @@ def _with_cache_breakpoint(messages: list[dict]) -> list[dict]:
     return [*messages[:-1], {**last, "content": new_content}]
 
 
+def _append_dynamic_context(messages: list[dict], system_dynamic: str) -> list[dict]:
+    """Hängt den volatilen Teil (Zeit/Kalender/BTC, context.py::build_dynamic_prompt — "Nie
+    gecacht") als zusätzlichen, unmarkierten Text-Block an die letzte Nachricht an, NACH dem
+    Cache-Breakpoint von _with_cache_breakpoint() (muss deshalb danach aufgerufen werden).
+
+    Stand bis 2026-08-15 im system-Array VOR den messages — dort bricht jede Änderung (die
+    Zeitzeile wechselt buchstäblich jede Minute) den Cache für ALLES was danach kommt, per
+    Definition von Prefix-Caching. Live beobachtet: jeder neue Turn hat die komplette
+    Nachrichten-Historie neu zum 2×-Preis geschrieben, obwohl der Verlauf selbst unverändert
+    war — einzig weil sich die Uhrzeit im Prompt davor geändert hatte. Jetzt landet er HINTER
+    dem gecachten Teil, in derselben (ohnehin nie gecachten) letzten Nachricht."""
+    if not messages or not system_dynamic:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    dynamic_block = {"type": "text", "text": system_dynamic}
+    if isinstance(content, str):
+        new_content = ([{"type": "text", "text": content}] if content else []) + [dynamic_block]
+    elif isinstance(content, list):
+        new_content = [*content, dynamic_block]
+    else:
+        return messages
+    return [*messages[:-1], {**last, "content": new_content}]
+
+
 @contextmanager
 def stream(system_static: str, system_dynamic: str, messages: list[dict], tools: list[dict] = None,
            thinking: bool = False, model: str | None = None):
@@ -260,9 +285,10 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
     """
     model = model if model in MODEL_CATALOG else MODEL
 
+    # system_dynamic NICHT hier — siehe _append_dynamic_context(), landet stattdessen an der
+    # letzten Nachricht, damit seine Volatilität nicht den Nachrichten-Cache vor sich zerstört.
     system = [
         {"type": "text", "text": system_static, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": system_dynamic},
     ]
 
     cached_tools = None
@@ -281,7 +307,7 @@ def stream(system_static: str, system_dynamic: str, messages: list[dict], tools:
         max_tokens=max_tokens,
         thinking=thinking_config,
         system=system,
-        messages=_with_cache_breakpoint(messages),
+        messages=_append_dynamic_context(_with_cache_breakpoint(messages), system_dynamic),
         **({"tools": cached_tools} if cached_tools else {}),
     ) as s:
         yield s
